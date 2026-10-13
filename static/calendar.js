@@ -425,8 +425,67 @@
 
         let data = null;
 
-        // Strategy 1: Try our automated backend endpoint
+        // Strategy 0: Check local phone cache first (valid for 30 days)
+        const storageKey = `bunker_calendar_data_${roll}_${semester || 'auto'}`;
         if (!forceDirectApi) {
+            try {
+                const cachedRaw = localStorage.getItem(storageKey);
+                if (cachedRaw) {
+                    const parsed = JSON.parse(cachedRaw);
+                    if (parsed.timestamp && (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) && parsed.data && (parsed.data.activities || parsed.data.name)) {
+                        data = parsed.data;
+                    }
+                }
+            } catch (e) {}
+        }
+
+        // Strategy 1: Direct query from student phone to official PSG Tech API (CORS enabled, 0 Vercel compute!)
+        if (!data) {
+            try {
+                let allCalendars = STATE.allYearsIndex;
+                if (!allCalendars) {
+                    const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar');
+                    if (idxRes.ok) {
+                        allCalendars = await idxRes.json();
+                        STATE.allYearsIndex = allCalendars;
+                    }
+                }
+
+                if (allCalendars && allCalendars.length) {
+                    const latestYear = allCalendars[0].year || 2026;
+                    STATE.academicYear = latestYear;
+                    const student = parseStudentRoll(roll, latestYear, semester);
+                    if (student) {
+                        STATE.student = student;
+                        if (student.semesterNo) STATE.currentSemesterNo = student.semesterNo;
+                        if (student.semesterType) STATE.currentSemester = student.semesterType;
+
+                        const yearEntry = allCalendars.find(y => y.year === latestYear) || allCalendars[0];
+                        const planners = yearEntry.planner || [];
+                        STATE.availablePlanners = planners;
+
+                        const matched = matchPlannerClient(planners, student, STATE.currentSemester);
+                        if (matched) {
+                            const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matched.id}`);
+                            if (pRes.ok) {
+                                data = await pRes.json();
+                                data.student = student;
+                                data.matchedPlanner = matched;
+                                data.semester = STATE.currentSemester;
+                                data.semesterNo = STATE.currentSemesterNo;
+                                data.academicYear = latestYear;
+                                data.availablePlanners = planners;
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('Direct client API fetch skipped or blocked, trying fallback:', err);
+            }
+        }
+
+        // Strategy 2: Fallback to our automated backend endpoint if direct fetch failed
+        if (!data && !forceDirectApi) {
             try {
                 const querySem = (semester !== undefined && semester !== null) ? semester : (STATE.currentSemesterNo || STATE.currentSemester || '');
                 const semParam = querySem ? `?sem=${encodeURIComponent(querySem)}` : '';
@@ -442,55 +501,7 @@
                     }
                 }
             } catch (err) {
-                console.warn('Backend proxy fetch failed, trying direct API:', err);
-            }
-        }
-
-        // Strategy 2: Direct query to official PSG Tech API if backend is unavailable or client-side only
-        if (!data || !data.activities) {
-            try {
-                let allCalendars = STATE.allYearsIndex;
-                if (!allCalendars) {
-                    const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar');
-                    if (idxRes.ok) {
-                        allCalendars = await idxRes.json();
-                        STATE.allYearsIndex = allCalendars;
-                    }
-                }
-
-                if (allCalendars && allCalendars.length) {
-                    const latestYear = allCalendars[0].year || 2026;
-                    STATE.academicYear = latestYear;
-                    const student = parseStudentRoll(roll, latestYear, semester);
-                    if (!student) {
-                        showLoading(false);
-                        showError(`Roll number "<strong>${escapeHtml(roll)}</strong>" was not recognized as a valid PSG College of Technology roll number. Please check your roll number.`);
-                        return;
-                    }
-                    STATE.student = student;
-                    if (student.semesterNo) STATE.currentSemesterNo = student.semesterNo;
-                    if (student.semesterType) STATE.currentSemester = student.semesterType;
-
-                    const yearEntry = allCalendars.find(y => y.year === latestYear) || allCalendars[0];
-                    const planners = yearEntry.planner || [];
-                    STATE.availablePlanners = planners;
-
-                    const matched = matchPlannerClient(planners, student, STATE.currentSemester);
-                    if (matched) {
-                        const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matched.id}`);
-                        if (pRes.ok) {
-                            data = await pRes.json();
-                            data.student = student;
-                            data.matchedPlanner = matched;
-                            data.semester = STATE.currentSemester;
-                            data.semesterNo = STATE.currentSemesterNo;
-                            data.academicYear = latestYear;
-                            data.availablePlanners = planners;
-                        }
-                    }
-                }
-            } catch (err) {
-                console.error('Direct API fetch failed:', err);
+                console.warn('Backend proxy fetch failed:', err);
             }
         }
 
@@ -516,6 +527,12 @@
         showLoading(false);
 
         if (data && (data.activities || data.name)) {
+            try {
+                localStorage.setItem(storageKey, JSON.stringify({
+                    timestamp: Date.now(),
+                    data: data
+                }));
+            } catch (e) {}
             STATE.plannerData = data;
             if (data.student) STATE.student = data.student;
             if (data.semesterNo) STATE.currentSemesterNo = data.semesterNo;
@@ -533,14 +550,37 @@
         showLoading(true);
         try {
             let data = null;
+            const storageKey = `bunker_planner_${plannerId}_${year}`;
             try {
-                const res = await fetch(`/api/calendar/${plannerId}?year=${year}`);
-                if (res.ok) data = await res.json();
+                const cachedRaw = localStorage.getItem(storageKey);
+                if (cachedRaw) {
+                    const parsed = JSON.parse(cachedRaw);
+                    if (parsed.timestamp && (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) && parsed.data) {
+                        data = parsed.data;
+                    }
+                }
             } catch (e) {}
 
             if (!data) {
-                const res2 = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${year}/planner/${plannerId}`);
-                if (res2.ok) data = await res2.json();
+                // Direct phone query first (CORS enabled)
+                try {
+                    const resDirect = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${year}/planner/${plannerId}`);
+                    if (resDirect.ok) data = await resDirect.json();
+                } catch (e) {}
+
+                // Fallback to proxy
+                if (!data) {
+                    try {
+                        const resProxy = await fetch(`/api/calendar/${plannerId}?year=${year}`);
+                        if (resProxy.ok) data = await resProxy.json();
+                    } catch (e) {}
+                }
+
+                if (data) {
+                    try {
+                        localStorage.setItem(storageKey, JSON.stringify({ timestamp: Date.now(), data }));
+                    } catch (e) {}
+                }
             }
 
             if (data) {
@@ -1268,7 +1308,12 @@
         changeMonth: changeMonth,
         jumpToToday: jumpToToday,
         openDayModal: openDayModal,
-        closeDayModal: closeDayModal
+        closeDayModal: closeDayModal,
+        parseStudentRoll: parseStudentRoll,
+        matchRollToPlanner: function(r, yr, s, pl) {
+            const st = parseStudentRoll(r, yr, s);
+            return st ? matchPlannerClient(pl, st, s) : null;
+        }
     };
 
     if (document.readyState === 'loading') {

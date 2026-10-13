@@ -123,10 +123,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }, isReturning ? 200 : 700);
 });
 
+function getSyncCooldownMs() {
+    const now = new Date();
+    const day = now.getDay(); // 0 is Sunday
+    const hour = now.getHours();
+    // Sundays: college is closed, attendance never changes
+    if (day === 0) return 6 * 60 * 60 * 1000; // 6 hours
+    // Evenings & nights (6 PM to 8 AM): college is closed
+    if (hour >= 18 || hour < 8) return 3 * 60 * 60 * 1000; // 3 hours
+    // Active college hours (Mon-Sat 8 AM to 6 PM): 45 minutes cooldown
+    return 45 * 60 * 1000; // 45 minutes
+}
+
+function triggerManualSync() {
+    const creds = (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}'); } catch { return {}; } })();
+    if (creds.roll && creds.password) {
+        backgroundSync(creds.roll, creds.password, true);
+    }
+}
+
 async function backgroundSync(roll, password, force = false) {
-    const SYNC_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes cooldown
+    const cooldownMs = getSyncCooldownMs();
     const lastSyncTime = parseInt(localStorage.getItem(`bunker_last_sync_time_${roll}`) || '0');
-    const isFresh = (Date.now() - lastSyncTime) < SYNC_COOLDOWN_MS;
+    const isFresh = (Date.now() - lastSyncTime) < cooldownMs;
 
     // If data is already fresh and we have subjects loaded, skip redundant API call
     if (!force && isFresh && Array.isArray(state.subjects) && state.subjects.length > 0) {
@@ -135,23 +154,50 @@ async function backgroundSync(roll, password, force = false) {
         return;
     }
 
+    // Debounce manual sync if tapped within 45s
+    if (force && (Date.now() - lastSyncTime) < 45000 && Array.isArray(state.subjects) && state.subjects.length > 0) {
+        showToast('Attendance is already up to date!', 'info');
+        showSyncIndicator('done');
+        setTimeout(() => hideSyncIndicator(), 1500);
+        return;
+    }
+
     showSyncIndicator('syncing');
     try {
+        const knownUpdate = localStorage.getItem('bunker_last_update') || '';
+        const knownSig = localStorage.getItem('bunker_update_sig') || '';
+        const hasStoredTimetable = !!(state.timetable && Object.keys(state.timetable).length > 0 && state.courseMapping && Object.keys(state.courseMapping).length > 0);
+
         const loginResponse = await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: roll, password: password })
+            body: JSON.stringify({
+                username: roll,
+                password: password,
+                known_update: knownUpdate,
+                known_sig: knownSig,
+                has_timetable: hasStoredTimetable
+            })
         });
         const loginData = await loginResponse.json();
 
         if (!loginData.success) {
             showSyncIndicator('offline');
-            // Remains visible permanently until next successful sync or app restart
             return;
         }
 
-        // Record successful sync time to prevent redundant invocations
+        // Record successful sync time
         localStorage.setItem(`bunker_last_sync_time_${roll}`, Date.now().toString());
+
+        // FAST ZERO-PAYLOAD EXIT: If attendance on eCampus is unchanged, finish in 0ms!
+        if (loginData.up_to_date) {
+            if (loginData.update_sig) {
+                localStorage.setItem('bunker_update_sig', loginData.update_sig);
+            }
+            showSyncIndicator('done');
+            setTimeout(() => hideSyncIndicator(), 2000);
+            return;
+        }
 
         // Update state with fresh data
         const hasFreshSubjects = Array.isArray(loginData.subjects) && loginData.subjects.length > 0;
@@ -170,66 +216,51 @@ async function backgroundSync(roll, password, force = false) {
                     localStorage.setItem(`bunker_previous_update_${roll}`, loginData.previous_last_update);
                 }
             }
-            // If user is currently viewing previous attendance, keep displaying it!
             if (!state.isViewingPreviousAttendance) {
                 state.subjects = [];
             }
         }
 
-        state.timetable = loginData.timetable || state.timetable;
-        state.courseMapping = loginData.course_mapping || state.courseMapping;
+        if (loginData.timetable) {
+            state.timetable = loginData.timetable;
+            localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
+        }
+        if (loginData.course_mapping) {
+            state.courseMapping = loginData.course_mapping;
+            localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
+        }
         state.college = loginData.college || state.college;
         state.hasCalendar = loginData.has_calendar !== false;
-
         state.threshold = 80;
 
-        // Persist non-subject data
-        localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
-        localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
         localStorage.setItem('bunker_college', 'PSGTECH');
         localStorage.setItem('bunker_has_calendar', 'true');
         if (loginData.last_update) {
             localStorage.setItem('bunker_last_update', loginData.last_update);
         }
-
-        // Fetch calendar only if not cached or cache is older than 24 hours (saves ~95% calendar function calls)
-        const calCacheKey = `bunker_cal_time_${roll}`;
-        const lastCalTime = parseInt(localStorage.getItem(calCacheKey) || '0');
-        const isCalStale = (Date.now() - lastCalTime) > (24 * 60 * 60 * 1000);
-        const hasCalCache = !!localStorage.getItem('bunker_calendar_cache');
-
-        if (isCalStale || !hasCalCache) {
-            try {
-                const detectedSem = detectCurrentSemesterFromSubjects(state.subjects);
-                const calUrl = detectedSem ? `/api/calendar/${roll}?sem=${detectedSem}` : `/api/calendar/${roll}`;
-                const calRes = await fetch(calUrl);
-                const calData = await calRes.json();
-                if (!calData.error) {
-                    processCalendarData(calData, roll);
-                    localStorage.setItem(calCacheKey, Date.now().toString());
-                }
-            } catch { }
+        if (loginData.update_sig) {
+            localStorage.setItem('bunker_update_sig', loginData.update_sig);
         }
+
+        // Fetch calendar directly on phone with 30-day cache (0 Vercel compute)
+        await fetchCalendarPhoneDirect(roll, state.subjects);
 
         // Run cleanup with fresh last_update, then refresh UI
         cleanupManualEntries();
         renderSemesterHero(); renderWidgets(); renderSubjects(); initPlanner(); initManual();
-
-        // Background revalidate academics after attendance sync
-        revalidateAcademicsInBackground();
 
         showSyncIndicator('done');
         setTimeout(() => hideSyncIndicator(), 2500);
     } catch (err) {
         console.error('Background sync error:', err);
         showSyncIndicator('offline');
-        // Remains visible permanently until next successful sync or app restart
     }
 }
 
 function showSyncIndicator(status) {
     let el = document.getElementById('sync-indicator');
     if (!el) return;
+    el.onclick = triggerManualSync;
     el.classList.remove('hidden', 'translate-y-[-20px]', 'opacity-0');
 
     // Add slide-down animation classes if not present
@@ -240,8 +271,8 @@ function showSyncIndicator(status) {
     const dot = el.querySelector('#sync-dot');
     const txt = el.querySelector('#sync-text');
 
-    // Base premium classes for the pill (in-flow, no longer fixed top)
-    const basePill = 'flex justify-center items-center gap-2.5 px-4 py-2 mt-4 mx-auto w-max rounded-full backdrop-blur-xl shadow-lg transition-all duration-500 border';
+    // Base premium classes for the pill (in-flow, clickable to refresh)
+    const basePill = 'flex justify-center items-center gap-2.5 px-4 py-2 mt-4 mx-auto w-max rounded-full backdrop-blur-xl shadow-lg transition-all duration-500 border cursor-pointer active:scale-95 hover:opacity-90';
 
     if (status === 'syncing') {
         el.className = `${basePill} bg-indigo-500/10 border-indigo-500/20 shadow-indigo-500/10`;
@@ -252,12 +283,12 @@ function showSyncIndicator(status) {
         el.className = `${basePill} bg-emerald-500/10 border-emerald-500/20 shadow-emerald-500/10`;
         dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]';
         txt.className = 'text-[10px] font-bold text-emerald-200 tracking-wide uppercase';
-        txt.innerText = 'Up to Date';
+        txt.innerText = 'Up to Date • Tap to refresh';
     } else if (status === 'offline') {
         el.className = `${basePill} bg-amber-500/10 border-amber-500/20 shadow-amber-500/10`;
         dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]';
         txt.className = 'text-[10px] font-bold text-amber-200 tracking-wide uppercase';
-        txt.innerText = 'Offline Mode';
+        txt.innerText = 'Offline Mode • Tap to retry';
     }
 }
 
@@ -364,13 +395,12 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         pushLoadingLog(`Authentication successful (${loginData.college || 'PSGTECH'})`, 48, '#10b981');
         pushLoadingLog("Syncing academic activities calendar...", 62, '#a855f7');
 
-        // Fetch calendar data
-        const detectedSem = detectCurrentSemesterFromSubjects(loginData.subjects || state.subjects);
-        const calUrl = detectedSem ? `/api/calendar/${roll}?sem=${detectedSem}` : `/api/calendar/${roll}`;
-        const calendarResponse = await fetch(calUrl);
-        const calendarData = await calendarResponse.json();
-        if (calendarData.error) console.warn('Calendar fetch failed:', calendarData.error);
-        processCalendarData(calendarData, roll);
+        // Fetch calendar data directly on phone (30-day cache)
+        await fetchCalendarPhoneDirect(roll, loginData.subjects || state.subjects);
+        localStorage.setItem(`bunker_last_sync_time_${roll}`, Date.now().toString());
+        if (loginData.update_sig) {
+            localStorage.setItem('bunker_update_sig', loginData.update_sig);
+        }
 
         pushLoadingLog("Scraping attendance logs & mapping courses...", 78, '#3b82f6');
 
@@ -380,6 +410,10 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         state.courseMapping = loginData.course_mapping || {};
         state.college = loginData.college || 'PSGTECH';
         state.hasCalendar = loginData.has_calendar !== false;
+        localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
+        localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
+        localStorage.setItem(`bunker_tt_time_${roll}`, Date.now().toString());
+        localStorage.setItem(`bunker_cal_time_${roll}`, Date.now().toString());
 
         if (hasFreshSubjects) {
             state.subjects = loginData.subjects;
@@ -470,6 +504,175 @@ function detectCurrentSemesterFromSubjects(subjects) {
         }
     }
     return best;
+}
+
+async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
+    if (!roll) return null;
+    const calCacheKey = `bunker_cal_time_${roll}`;
+    const lastCalTime = parseInt(localStorage.getItem(calCacheKey) || '0');
+    const cachedCalendar = localStorage.getItem('bunker_calendar_cache');
+    // Strict 24-hour cooldown: 1 check per day max
+    const isCalFresh = (Date.now() - lastCalTime) < (24 * 60 * 60 * 1000);
+    if (!force && isCalFresh && cachedCalendar) {
+        try {
+            const parsed = JSON.parse(cachedCalendar);
+            if (parsed && parsed.fullCalendar && parsed.fullCalendar.length > 0) {
+                state.calendarCache = parsed;
+                return parsed;
+            }
+        } catch (e) {}
+    }
+
+    const detectedSem = detectCurrentSemesterFromSubjects(subjects || state.subjects);
+    let calData = null;
+
+    // Strategy 1: Direct phone fetch (official PSG Tech academic calendar API has CORS enabled!)
+    try {
+        const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar');
+        if (idxRes.ok) {
+            const allCalendars = await idxRes.json();
+            if (allCalendars && allCalendars.length) {
+                const latestYear = allCalendars[0].year || 2026;
+                const yearEntry = allCalendars.find(y => y.year === latestYear) || allCalendars[0];
+                const planners = yearEntry.planner || [];
+
+                let matchedPlanner = null;
+                if (window.calendarApp && typeof window.calendarApp.matchRollToPlanner === 'function') {
+                    matchedPlanner = window.calendarApp.matchRollToPlanner(roll, latestYear, detectedSem, planners);
+                }
+
+                if (!matchedPlanner && planners.length > 0) {
+                    const prefix = roll.slice(0, 2);
+                    const admYear = 2000 + parseInt(prefix, 10);
+                    const yearOfStudy = Math.max(1, Math.min(5, latestYear - admYear + 1));
+                    const isSandwich = roll.toUpperCase().includes('L') || roll.toUpperCase().includes('SW');
+                    matchedPlanner = planners.find(p => {
+                        const t = (p.title || '').toLowerCase();
+                        if (isSandwich && !t.includes('sw') && !t.includes('sandwich')) return false;
+                        if (!isSandwich && (t.includes('sw') || t.includes('sandwich'))) return false;
+                        if (yearOfStudy === 1 && (t.includes('first') || t.includes('1st'))) return true;
+                        if (yearOfStudy === 2 && (t.includes('second') || t.includes('2nd'))) return true;
+                        if (yearOfStudy === 3 && (t.includes('third') || t.includes('3rd'))) return true;
+                        if (yearOfStudy === 4 && (t.includes('fourth') || t.includes('4th'))) return true;
+                        if (yearOfStudy === 5 && (t.includes('fifth') || t.includes('5th'))) return true;
+                        return false;
+                    }) || planners[0];
+                }
+
+                if (matchedPlanner && matchedPlanner.id) {
+                    const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matchedPlanner.id}`);
+                    if (pRes.ok) {
+                        calData = await pRes.json();
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('Direct phone calendar fetch failed, trying proxy fallback:', e);
+    }
+
+    // Strategy 2: Fallback to Vercel edge-cached endpoint only if direct phone call fails
+    if (!calData || !calData.activities) {
+        try {
+            const calUrl = detectedSem ? `/api/calendar/${roll}?sem=${detectedSem}` : `/api/calendar/${roll}`;
+            const calRes = await fetch(calUrl);
+            if (calRes.ok) calData = await calRes.json();
+        } catch (e) {
+            console.warn('Fallback calendar fetch failed:', e);
+        }
+    }
+
+    if (calData && !calData.error && (calData.activities || calData.name)) {
+        processCalendarData(calData, roll);
+        localStorage.setItem(calCacheKey, Date.now().toString());
+    }
+    return calData;
+}
+
+// Background silent timetable update on navigation (24-hour cooldown: 1 check per day max)
+async function checkAndUpdateTimetableSilently(roll) {
+    if (!roll) return;
+    const creds = JSON.parse(localStorage.getItem('bunker_credentials') || '{}');
+    if (!creds || !creds.roll || !creds.password) return;
+
+    try {
+        const res = await fetch('/api/timetable', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roll: creds.roll, password: creds.password })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.timetable) {
+                state.timetable = data.timetable;
+                if (data.course_mapping) {
+                    state.courseMapping = data.course_mapping;
+                    localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
+                }
+                localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
+                localStorage.setItem(`bunker_tt_time_${roll}`, Date.now().toString());
+                initPlanner();
+                const pill = document.getElementById('timetable-status-pill');
+                if (pill) {
+                    pill.textContent = 'Auto-Synced Today';
+                    pill.className = 'text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+                }
+            }
+        }
+    } catch (e) {
+        console.debug('Silent timetable check error:', e);
+    }
+}
+
+async function refreshTimetableOnDemand(btn) {
+    const creds = JSON.parse(localStorage.getItem('bunker_credentials') || '{}');
+    if (!creds || !creds.roll || !creds.password) {
+        showToast('Please log in again to refresh timetable', 'error');
+        return;
+    }
+
+    const origHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[8px]"></i> Refreshing...';
+    }
+
+    try {
+        showToast('Fetching fresh timetable from eCampus...', 'info');
+        const res = await fetch('/api/timetable', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roll: creds.roll, password: creds.password })
+        });
+        const data = await res.json();
+        if (data.success && data.timetable) {
+            state.timetable = data.timetable;
+            if (data.course_mapping) {
+                state.courseMapping = data.course_mapping;
+                localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
+            }
+            localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
+            localStorage.setItem(`bunker_tt_time_${creds.roll}`, Date.now().toString());
+
+            initPlanner();
+
+            const pill = document.getElementById('timetable-status-pill');
+            if (pill) {
+                pill.textContent = 'Updated Just Now';
+                pill.className = 'text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+            }
+            showToast('Timetable refreshed successfully!', 'success');
+        } else {
+            showToast(data.error || 'Failed to refresh timetable', 'error');
+        }
+    } catch (err) {
+        showToast('Network error while refreshing timetable', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = origHtml;
+        }
+    }
 }
 
 function processCalendarData(data, roll) {
@@ -619,6 +822,70 @@ function loadDemo() {
             "Mon": ["CS201", "CS205", "Free", "MA203"], "Tue": ["CS208", "CS201", "CS201", "HU201"],
             "Wed": ["CS205", "Free", "MA203", "CS208"], "Thu": ["MA203", "HU201", "CS205", "Free"], "Fri": ["CS208", "CS201", "CS205", "MA203"]
         };
+        state.academics = {
+            loaded: true,
+            fromCache: true,
+            internals: [
+                {
+                    course_code: "21CS401",
+                    course_name: "Theory of Computation",
+                    is_lab: false,
+                    row_data: ["21.0", "19.0", "*", "20.0", "7.0", "9.0", "8.0", "35.0", "28.0"],
+                    total: "35.0",
+                    total_converted: "28.0",
+                    target_max: 40
+                },
+                {
+                    course_code: "21CS402",
+                    course_name: "Database Management Systems",
+                    is_lab: false,
+                    row_data: ["16.0", "18.0", "*", "17.0", "6.0", "7.0", "6.5", "29.5", "23.6"],
+                    total: "29.5",
+                    total_converted: "23.6",
+                    target_max: 40
+                },
+                {
+                    course_code: "21CS403",
+                    course_name: "Design & Analysis of Algorithms",
+                    is_lab: false,
+                    row_data: ["13.0", "15.0", "*", "14.0", "5.0", "6.0", "5.5", "24.5", "19.6"],
+                    total: "24.5",
+                    total_converted: "19.6",
+                    target_max: 40
+                },
+                {
+                    course_code: "21CS404",
+                    course_name: "Computer Networks",
+                    is_lab: false,
+                    row_data: ["11.0", "13.0", "*", "12.0", "4.0", "5.0", "4.5", "20.5", "16.4"],
+                    total: "20.5",
+                    total_converted: "16.4",
+                    target_max: 40
+                },
+                {
+                    course_code: "21CS405",
+                    course_name: "Operating Systems",
+                    is_lab: false,
+                    row_data: ["8.0", "11.0", "*", "9.5", "4.0", "4.0", "4.0", "17.5", "14.0"],
+                    total: "17.5",
+                    total_converted: "14.0",
+                    target_max: 40
+                }
+            ],
+            cgpa: {
+                cgpa: "8.24",
+                semwise_data: [
+                    { sem: 1, sgpa: "8.40" },
+                    { sem: 2, sgpa: "8.15" },
+                    { sem: 3, sgpa: "8.30" },
+                    { sem: 4, sgpa: "8.10" }
+                ]
+            },
+            gpa: {
+                gpa: "8.24",
+                overall_cgpa: "8.24"
+            }
+        };
         saveState();
         
         pushLoadingLog("Injecting fake high-marks subjects...", 75, '#3b82f6');
@@ -672,17 +939,48 @@ function updateInstallUI() {
     const prompt = document.getElementById('login-install-prompt');
     const settingBtn = document.getElementById('settings-install-btn');
     const installText = document.getElementById('install-text');
-    const settingsInstallText = settingBtn ? settingBtn.querySelector('.text-sm') : null;
-    const settingsInstallDesc = settingBtn ? settingBtn.querySelector('.text-\\[10px\\]') : null;
+    const uCard = document.getElementById('universal-install-card');
+    const uTitle = document.getElementById('universal-install-title');
+    const uBadge = document.getElementById('universal-install-badge');
+    const uSub = document.getElementById('universal-install-sub');
+    const uActionIcon = document.getElementById('universal-install-action-icon');
 
-    // Personalize Text (Simple: Android vs iPhone)
+    // Update Universal PWA Card in Settings / Others
+    if (uCard) {
+        if (isInstalled) {
+            if (uTitle) uTitle.textContent = 'Bunker Installed';
+            if (uBadge) {
+                uBadge.textContent = 'INSTALLED';
+                uBadge.className = 'text-[8px] font-black text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30 uppercase tracking-widest';
+            }
+            if (uSub) uSub.textContent = 'Running natively on your phone';
+            if (uActionIcon) uActionIcon.innerHTML = '<i class="fas fa-check text-emerald-400 text-xs"></i>';
+        } else {
+            if (isIOS) {
+                if (uTitle) uTitle.textContent = 'Add to Home Screen';
+                if (uBadge) {
+                    uBadge.textContent = 'iOS PWA';
+                    uBadge.className = 'text-[8px] font-black text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded-full border border-indigo-500/30 uppercase tracking-widest';
+                }
+                if (uSub) uSub.textContent = 'Tap Share & Add to Home Screen in Safari';
+            } else {
+                if (uTitle) uTitle.textContent = 'Install Bunker App';
+                if (uBadge) {
+                    uBadge.textContent = 'PWA';
+                    uBadge.className = 'text-[8px] font-black text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded-full border border-indigo-500/30 uppercase tracking-widest';
+                }
+                if (uSub) uSub.textContent = 'Instant 1-Tap install \u2022 0ms Offline Access';
+            }
+            if (uActionIcon) uActionIcon.innerHTML = '<i class="fas fa-arrow-down-to-bracket text-xs"></i>';
+        }
+    }
+
+    // Personalize Text on Login Screen
     if (installText) {
         if (isIOS) {
             installText.textContent = 'Install on iPhone';
-        } else if (isAndroid && isInstalled) {
-            installText.textContent = 'Get Android App';
         } else {
-            installText.textContent = 'Install Bunker.';
+            installText.textContent = 'Install Bunker App';
         }
     }
 
@@ -697,26 +995,22 @@ function updateInstallUI() {
         }
     }
 
-    // Settings Button
+    // Legacy Settings Button (kept hidden since universal card is used)
     if (settingBtn) {
-        if (isInstalled) {
-            settingBtn.classList.add('hidden');
-        } else {
-            if (canInstall || isIOS || isAndroid) {
-                settingBtn.classList.remove('hidden');
-                if (settingsInstallText) settingsInstallText.textContent = 'Install App';
-                if (settingsInstallDesc) settingsInstallDesc.textContent = 'Add to Home Screen';
-            }
-            else settingBtn.classList.add('hidden');
-        }
+        settingBtn.classList.add('hidden');
     }
 }
 
 function triggerInstall() {
-    const isAndroid = /Android/i.test(navigator.userAgent);
+    const isIOS = window.pwaManager.isIOS;
     const isInstalled = window.pwaManager.isStandalone || window.pwaManager.isAppInstalled;
 
-    if (window.pwaManager.isIOS) {
+    if (isInstalled) {
+        showToast('PSG Bunker is already installed on your home screen!', 'success');
+        return;
+    }
+
+    if (isIOS) {
         const modal = document.createElement('div');
         modal.className = "fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-md p-4";
         modal.style.cssText = 'animation: fadeIn 0.25s ease';
@@ -739,7 +1033,7 @@ function triggerInstall() {
                         </div>
                         <div>
                             <p class="text-white font-bold text-sm">Open in Safari</p>
-                            <p class="text-gray-400 text-[11px] mt-0.5">This page must be open in Safari, not Chrome or other browsers.</p>
+                            <p class="text-gray-400 text-[11px] mt-0.5">Make sure this page is open in Safari, not in-app browsers.</p>
                         </div>
                     </div>
                     <div class="flex items-start gap-4">
@@ -748,7 +1042,7 @@ function triggerInstall() {
                         </div>
                         <div>
                             <p class="text-white font-bold text-sm">Tap <i class="fas fa-arrow-up-from-bracket text-blue-400"></i> Share</p>
-                            <p class="text-gray-400 text-[11px] mt-0.5">Find the Share button at the bottom of your screen.</p>
+                            <p class="text-gray-400 text-[11px] mt-0.5">Find the Share icon at the bottom of Safari.</p>
                         </div>
                     </div>
                     <div class="flex items-start gap-4">
@@ -786,80 +1080,64 @@ function triggerInstall() {
             </div>
         `;
         document.body.appendChild(modal);
+        return;
+    }
 
-    } else if (isAndroid) {
-        if (isInstalled) {
-            downloadAndroidApk();
-            return;
-        }
-
+    // Android & Chromium PWA
+    if (window.pwaManager.deferredPrompt) {
+        triggerPwaInstall();
+    } else {
         const modal = document.createElement('div');
         modal.className = "fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-md p-4";
         modal.style.cssText = 'animation: fadeIn 0.25s ease';
         modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
         modal.innerHTML = `
             <div style="background:linear-gradient(145deg,#1c1c1e,#111)" class="w-full max-w-sm rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl">
-                <!-- Header gradient -->
                 <div style="background:linear-gradient(135deg,#4338ca 0%,#6d28d9 100%)" class="p-6 text-center relative overflow-hidden">
                     <div class="absolute inset-0 opacity-20" style="background:radial-gradient(circle at 70% 30%,#fff 0%,transparent 60%)"></div>
                     <img src="/static/icon.png" class="w-16 h-16 rounded-[1.1rem] mx-auto mb-3 shadow-xl border-2 border-white/20 relative z-10">
-                    <h3 class="text-lg font-black text-white relative z-10">Install Bunker</h3>
-                    <p class="text-indigo-200 text-[11px] mt-1 relative z-10 font-medium">Choose your preferred installation method</p>
+                    <h3 class="text-lg font-black text-white relative z-10">Install PSG Bunker</h3>
+                    <p class="text-indigo-200 text-[11px] mt-1 relative z-10 font-medium">Add to your home screen for instantaneous 0ms loading</p>
                 </div>
 
-                <div class="p-5 space-y-3">
-                    <!-- APK option -->
-                    <button id="btn-install-apk" class="w-full text-left p-4 rounded-2xl border transition active:scale-95" style="background:rgba(99,102,241,0.12);border-color:rgba(99,102,241,0.3)">
-                        <div class="flex items-center gap-3">
-                            <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background:rgba(99,102,241,0.2)">
-                                <i class="fab fa-android text-indigo-400 text-lg"></i>
-                            </div>
-                            <div class="flex-1">
-                                <p class="text-white font-black text-sm">Native Android App</p>
-                                <p class="text-gray-400 text-[10px] mt-0.5">Download APK &bull; Full features &bull; Faster</p>
-                            </div>
-                            <i class="fas fa-arrow-down text-indigo-400 text-xs"></i>
+                <div class="p-6 space-y-4">
+                    <div class="flex items-start gap-4">
+                        <div class="w-8 h-8 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                            <span class="text-indigo-400 font-black text-xs">1</span>
                         </div>
-                    </button>
-
-                    <!-- PWA option -->
-                    <button id="btn-install-pwa" class="w-full text-left p-4 rounded-2xl border transition active:scale-95" style="background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.08)">
-                        <div class="flex items-center gap-3">
-                            <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background:rgba(255,255,255,0.06)">
-                                <i class="fas fa-globe text-gray-400 text-lg"></i>
-                            </div>
-                            <div class="flex-1">
-                                <p class="text-white font-black text-sm">Web App (PWA)</p>
-                                <p class="text-gray-400 text-[10px] mt-0.5">Instant install &bull; No APK needed &bull; Always updated</p>
-                            </div>
-                            <i class="fas fa-plus text-gray-500 text-xs"></i>
+                        <div>
+                            <p class="text-white font-bold text-sm">Tap Chrome Menu (<i class="fas fa-ellipsis-vertical text-indigo-400"></i>)</p>
+                            <p class="text-gray-400 text-[11px] mt-0.5">Find the 3 dots menu at the top right of your browser.</p>
                         </div>
-                    </button>
+                    </div>
+                    <div class="flex items-start gap-4">
+                        <div class="w-8 h-8 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                            <span class="text-indigo-400 font-black text-xs">2</span>
+                        </div>
+                        <div>
+                            <p class="text-white font-bold text-sm">Tap "Install app" or "Add to Home screen"</p>
+                            <p class="text-gray-400 text-[11px] mt-0.5">Look for the Install option in the Chrome dropdown menu.</p>
+                        </div>
+                    </div>
 
-                    <p class="text-center text-[9px] text-gray-600 pt-1 font-medium">If APK won’t install, use Web App (PWA) instead</p>
+                    <button onclick="triggerPwaInstall(); this.closest('.fixed').remove();" class="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all">
+                        <i class="fas fa-arrow-down-to-bracket text-xs"></i>
+                        <span>Try 1-Tap Install Now</span>
+                    </button>
+                </div>
+
+                <div class="text-center pb-5">
+                    <p class="text-[10px] text-gray-600 font-bold uppercase tracking-widest">Tap outside to close</p>
                 </div>
             </div>
         `;
         document.body.appendChild(modal);
-
-        document.getElementById('btn-install-apk').onclick = () => {
-            modal.remove();
-            downloadAndroidApk();
-        };
-
-        document.getElementById('btn-install-pwa').onclick = () => {
-            modal.remove();
-            triggerPwaInstall();
-        };
-    } else {
-        triggerPwaInstall();
     }
 }
 
+// Backwards compatibility alias
 function downloadAndroidApk() {
-    // Serve from GitHub to save Vercel bandwidth (9.3MB per download)
-    window.open("https://github.com/akka9655/bunkakka/raw/main/static/bunker.apk", "_blank");
-    showToast('Downloading Bunker APK...', 'success');
+    triggerInstall();
 }
 
 // --- FIRST-TIME LOGIN FEATURES TOUR & ANDROID PROMPT ---
@@ -885,6 +1163,7 @@ function showFeaturesTourModal() {
     if (existing) existing.remove();
 
     const isAndroid = /Android/i.test(navigator.userAgent);
+    const isInstalled = window.pwaManager.isStandalone || window.pwaManager.isAppInstalled;
 
     const modal = document.createElement('div');
     modal.id = 'bunker-features-tour-modal';
@@ -987,23 +1266,23 @@ function showFeaturesTourModal() {
                     </div>
                 </div>
 
-                <!-- Android App Card (Visible only if user is on Android) -->
-                ${isAndroid ? `
-                <div class="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-indigo-500/10 border border-emerald-500/30 flex items-center justify-between gap-3 shadow-[0_0_20px_rgba(16,185,129,0.15)] mt-3">
+                <!-- Install Bunker App Card (Visible if not in standalone) -->
+                ${!isInstalled ? `
+                <div class="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-500/15 via-purple-500/10 to-pink-500/10 border border-indigo-500/30 flex items-center justify-between gap-3 shadow-[0_0_20px_rgba(99,102,241,0.15)] mt-3">
                     <div class="flex items-center gap-3 min-w-0">
-                        <div class="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-lg shrink-0">
-                            <i class="fab fa-android"></i>
+                        <div class="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-lg shrink-0">
+                            <i class="fas fa-mobile-screen-button"></i>
                         </div>
                         <div class="min-w-0">
                             <div class="text-xs font-black text-white flex items-center gap-1.5">
-                                <span>Official Android App</span>
-                                <span class="px-1.5 py-0.2 rounded text-[8px] font-black bg-emerald-500/25 text-emerald-300 uppercase tracking-widest border border-emerald-500/30">Fast</span>
+                                <span>Install Bunker App</span>
+                                <span class="px-1.5 py-0.2 rounded text-[8px] font-black bg-indigo-500/25 text-indigo-300 uppercase tracking-widest border border-indigo-500/30">PWA</span>
                             </div>
-                            <p class="text-[10.5px] text-gray-300/80 leading-tight mt-0.5 truncate">Install APK for offline speed & smoother UI</p>
+                            <p class="text-[10.5px] text-gray-300/80 leading-tight mt-0.5 truncate">Add to Home Screen for 0ms offline speed</p>
                         </div>
                     </div>
-                    <button onclick="handleTourApkDownload()" class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-[0_2px_12px_rgba(16,185,129,0.35)] shrink-0 active:scale-95 transition-all">
-                        <i class="fas fa-download text-xs"></i>
+                    <button onclick="handleTourApkDownload()" class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-[0_2px_12px_rgba(99,102,241,0.35)] shrink-0 active:scale-95 transition-all">
+                        <i class="fas fa-arrow-down-to-bracket text-xs"></i>
                         <span>Install</span>
                     </button>
                 </div>
@@ -1049,7 +1328,7 @@ function closeFeaturesTourModal(markSeen = true) {
 
 function handleTourApkDownload() {
     closeFeaturesTourModal(true);
-    downloadAndroidApk();
+    triggerInstall();
 }
 
 // Backwards compatibility alias
@@ -1616,10 +1895,7 @@ function initDashboard() {
         if (!state.simulatedDate) switchTab('home', 0);
         if (window.pwaManager) updateInstallUI();
 
-        // Background prefetch for fresh logins (no cache yet): load academics silently
-        if (state.rollNumber !== 'DEMO' && !state.academics.loaded) {
-            setTimeout(() => loadAcademics(false, true), 1500);
-        }
+        // Academics are loaded strictly on-demand when user visits Others / Internals tab (saves ~100k invocations/mo)
 
     }, 0);
 }
@@ -2703,16 +2979,62 @@ function switchTab(id, index) {
     }
 
     let t = "Dashboard";
-    if (id === 'home') { const td = getToday(); const ev = ACADEMIC_DATA.fullCalendar.find(e => new Date(e.date).toDateString() === td.toDateString()); if (ev) t = ev.type === 'Holiday' ? "Holiday! 🌴" : ev.type === 'Exam' ? "Exam Day! 🍀" : "Busy Day! 📚"; else if (td.getDay() === 0 || td.getDay() === 6) t = "Weekend Vibes 🎉"; }
-    else if (id === 'calendar') t = "Timeline"; else if (id === 'planner') t = "Smart Tracker";
+    const roll = state.rollNumber || localStorage.getItem('bunker_roll');
+
+    if (id === 'home') {
+        const td = getToday();
+        const ev = ACADEMIC_DATA.fullCalendar.find(e => new Date(e.date).toDateString() === td.toDateString());
+        if (ev) t = ev.type === 'Holiday' ? "Holiday! 🌴" : ev.type === 'Exam' ? "Exam Day! 🍀" : "Busy Day! 📚";
+        else if (td.getDay() === 0 || td.getDay() === 6) t = "Weekend Vibes 🎉";
+    }
+    else if (id === 'calendar') {
+        t = "Timeline";
+        // Auto-check academic calendar on navigation with strict 24-hour cooldown (1 fetch per day max, direct on phone)
+        if (roll) {
+            const calKey = `bunker_cal_time_${roll}`;
+            const lastCalTime = parseInt(localStorage.getItem(calKey) || '0');
+            const isCalStale = (Date.now() - lastCalTime) > (24 * 60 * 60 * 1000);
+            const hasCal = state.calendarCache && state.calendarCache.fullCalendar && state.calendarCache.fullCalendar.length > 0;
+            if (isCalStale || !hasCal) {
+                fetchCalendarPhoneDirect(roll, state.subjects).then(data => {
+                    if (data) {
+                        initAcademicCalendar();
+                        renderSemesterHero();
+                    }
+                });
+            }
+        }
+    }
+    else if (id === 'planner') {
+        t = "Smart Tracker";
+        // Auto-check timetable on navigation with strict 24-hour cooldown (1 fetch per day max)
+        if (roll) {
+            const ttKey = `bunker_tt_time_${roll}`;
+            const lastTtTime = parseInt(localStorage.getItem(ttKey) || '0');
+            const isTtStale = (Date.now() - lastTtTime) > (24 * 60 * 60 * 1000);
+            const hasTt = state.timetable && Object.keys(state.timetable).length > 0 &&
+                          Object.values(state.timetable).some(d => d && d.length > 0 && d.some(x => x !== 'Free'));
+            if (isTtStale || !hasTt) {
+                checkAndUpdateTimetableSilently(roll);
+            }
+        }
+    }
     else if (id === 'others') {
         t = "Others";
         closeOthersSubView();
         renderOthersOverview();
-        if (state.academics && !state.academics.loaded && !state.academics.loading) {
-            setTimeout(() => loadAcademics(), 150);
-        } else if (state.academics && state.academics.loaded) {
-            document.getElementById('acad-loading')?.classList.add('hidden');
+
+        // Auto-check academic marks on navigation with strict 24-hour cooldown (1 fetch per day max)
+        if (roll) {
+            const acadKey = `bunker_acad_fetch_time_${roll}`;
+            const lastAcadTime = parseInt(localStorage.getItem(acadKey) || '0');
+            const isAcadStale = (Date.now() - lastAcadTime) > (24 * 60 * 60 * 1000);
+
+            if (!state.academics || !state.academics.loaded || isAcadStale) {
+                setTimeout(() => loadAcademics(isAcadStale, state.academics && state.academics.loaded), 150);
+            } else if (state.academics && state.academics.loaded) {
+                document.getElementById('acad-loading')?.classList.add('hidden');
+            }
         }
     }
     const greetingEl = document.getElementById('greeting-text');
@@ -4092,18 +4414,26 @@ function switchAcadTab(tab) {
 }
 
 async function loadAcademics(force = false, silent = false) {
-    if (state.academics.loaded && !state.academics.fromCache && !force) return;
-    if (state.academics.loading) return; // prevent duplicate requests
+    const roll = state.rollNumber || (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}').roll; } catch { return null; } })();
+    const lastAcadFetch = parseInt(localStorage.getItem(`bunker_acad_fetch_time_${roll}`) || '0');
+    const isAcadStale = (Date.now() - lastAcadFetch) > (24 * 60 * 60 * 1000); // Strict 24 hours cooldown (1 fetch per day max)
 
     // If we have cached data, render it immediately for instant display
-    if (state.academics.loaded && state.academics.fromCache) {
+    if (state.academics.loaded) {
         document.getElementById('acad-loading')?.classList.add('hidden');
         renderInternals(state.academics.internals);
         renderGPA(state.academics.gpa);
         renderCGPA(state.academics.cgpa);
         renderOthersOverview();
-        // Don't return — still revalidate from server below
+
+        // Phone-first: If cached marks exist and are within 24 hours and force is false,
+        // stop here to save Vercel serverless compute!
+        if (!force && !isAcadStale) {
+            return;
+        }
     }
+
+    if (state.academics.loading) return; // prevent duplicate requests
 
     state.academics.loading = true;
 
@@ -4189,21 +4519,9 @@ async function loadAcademics(force = false, silent = false) {
     }
 }
 
-// Silently revalidate academic data in the background (called after attendance backgroundSync)
+// Background auto-revalidation disabled: marks are loaded strictly on-demand on the Others tab
 async function revalidateAcademicsInBackground() {
-    // Only revalidate if we have cached data — otherwise loadAcademics handles it
-    if (!state.rollNumber || state.rollNumber === 'DEMO') return;
-    const authToken = getAuthToken();
-    if (!authToken) return;
-
-    // Only revalidate if last academics fetch was more than 12 hours ago (saves ~50,000 function calls/mo)
-    const lastAcadFetch = parseInt(localStorage.getItem(`bunker_acad_fetch_time_${state.rollNumber}`) || '0');
-    const isAcadStale = (Date.now() - lastAcadFetch) > (12 * 60 * 60 * 1000);
-    if (!isAcadStale && state.academics.loaded) return;
-
-    // Reset fromCache flag so loadAcademics does a fresh fetch
-    if (state.academics.loaded) state.academics.fromCache = true;
-    await loadAcademics(false, true);
+    return;
 }
 
 
@@ -4214,6 +4532,344 @@ function showAcadError(msg) {
     if (errEl) errEl.classList.remove('hidden');
     if (msgEl) msgEl.textContent = msg;
 }
+
+// ============================================================================
+// PSG SEMESTER PASS MARK MATRIX & CALCULATOR ENGINE
+// ============================================================================
+
+const PSG_PASS_TABLE = [
+    { ca40: 12, sem100: 62, sem60: 37.2, roundUp: 38, final: 50 },
+    { ca40: 13, sem100: 61, sem60: 36.6, roundUp: 37, final: 50 },
+    { ca40: 14, sem100: 59, sem60: 35.4, roundUp: 36, final: 50 },
+    { ca40: 15, sem100: 57, sem60: 34.2, roundUp: 35, final: 50 },
+    { ca40: 16, sem100: 56, sem60: 33.6, roundUp: 34, final: 50 },
+    { ca40: 17, sem100: 54, sem60: 32.4, roundUp: 33, final: 50 },
+    { ca40: 18, sem100: 52, sem60: 31.2, roundUp: 32, final: 50 },
+    { ca40: 19, sem100: 51, sem60: 30.6, roundUp: 31, final: 50 },
+    { ca40: 20, sem100: 50, sem60: 30.0, roundUp: 30, final: 50 },
+    { ca40: 21, sem100: 48, sem60: 28.8, roundUp: 29, final: 50 },
+    { ca40: 22, sem100: 46, sem60: 27.6, roundUp: 28, final: 50 },
+    { ca40: 23, sem100: 44, sem60: 26.4, roundUp: 27, final: 50 },
+    { ca40: 24, sem100: 42, sem60: 25.2, roundUp: 26, final: 50 }
+];
+
+function getSemPassDetails(ca40) {
+    const numCA = Math.max(0, Number(ca40) || 0);
+    const roundedCA = Math.round(numCA);
+
+    // Exact lookup from PSG official table for integer 12..24
+    if (Math.abs(numCA - roundedCA) < 0.05 && roundedCA >= 12 && roundedCA <= 24) {
+        const found = PSG_PASS_TABLE.find(item => item.ca40 === roundedCA);
+        if (found) {
+            return {
+                ca40: roundedCA,
+                sem100: found.sem100,
+                sem60: found.sem60,
+                roundUp: found.roundUp,
+                final: found.final,
+                isTableMatch: true
+            };
+        }
+    }
+
+    // Edge case: Already passed (e.g. CA >= 50)
+    if (numCA >= 50) {
+        return {
+            ca40: Number(numCA.toFixed(1)),
+            sem100: 0,
+            sem60: 0,
+            roundUp: 0,
+            final: Math.round(numCA),
+            alreadyPassed: true
+        };
+    }
+
+    // Dynamic calculation with PSG Tech 60% conversion & ceil rounding
+    for (let s = 0; s <= 100; s++) {
+        const sem60 = Number((s * 0.6).toFixed(1));
+        const ru = Math.ceil(sem60 - 1e-6);
+        if (numCA + ru >= 50) {
+            return {
+                ca40: Number(numCA.toFixed(1)),
+                sem100: s,
+                sem60: sem60,
+                roundUp: ru,
+                final: Math.round(numCA + ru)
+            };
+        }
+    }
+
+    return {
+        ca40: Number(numCA.toFixed(1)),
+        sem100: 100,
+        sem60: 60.0,
+        roundUp: 60,
+        final: Math.round(numCA + 60),
+        impossible: true
+    };
+}
+
+function getSemNeededForGrade(ca40, targetTotal, isLab = false) {
+    const numCA = Math.max(0, Number(ca40) || 0);
+    if (targetTotal <= 50 && !isLab) {
+        const pass = getSemPassDetails(numCA);
+        return pass.alreadyPassed ? 0 : (pass.impossible ? null : pass.sem100);
+    }
+    const factor = isLab ? 0.4 : 0.6;
+    for (let s = 0; s <= 100; s++) {
+        const sScaled = s * factor;
+        const sCeil = Math.ceil(Number(sScaled.toFixed(1)) - 1e-6);
+        if (numCA + sCeil >= targetTotal) {
+            return s;
+        }
+    }
+    return null;
+}
+
+let activePassMatrixCourse = null;
+let passMatrixExtended = false;
+
+function openPassMatrixModal(courseCode = null, initialCA = null) {
+    const m = document.getElementById('pass-matrix-modal');
+    const p = document.getElementById('pass-matrix-panel');
+    const b = document.getElementById('pass-matrix-backdrop');
+    if (!m || !p || !b) return;
+
+    activePassMatrixCourse = courseCode;
+
+    // Course badge handling
+    const courseBadge = document.getElementById('pass-matrix-course-badge');
+    const activeCodeEl = document.getElementById('pass-matrix-active-code');
+    const activeNameEl = document.getElementById('pass-matrix-active-name');
+    if (courseCode && state && state.academics && state.academics.internals) {
+        const sub = state.academics.internals.find(s => s.course_code === courseCode);
+        if (sub) {
+            if (activeCodeEl) activeCodeEl.innerText = sub.course_code;
+            if (activeNameEl) activeNameEl.innerText = sub.course_name;
+            if (courseBadge) courseBadge.classList.remove('hidden');
+        } else {
+            if (courseBadge) courseBadge.classList.add('hidden');
+        }
+    } else {
+        if (courseBadge) courseBadge.classList.add('hidden');
+    }
+
+    // Determine initial CA value
+    let targetCA = 18;
+    if (initialCA !== null && !isNaN(parseFloat(initialCA))) {
+        targetCA = Math.max(0, Math.min(40, Math.round(parseFloat(initialCA))));
+    } else if (courseCode && window.simState && window.simState[courseCode]) {
+        const sub = state.academics.internals.find(s => s.course_code === courseCode);
+        if (sub) {
+            const numCols = sub.row_data.length;
+            const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
+            const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
+            const totalCA = calcCATotal(sub.is_lab, simKeys, window.simState[courseCode]);
+            targetCA = Math.round(sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40));
+        }
+    }
+
+    // Set slider & calculator
+    setPassMatrixCA(targetCA);
+
+    // Show modal
+    m.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    requestAnimationFrame(() => {
+        b.classList.remove('opacity-0');
+        p.classList.remove('opacity-0', 'scale-95');
+        p.classList.add('scale-100');
+    });
+
+    if (!m._escBound) {
+        m._escBound = true;
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !m.classList.contains('hidden')) {
+                closePassMatrixModal();
+            }
+        });
+    }
+}
+
+function closePassMatrixModal() {
+    const m = document.getElementById('pass-matrix-modal');
+    const p = document.getElementById('pass-matrix-panel');
+    const b = document.getElementById('pass-matrix-backdrop');
+    if (!p || !m) return;
+
+    if (b) b.classList.add('opacity-0');
+    p.classList.remove('scale-100');
+    p.classList.add('opacity-0', 'scale-95');
+
+    setTimeout(() => {
+        m.classList.add('hidden');
+        document.body.style.overflow = '';
+        activePassMatrixCourse = null;
+    }, 280);
+}
+
+function switchPassMatrixTab(tab) {
+    // Stub kept for compatibility
+}
+
+function updatePassMatrixFromSlider(val) {
+    const caVal = Math.round(Number(val));
+    setPassMatrixCA(caVal);
+}
+
+function setPassMatrixCA(caVal) {
+    const slider = document.getElementById('pass-matrix-slider');
+    const inputVal = document.getElementById('pass-matrix-input-val');
+    if (slider) slider.value = caVal;
+    if (inputVal) inputVal.innerText = caVal;
+
+    // Update pill highlights
+    document.querySelectorAll('.pm-pill').forEach(btn => {
+        if (btn.innerText.trim() == String(caVal)) {
+            btn.className = "pm-pill px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-xs font-black text-rose-300 transition active:scale-95";
+        } else {
+            btn.className = "pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95";
+        }
+    });
+
+    const passInfo = getSemPassDetails(caVal);
+
+    // Update Hero numbers
+    const resSem = document.getElementById('pm-res-sem100');
+    const resBadge = document.getElementById('pm-res-badge');
+    const sCA = document.getElementById('pm-step-ca40');
+    const sSem = document.getElementById('pm-step-sem100');
+    const sSem60 = document.getElementById('pm-step-sem60');
+    const sFinal = document.getElementById('pm-step-final');
+    const sCalcText = document.getElementById('pm-step-calc-text');
+
+    if (resSem) resSem.innerText = passInfo.sem100;
+    if (sCA) sCA.innerText = passInfo.ca40.toFixed(1);
+    if (sSem) sSem.innerText = passInfo.sem100;
+    if (sSem60) sSem60.innerText = `${passInfo.sem60} ➔ ${passInfo.roundUp}`;
+    if (sFinal) sFinal.innerText = passInfo.final;
+    if (sCalcText) sCalcText.innerText = `${passInfo.ca40} + ${passInfo.roundUp} = ${passInfo.final} ✅`;
+
+    if (resBadge) {
+        if (passInfo.alreadyPassed) {
+            resBadge.innerText = "Already Safe";
+            resBadge.className = "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+        } else if (passInfo.sem100 <= 46) {
+            resBadge.innerText = "Easy Pass Target";
+            resBadge.className = "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+        } else if (passInfo.sem100 <= 54) {
+            resBadge.innerText = "Moderate Target";
+            resBadge.className = "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30";
+        } else {
+            resBadge.innerText = "High Effort Required";
+            resBadge.className = "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30";
+        }
+    }
+
+    // Update target grades preview cards
+    const tgtPass = document.getElementById('pm-tgt-pass');
+    const tgtB = document.getElementById('pm-tgt-b');
+    const tgtA = document.getElementById('pm-tgt-a');
+    const tgtAplus = document.getElementById('pm-tgt-aplus');
+    const reqB = getSemNeededForGrade(caVal, 60);
+    const reqA = getSemNeededForGrade(caVal, 70);
+    const reqAplus = getSemNeededForGrade(caVal, 80);
+
+    if (tgtPass) tgtPass.innerText = `${passInfo.sem100} / 100`;
+    if (tgtB) tgtB.innerText = reqB !== null ? `${reqB} / 100` : '—';
+    if (tgtA) tgtA.innerText = reqA !== null ? `${reqA} / 100` : '—';
+    if (tgtAplus) tgtAplus.innerText = reqAplus !== null ? `${reqAplus} / 100` : '—';
+}
+
+function setPresetPendingMarks(courseCode, ratio) {
+    const subject = state.academics && state.academics.internals ? state.academics.internals.find(s => s.course_code === courseCode) : null;
+    if (!subject) return;
+    const numCols = subject.row_data.length;
+    const expectedKeys = getSchemaKeys(subject.is_lab, numCols);
+    const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
+    
+    simKeys.forEach(k => {
+        const idx = expectedKeys.indexOf(k);
+        const actual = subject.row_data[idx];
+        const isMissing = !actual || actual === '*' || actual.trim() === '';
+        if (isMissing && window.simState && window.simState[courseCode]) {
+            const meta = window.METADATA[k] || window.METADATA['c1'];
+            const val = Math.round(meta.max * ratio);
+            window.simState[courseCode][k] = val;
+            const slider = document.querySelector(`input[oninput="updateSim('${courseCode}', '${k}', this.value)"]`);
+            if (slider) slider.value = val;
+            const textVal = document.getElementById(`val-${courseCode}-${k}`);
+            if (textVal) textVal.innerText = val;
+        }
+    });
+    calculateSimOutputs(courseCode, subject);
+    showToast(`🎯 Applied ${Math.round(ratio * 100)}% preset to pending marks`);
+}
+
+function renderPassMatrixTable(showExtended = false) {}
+function highlightActiveTableRow(caVal) {}
+function selectMatrixRow(caVal) { setPassMatrixCA(caVal); }
+function toggleExtendedPassTable() {}
+
+function applyPassMatrixToActiveSubject() {
+    if (!activePassMatrixCourse) {
+        showToast("No active subject selected to apply to.");
+        return;
+    }
+    const slider = document.getElementById('pass-matrix-slider');
+    const caVal = slider ? parseInt(slider.value, 10) : 18;
+    const passInfo = getSemPassDetails(caVal);
+    applyPassTargetToSim(activePassMatrixCourse, passInfo.sem100);
+    closePassMatrixModal();
+}
+
+function applyPassTargetToSim(courseCode, targetSem) {
+    if (!courseCode) return;
+    if (targetSem === undefined || targetSem === null) {
+        const subject = state.academics && state.academics.internals ? state.academics.internals.find(s => s.course_code === courseCode) : null;
+        if (subject) {
+            const numCols = subject.row_data.length;
+            const expectedKeys = getSchemaKeys(subject.is_lab, numCols);
+            const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
+            const totalCA = calcCATotal(subject.is_lab, simKeys, (window.simState && window.simState[courseCode]) || {});
+            const ca40 = subject.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
+            targetSem = getSemPassDetails(ca40).sem100;
+        } else {
+            targetSem = 50;
+        }
+    }
+    updateSim(courseCode, 'sem', targetSem);
+    showToast(`🎯 Set Final Sem Exam slider to ${targetSem} / 100 for ${courseCode}`);
+}
+
+function copyPassMatrixSummary() {
+    const caVal = document.getElementById('pass-matrix-input-val')?.innerText || '18';
+    const semVal = document.getElementById('pm-res-sem100')?.innerText || '52';
+    const sSem60 = document.getElementById('pm-step-sem60')?.innerText || '31.2 ➔ 32';
+    const text = `🎯 PSG Tech Sem Pass Target:\n• Continuous Assessment: ${caVal} / 40\n• Required in Sem Exam: ${semVal} / 100\n• 60% Scale: ${sSem60}\n• Final Combined Score: 50 / 100 (PASS ✅)\n(Checked on PSG Bunker)`;
+    
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+            showToast('📋 Pass summary copied to clipboard!');
+        }).catch(() => {
+            showToast('Summary: ' + text.replace(/\n/g, ' '));
+        });
+    } else {
+        showToast('Summary: ' + text.replace(/\n/g, ' '));
+    }
+}
+
+window.openPassMatrixModal = openPassMatrixModal;
+window.closePassMatrixModal = closePassMatrixModal;
+window.switchPassMatrixTab = switchPassMatrixTab;
+window.updatePassMatrixFromSlider = updatePassMatrixFromSlider;
+window.setPassMatrixCA = setPassMatrixCA;
+window.selectMatrixRow = selectMatrixRow;
+window.toggleExtendedPassTable = toggleExtendedPassTable;
+window.applyPassMatrixToActiveSubject = applyPassMatrixToActiveSubject;
+window.applyPassTargetToSim = applyPassTargetToSim;
+window.copyPassMatrixSummary = copyPassMatrixSummary;
+window.getSemPassDetails = getSemPassDetails;
 
 // ---- INTERNALS ----
 function renderInternals(internals) {
@@ -4308,6 +4964,77 @@ function renderInternals(internals) {
         const iconName = isTheory ? 'fa-book-open' : 'fa-flask';
         const typeColor = isTheory ? 'indigo' : 'teal';
 
+        const passInfo = isTheory ? getSemPassDetails(currentOutOf40) : null;
+        const reqB = isTheory ? getSemNeededForGrade(currentOutOf40, 60, sub.is_lab) : null;
+        const reqA = isTheory ? getSemNeededForGrade(currentOutOf40, 70, sub.is_lab) : null;
+        const reqAp = isTheory ? getSemNeededForGrade(currentOutOf40, 80, sub.is_lab) : null;
+
+        // DUAL-STATE MOBILE UI: Available Prediction vs Pending Simulation
+        let statusCardHTML = '';
+        if (isTheory && passInfo) {
+            if (missingKeys.length === 0) {
+                // STATE 1: MARKS AVAILABLE & FINALIZED -> SHOW BEST PREDICTION
+                statusCardHTML = `
+                <div class="mt-3.5 p-3.5 rounded-2xl bg-gradient-to-r from-rose-950/30 via-indigo-950/20 to-black/40 border border-rose-500/25 shadow-lg">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-[9px] font-black uppercase tracking-wider text-rose-300 flex items-center gap-1.5">
+                            <i class="fas fa-bullseye text-[10px] text-rose-400"></i>
+                            <span>Sem Pass Prediction (40:60 PSG Rule)</span>
+                        </span>
+                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 uppercase tracking-widest">
+                            CA In
+                        </span>
+                    </div>
+                    <div class="flex items-baseline justify-between mb-2.5">
+                        <div>
+                            <span class="text-xs text-gray-300 font-medium">To Pass: Need</span>
+                            <span class="text-xl font-black text-white ml-1.5 underline decoration-rose-400 underline-offset-2" id="card-pass-req-${sub.course_code}">${passInfo.sem100}</span>
+                            <span class="text-[10px] text-rose-400 font-bold">/ 100 in Sem</span>
+                        </div>
+                        <span class="text-[9.5px] font-bold text-gray-400 bg-black/40 px-2 py-1 rounded-lg border border-white/5">
+                            ${currentOutOf40.toFixed(1)} + ${passInfo.roundUp} = ${passInfo.final}% ✅
+                        </span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-1.5 pt-2 border-t border-white/5 text-center">
+                        <div class="bg-black/30 py-1.5 px-1 rounded-lg border border-white/5">
+                            <span class="text-[7.5px] font-bold text-gray-400 uppercase block">Aim B (60%)</span>
+                            <span class="text-[11px] font-black text-teal-300 block">${reqB !== null ? reqB + '/100' : '—'}</span>
+                        </div>
+                        <div class="bg-black/30 py-1.5 px-1 rounded-lg border border-white/5">
+                            <span class="text-[7.5px] font-bold text-gray-400 uppercase block">Aim A (70%)</span>
+                            <span class="text-[11px] font-black text-indigo-300 block">${reqA !== null ? reqA + '/100' : '—'}</span>
+                        </div>
+                        <div class="bg-black/30 py-1.5 px-1 rounded-lg border border-white/5">
+                            <span class="text-[7.5px] font-bold text-gray-400 uppercase block">Aim A+ (80%)</span>
+                            <span class="text-[11px] font-black text-purple-300 block">${reqAp !== null ? reqAp + '/100' : '—'}</span>
+                        </div>
+                    </div>
+                </div>`;
+            } else {
+                // STATE 2: MARKS NOT AVAILABLE -> PROMPT TO SIMULATE
+                const missingLabels = missingKeys.map(k => (window.METADATA[k] || {}).label || k).join(', ');
+                statusCardHTML = `
+                <div class="mt-3.5 p-3.5 rounded-2xl bg-gradient-to-r from-amber-950/30 via-purple-950/20 to-black/40 border border-amber-500/30 shadow-lg">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <span class="text-[9px] font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                            <i class="fas fa-wand-magic-sparkles text-[10px] text-amber-400 animate-pulse"></i>
+                            <span>${missingKeys.length} Marks Pending</span>
+                        </span>
+                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase tracking-widest">
+                            Tap to Simulate
+                        </span>
+                    </div>
+                    <div class="text-xs font-bold text-white mb-1.5 leading-snug">
+                        ${missingLabels} pending in portal
+                    </div>
+                    <div class="flex items-center justify-between text-[9.5px] text-gray-400 pt-1.5 border-t border-white/5">
+                        <span>Current Est. Pass Target: <b class="text-rose-400 font-black" id="card-pass-req-${sub.course_code}">~${passInfo.sem100} / 100</b></span>
+                        <span class="text-amber-300 font-bold flex items-center gap-1">Open Simulator <i class="fas fa-chevron-down text-[8px]"></i></span>
+                    </div>
+                </div>`;
+            }
+        }
+
         listHTML += `
         <div id="card-${sub.course_code}" class="glass-panel rounded-[30px] overflow-hidden transition-all duration-300 mb-4 border border-white/10">
             <div class="p-5 relative overflow-hidden cursor-pointer active:scale-[0.98] transition-all" onclick="toggleInternalCard('${sub.course_code}')">
@@ -4321,21 +5048,22 @@ function renderInternals(internals) {
                             <span class="text-[10px] font-bold text-gray-500 uppercase tracking-widest">${isTheory ? 'Theory' : 'Laboratory'}</span>
                         </div>
                         <h3 class="font-bold text-white text-[13px] leading-snug">${sub.course_name}</h3>
+                        ${statusCardHTML}
                     </div>
                     <div class="flex flex-col items-end z-10 ml-2">
                         <div class="flex items-baseline gap-1">
-                            <span class="text-2xl font-black text-transparent bg-clip-text ${missingKeys.length > 0 ? 'bg-gradient-to-r from-gray-300 to-gray-500' : 'bg-gradient-to-r from-indigo-300 to-purple-400'}">
-                                ${currentOutOf40.toFixed(1)}
+                            <span class="text-2xl font-black text-transparent bg-clip-text ${missingKeys.length > 0 ? 'bg-gradient-to-r from-amber-300 to-amber-500' : 'bg-gradient-to-r from-indigo-300 to-purple-400'}">
+                                ${missingKeys.length > 0 ? '~' : ''}${currentOutOf40.toFixed(1)}
                             </span>
                             <span class="text-[10px] font-bold text-gray-500 uppercase tracking-widest">/ ${displayMax}</span>
                         </div>
                         <div class="mt-0.5 mb-1.5 opacity-80">
-                            <span class="text-[9px] font-bold text-gray-400">${hasPortalTotal ? `Portal Raw Score: ${portalTotalRaw} / 50` : `Estimated from Pending`}</span>
+                            <span class="text-[9px] font-bold text-gray-400">${hasPortalTotal ? `Portal Raw: ${portalTotalRaw}/50` : (missingKeys.length > 0 ? 'Pending Components' : 'All Components In')}</span>
                         </div>
                         <div class="mt-0 flex items-center">
                             ${missingKeys.length > 0 
-                                ? `<span class="flex items-center gap-1 text-[9px] text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20 whitespace-nowrap"><i class="fas fa-exclamation-circle text-[8px]"></i> ${missingKeys.length} Pend</span>`
-                                : `<span class="flex items-center gap-1 text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1.5 py-0.5 rounded border border-emerald-400/20 whitespace-nowrap"><i class="fas fa-check-circle text-[8px]"></i> Final</span>`
+                                ? `<span class="flex items-center gap-1 text-[9px] text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20 whitespace-nowrap"><i class="fas fa-clock text-[8px]"></i> ${missingKeys.length} Pending</span>`
+                                : `<span class="flex items-center gap-1 text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1.5 py-0.5 rounded border border-emerald-400/20 whitespace-nowrap"><i class="fas fa-check-circle text-[8px]"></i> Finalized</span>`
                             }
                         </div>
                     </div>
@@ -4344,9 +5072,9 @@ function renderInternals(internals) {
                     <div class="flex-1 h-1.5 bg-black/50 rounded-full overflow-hidden" id="bar-${sub.course_code}">
                          <div class="h-full bg-${typeColor}-500 transition-all duration-700" style="width: ${Math.min(100,(currentOutOf40/displayMax)*100).toFixed(1)}%"></div>
                     </div>
-                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-[8px] font-black uppercase tracking-wider shrink-0">
-                        <i class="fas fa-wand-magic-sparkles text-[9px] text-indigo-400"></i>
-                        <span>Tap to simulate</span>
+                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl ${missingKeys.length > 0 ? 'bg-amber-500/15 border border-amber-500/30 text-amber-300' : 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-300'} text-[8.5px] font-black uppercase tracking-wider shrink-0 transition">
+                        <i class="fas ${missingKeys.length > 0 ? 'fa-wand-magic-sparkles text-amber-400' : 'fa-graduation-cap text-indigo-400'} text-[9px]"></i>
+                        <span>${missingKeys.length > 0 ? 'Simulate Pending' : 'Simulate Sem'}</span>
                     </div>
                 </div>
             </div>
@@ -4470,9 +5198,30 @@ function renderFullSimulator(subject, d, expectedKeys) {
     });
 
     let internalsSimSection = '';
-    if (actualMarksHTML !== '') internalsSimSection += `<div class="mb-4"><p class="text-[9px] text-gray-400 mb-2 uppercase tracking-widest font-bold">Entered Marks</p><div class="grid grid-cols-2 gap-2">${actualMarksHTML}</div></div>`;
-    if (slidersHTML !== '') internalsSimSection += `<div class="mb-6"><p class="text-[9px] text-gray-400 mb-2 uppercase tracking-widest font-bold">Pending Marks (Simulate)</p><div class="grid grid-cols-1 gap-3">${slidersHTML}</div></div>`;
-    else internalsSimSection += `<div class="mb-6 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-center"><span class="text-xs font-bold text-emerald-400">All internal marks finalized!</span></div>`;
+    if (actualMarksHTML !== '') internalsSimSection += `<div class="mb-4"><p class="text-[9px] text-gray-400 mb-2 uppercase tracking-widest font-bold">Entered / Published Marks</p><div class="grid grid-cols-2 gap-2">${actualMarksHTML}</div></div>`;
+    if (slidersHTML !== '') {
+        internalsSimSection += `
+        <div class="mb-5">
+            <div class="flex items-center justify-between mb-2">
+                <p class="text-[9.5px] text-amber-300 uppercase tracking-widest font-black flex items-center gap-1.5">
+                    <i class="fas fa-wand-magic-sparkles text-[10px]"></i>
+                    <span>Simulate Pending Components</span>
+                </p>
+                <div class="flex items-center gap-1">
+                    <button type="button" onclick="setPresetPendingMarks('${courseCode}', 0.70)" class="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-[8px] font-black text-gray-300 border border-white/10 active:scale-95 transition">Avg (70%)</button>
+                    <button type="button" onclick="setPresetPendingMarks('${courseCode}', 0.90)" class="px-2 py-0.5 rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-[8px] font-black text-indigo-300 border border-indigo-500/30 active:scale-95 transition">High (90%)</button>
+                    <button type="button" onclick="setPresetPendingMarks('${courseCode}', 1.0)" class="px-2 py-0.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 text-[8px] font-black text-emerald-300 border border-emerald-500/30 active:scale-95 transition">Max</button>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 gap-2.5 mb-2">${slidersHTML}</div>
+            <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between text-[10px]">
+                <span class="text-gray-300 font-medium">Simulated CA: <b class="text-white font-black" id="dyn-sim-ca-${courseCode}">--</b> / 40</span>
+                <span class="text-amber-300 font-bold">Pass in Sem: <b class="text-rose-400 font-black" id="dyn-sim-sem-${courseCode}">--</b> / 100</span>
+            </div>
+        </div>`;
+    } else {
+        internalsSimSection += `<div class="mb-5 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-3 text-center"><span class="text-xs font-bold text-emerald-400 flex items-center justify-center gap-1.5"><i class="fas fa-check-circle"></i> All internal component marks finalized!</span></div>`;
+    }
 
     if (isZeroCreditCourse(courseCode)) {
         return `
@@ -4502,6 +5251,59 @@ function renderFullSimulator(subject, d, expectedKeys) {
         </div>
 
         ${internalsSimSection}
+
+        ${(() => {
+            const isTh = !subject.is_lab;
+            const simKeysForCA = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
+            const curCA = calcCATotal(subject.is_lab, simKeysForCA, window.simState[courseCode]);
+            const curCa40 = subject.is_lab ? Math.min(60, curCA * 1.2) : Math.min(40, (curCA / 50) * 40);
+            const pInfo = isTh ? getSemPassDetails(curCa40) : null;
+            if (!isTh || !pInfo) return '';
+
+            return `
+            <div class="mb-5 bg-gradient-to-br from-black/80 via-rose-950/20 to-purple-950/30 p-4 sm:p-5 rounded-2xl border border-rose-500/30 shadow-xl relative overflow-hidden">
+                <div class="flex items-center justify-between mb-3 border-b border-white/10 pb-2.5">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-rose-400 animate-pulse"></span>
+                        <span class="text-[10px] font-black uppercase tracking-widest text-white">PSG Pass Target (40 : 60 Rule)</span>
+                    </div>
+                    <button type="button" onclick="openPassMatrixModal('${courseCode}', ${curCa40.toFixed(1)})" class="text-[9px] font-bold text-rose-300 hover:text-white flex items-center gap-1.5 bg-rose-500/15 hover:bg-rose-500/25 px-2.5 py-1 rounded-lg border border-rose-500/30 transition active:scale-95">
+                        <i class="fas fa-table-cells text-[9px]"></i>
+                        <span>Full Matrix</span>
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                    <div class="bg-black/50 p-2.5 rounded-xl border border-white/5 text-center">
+                        <div class="text-[8px] font-black uppercase text-gray-400">Your CA (For 40)</div>
+                        <div class="text-lg font-black text-indigo-300 mt-0.5" id="sim-pass-ca40-${courseCode}">${curCa40.toFixed(1)}</div>
+                        <div class="text-[7.5px] text-gray-500">Internal Score</div>
+                    </div>
+                    <div class="bg-rose-500/15 p-2.5 rounded-xl border border-rose-500/30 text-center shadow-lg shadow-rose-500/10">
+                        <div class="text-[8px] font-black uppercase text-rose-300">Need in Sem (For 100)</div>
+                        <div class="text-xl font-black text-white mt-0.5" id="sim-pass-sem100-${courseCode}">${pInfo.sem100} <span class="text-[9px] text-rose-400 font-bold">/ 100</span></div>
+                        <div class="text-[7.5px] text-rose-300 font-medium">Exam Target</div>
+                    </div>
+                    <div class="bg-black/50 p-2.5 rounded-xl border border-white/5 text-center">
+                        <div class="text-[8px] font-black uppercase text-gray-400">For 60 ➔ Round Up</div>
+                        <div class="text-lg font-black text-purple-300 mt-0.5" id="sim-pass-sem60-${courseCode}">${pInfo.sem60} ➔ <span class="text-white">${pInfo.roundUp}</span></div>
+                        <div class="text-[7.5px] text-gray-500">Scale &amp; Ceil</div>
+                    </div>
+                    <div class="bg-emerald-500/15 p-2.5 rounded-xl border border-emerald-500/30 text-center">
+                        <div class="text-[8px] font-black uppercase text-emerald-400">Final Mark</div>
+                        <div class="text-xl font-black text-emerald-300 mt-0.5" id="sim-pass-final-${courseCode}">${pInfo.final} <span class="text-[9px] text-gray-400 font-bold">/ 100</span></div>
+                        <div class="text-[7.5px] text-emerald-400 font-black">PASS (≥ 50) ✅</div>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between gap-2 bg-black/40 p-2 rounded-xl border border-white/5">
+                    <span class="text-[10px] text-gray-300 font-medium pl-1">Apply minimum pass mark to slider:</span>
+                    <button type="button" id="sim-pass-apply-btn-${courseCode}" onclick="applyPassTargetToSim('${courseCode}', ${pInfo.sem100})" class="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-[10px] font-black uppercase tracking-wider transition flex items-center gap-1.5 shadow-md shadow-rose-600/30">
+                        <i class="fas fa-bullseye text-[9px]"></i> Set Sem to ${pInfo.sem100}
+                    </button>
+                </div>
+            </div>`;
+        })()}
 
         <p class="text-[10px] text-gray-400 mb-3 uppercase tracking-widest font-bold">Simulate Final Exam</p>
         <div class="mb-5 bg-gradient-to-r from-purple-900/20 to-indigo-900/20 p-5 rounded-2xl border border-purple-500/20">
@@ -4545,19 +5347,25 @@ function renderFullSimulator(subject, d, expectedKeys) {
             <div class="grid grid-cols-2 gap-3">
                 ${(() => {
                     const isAbs = isAbsoluteGradingSystem(state.rollNumber);
+                    const simKeysForTarget = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
+                    const currentCAVal = calcCATotal(subject.is_lab, simKeysForTarget, window.simState[courseCode]);
+                    const currentCa40Val = subject.is_lab ? Math.min(60, currentCAVal * 1.2) : Math.min(40, (currentCAVal / 50) * 40);
+                    const passTargetInfo = !subject.is_lab ? getSemPassDetails(currentCa40Val) : null;
+                    const passMarkLabel = passTargetInfo ? `${passTargetInfo.sem100} / 100` : '50%';
+
                     if (isAbs) {
                         return `
-                            <button onclick="targetGrade('${courseCode}', 91)" class="active:scale-95 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400">Aim Grade S (91)</button>
-                            <button onclick="targetGrade('${courseCode}', 81)" class="active:scale-95 py-3 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-bold text-purple-400">Aim A+ (81)</button>
-                            <button onclick="targetGrade('${courseCode}', 71)" class="active:scale-95 py-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-bold text-indigo-400">Aim A (71)</button>
-                            <button onclick="targetGrade('${courseCode}', 50)" class="active:scale-95 py-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs font-bold text-rose-400">Just Pass (50%)</button>
+                            <button onclick="targetGrade('${courseCode}', 91)" class="active:scale-95 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 hover:bg-amber-500/20 transition">Aim Grade S (91)</button>
+                            <button onclick="targetGrade('${courseCode}', 81)" class="active:scale-95 py-3 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-bold text-purple-400 hover:bg-purple-500/20 transition">Aim A+ (81)</button>
+                            <button onclick="targetGrade('${courseCode}', 71)" class="active:scale-95 py-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-bold text-indigo-400 hover:bg-indigo-500/20 transition">Aim A (71)</button>
+                            <button onclick="targetGrade('${courseCode}', 50)" class="active:scale-95 py-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs font-bold text-rose-300 hover:bg-rose-500/25 transition flex flex-col items-center justify-center"><span>Just Pass (50%)</span><span class="text-[9.5px] font-black text-rose-400 mt-0.5" id="sim-target-pass-sub-${courseCode}">Need ${passMarkLabel} in Sem</span></button>
                         `;
                     } else {
                         return `
-                            <button onclick="targetGrade('${courseCode}', 90)" class="active:scale-95 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400">Aim Grade O (90)</button>
-                            <button onclick="targetGrade('${courseCode}', 80)" class="active:scale-95 py-3 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-bold text-purple-400">Aim A+ (80)</button>
-                            <button onclick="targetGrade('${courseCode}', 70)" class="active:scale-95 py-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-bold text-indigo-400">Aim A (70)</button>
-                            <button onclick="targetGrade('${courseCode}', 50)" class="active:scale-95 py-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs font-bold text-rose-400">Just Pass (50%)</button>
+                            <button onclick="targetGrade('${courseCode}', 90)" class="active:scale-95 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 hover:bg-amber-500/20 transition">Aim Grade O (90)</button>
+                            <button onclick="targetGrade('${courseCode}', 80)" class="active:scale-95 py-3 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-bold text-purple-400 hover:bg-purple-500/20 transition">Aim A+ (80)</button>
+                            <button onclick="targetGrade('${courseCode}', 70)" class="active:scale-95 py-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-bold text-indigo-400 hover:bg-indigo-500/20 transition">Aim A (70)</button>
+                            <button onclick="targetGrade('${courseCode}', 50)" class="active:scale-95 py-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs font-bold text-rose-300 hover:bg-rose-500/25 transition flex flex-col items-center justify-center"><span>Just Pass (50%)</span><span class="text-[9.5px] font-black text-rose-400 mt-0.5" id="sim-target-pass-sub-${courseCode}">Need ${passMarkLabel} in Sem</span></button>
                         `;
                     }
                 })()}
@@ -4763,6 +5571,41 @@ function calculateSimOutputs(courseCode, subjectObj) {
         gradeBadge.innerHTML = `Grade: ${info.grade}`;
     }
 
+    // Dynamic real-time update for the pass target card inside simulator
+    if (!subject.is_lab) {
+        const passReq = getSemPassDetails(ca40);
+        const pCa = document.getElementById(`sim-pass-ca40-${courseCode}`);
+        const pSem = document.getElementById(`sim-pass-sem100-${courseCode}`);
+        const pSem60 = document.getElementById(`sim-pass-sem60-${courseCode}`);
+        const pFinal = document.getElementById(`sim-pass-final-${courseCode}`);
+        const pBtn = document.getElementById(`sim-pass-apply-btn-${courseCode}`);
+        const pTargetSub = document.getElementById(`sim-target-pass-sub-${courseCode}`);
+
+        if (pCa) pCa.innerText = ca40.toFixed(1);
+        if (pSem) pSem.innerHTML = `${passReq.sem100} <span class="text-[9px] text-rose-400 font-bold">/ 100</span>`;
+        if (pSem60) pSem60.innerHTML = `${passReq.sem60} ➔ <span class="text-white">${passReq.roundUp}</span>`;
+        if (pFinal) pFinal.innerHTML = `${passReq.final} <span class="text-[9px] text-gray-400 font-bold">/ 100</span>`;
+        if (pBtn) {
+            pBtn.innerHTML = `<i class="fas fa-bullseye text-[9px]"></i> Set Sem to ${passReq.sem100}`;
+            pBtn.setAttribute('onclick', `applyPassTargetToSim('${courseCode}', ${passReq.sem100})`);
+        }
+        if (pTargetSub) {
+            pTargetSub.innerText = `Need ${passReq.sem100} in Sem`;
+        }
+
+        // Keep card-front pass target badge synchronized
+        const cardPassReq = document.getElementById(`card-pass-req-${courseCode}`);
+        if (cardPassReq) {
+            cardPassReq.innerText = passReq.sem100;
+        }
+
+        // Keep pending simulator live bar synchronized
+        const dynCaEl = document.getElementById(`dyn-sim-ca-${courseCode}`);
+        const dynSemEl = document.getElementById(`dyn-sim-sem-${courseCode}`);
+        if (dynCaEl) dynCaEl.innerText = ca40.toFixed(1);
+        if (dynSemEl) dynSemEl.innerText = passReq.sem100;
+    }
+
     recalculateCGPAPrediction();
 }
 
@@ -4940,6 +5783,7 @@ function changeSubjectCredits(courseCode, change) {
 
 function targetGrade(courseCode, targetTotal) {
     const subject = state.academics.internals.find(s => s.course_code === courseCode);
+    if (!subject) return;
     const numCols = subject.row_data.length;
     const expectedKeys = getSchemaKeys(subject.is_lab, numCols);
     const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
@@ -4948,20 +5792,44 @@ function targetGrade(courseCode, targetTotal) {
     const totalCA = calcCATotal(subject.is_lab, simKeys, window.simState[courseCode]);
     const ca40 = subject.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
 
-    // Required exam %: (target - ca_weight) / 0.6
-    // Per spec: Since final exam counts 60%, required exam marks = (target - ca40) / 0.6
-    const requiredExamPct = (targetTotal - ca40) / 0.6;
+    // If targeting Pass (50%) for a theory subject, use exact PSG Pass Matrix rule
+    if (targetTotal === 50 && !subject.is_lab) {
+        const passReq = getSemPassDetails(ca40);
+        if (passReq.alreadyPassed) {
+            showToast(`Already passed! Current CA (${ca40.toFixed(1)}) is enough to clear the course.`);
+            updateSim(courseCode, 'sem', 0);
+            return;
+        }
+        if (passReq.impossible) {
+            showToast(`Critical: Cannot reach 50% with current CA alone. Need higher internal marks.`);
+            updateSim(courseCode, 'sem', 100);
+            return;
+        }
+        showToast(`🎯 PSG Pass Matrix: Need ${passReq.sem100} / 100 in Final Exam (${passReq.sem60} ➔ ${passReq.roundUp}/60) to score 50% (Pass)`);
+        updateSim(courseCode, 'sem', passReq.sem100);
+        return;
+    }
 
-    if (requiredExamPct > 100) {
-        const maxPossible = (ca40 + 60).toFixed(1);
+    // For other grades, account for PSG 60% conversion with ceil rounding
+    let foundSem = -1;
+    for (let s = 0; s <= 100; s++) {
+        const s60 = subject.is_lab ? (s * 0.4) : (s * 0.6);
+        const s60Rounded = Math.ceil(Number(s60.toFixed(1)) - 1e-6);
+        if (ca40 + s60Rounded >= targetTotal) {
+            foundSem = s;
+            break;
+        }
+    }
+
+    if (foundSem === -1) {
+        const maxPossible = (ca40 + (subject.is_lab ? 40 : 60)).toFixed(1);
         showToast(`Max possible: ${maxPossible}% total — cannot reach ${targetTotal}%. Need higher CA marks.`);
-    } else if (requiredExamPct <= 0) {
+    } else if (foundSem === 0) {
         showToast(`Already achieved ${targetTotal}% total with current CA alone!`);
         updateSim(courseCode, 'sem', 0);
     } else {
-        const req = Math.ceil(requiredExamPct);
-        showToast(`Need ${req} / 100 in Final Exam to score ${targetTotal}% overall`);
-        updateSim(courseCode, 'sem', req);
+        showToast(`Need ${foundSem} / 100 in Final Exam to score ${targetTotal}% overall`);
+        updateSim(courseCode, 'sem', foundSem);
     }
 }
 
@@ -4971,10 +5839,51 @@ function targetGrade(courseCode, targetTotal) {
  */
 function setGlobalSemScenario(examMark) {
     if (!state.academics || !state.academics.internals) return;
+
+    if (examMark === 'exact-pass') {
+        // Highlight active button
+        ['btn-scenario-exact-pass','btn-scenario-pass','btn-scenario-a','btn-scenario-aplus','btn-scenario-s'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const isActive = el.getAttribute('data-val') === 'exact-pass';
+            el.setAttribute('data-active', isActive ? 'true' : 'false');
+            el.style.opacity = isActive ? '1' : '0.5';
+            el.style.transform = isActive ? 'scale(1.02)' : 'scale(1)';
+        });
+
+        let updatedCount = 0;
+        state.academics.internals.forEach(sub => {
+            const code = sub.course_code;
+            if (!window.simState) return;
+            if (!window.simState[code]) window.simState[code] = { sem: 75 };
+            
+            const numCols = sub.row_data.length;
+            const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
+            const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
+            const totalCA = calcCATotal(sub.is_lab, simKeys, window.simState[code]);
+            const ca40 = sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
+
+            const passReq = getSemPassDetails(ca40);
+            const targetSem = passReq.sem100;
+            window.simState[code].sem = targetSem;
+
+            const slider = document.getElementById(`slider-${code}-sem`);
+            const label  = document.getElementById(`val-${code}-sem`);
+            if (slider) slider.value = targetSem;
+            if (label)  label.innerText = targetSem;
+            calculateSimOutputs(code, sub);
+            updatedCount++;
+        });
+
+        recalculateCGPAPrediction();
+        showToast(`🎯 Applied exact pass targets from PSG Matrix across ${updatedCount} subjects!`);
+        return;
+    }
+
     examMark = Math.max(0, Math.min(100, Number(examMark)));
 
     // Highlight active button
-    ['btn-scenario-pass','btn-scenario-a','btn-scenario-aplus','btn-scenario-s'].forEach(id => {
+    ['btn-scenario-exact-pass','btn-scenario-pass','btn-scenario-a','btn-scenario-aplus','btn-scenario-s'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         const isActive = el.getAttribute('data-val') == examMark;

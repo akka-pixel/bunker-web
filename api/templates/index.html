@@ -184,20 +184,24 @@
           "name": "Can I install PSG Bunker as an app on Android and iOS?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes. On Android, tap 'Install App' or download the APK. On iPhone (iOS), open psg-bunk.vercel.app in Safari, tap Share, and select 'Add to Home Screen' for full offline PWA app experience."
+            "text": "Yes. PSG Bunker is an ultra-fast Progressive Web App (PWA) built for all mobile smartphones. On Android, tap 'Install App' for direct 1-tap installation. On iPhone (iOS), open in Safari, tap Share, and select 'Add to Home Screen' for instantaneous 0ms offline access."
           }
         }
       ]
     }
     </script>
 
-    <!-- PWA & Theme -->
+    <!-- PWA & Mobile Optimization -->
     <meta name="theme-color" content="#030206">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="PSG Bunker">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="format-detection" content="telephone=no">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="/static/icon-192.png">
     <link rel="apple-touch-icon" sizes="512x512" href="/static/icon-512.png">
-    <link rel="manifest" href="/manifest.json?v=bunker6">
+    <link rel="manifest" href="/manifest.json?v=bunker7">
 
     <!-- Icons & Fonts -->
     <link rel="icon" type="image/png" href="/static/favicon.png">
@@ -210,7 +214,7 @@
     
     <!-- CSS & Scripts -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=3.5.6">
+    <link rel="stylesheet" href="/static/style.css?v=3.5.7">
     <script>
         window.tailwind = {
             config: {
@@ -233,7 +237,7 @@
     </script>
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
-    <script defer src="/static/app.js?v=3.6.6"></script>
+    <script defer src="/static/app.js?v=3.8.1"></script>
     <script defer src="/static/legal.js?v=1.0.1"></script>
 
     <script>
@@ -247,7 +251,7 @@
                 // Register Service Worker for total offline functionality
                 if ('serviceWorker' in navigator) {
                     window.addEventListener('load', () => {
-                        navigator.serviceWorker.register('/sw.js?v=10').then((reg) => {
+                        navigator.serviceWorker.register('/sw.js?v=11').then((reg) => {
                             console.log('PWA: Service Worker registered.', reg.scope);
                         }).catch((err) => {
                             console.log('PWA: Service Worker registration failed: ', err);
@@ -722,6 +726,14 @@
                         </div>
                     </div>
 
+                    <!-- Timetable Header (Auto-Synced Daily) -->
+                    <div class="flex items-center justify-between px-2 pt-1">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[11px] font-black uppercase tracking-widest text-white/80"><i class="fas fa-calendar-alt text-indigo-400 mr-1.5"></i>Class Schedule</span>
+                            <span id="timetable-status-pill" class="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Auto-Synced Daily</span>
+                        </div>
+                    </div>
+
                     <!-- Day Selector -->
                     <div class="flex bg-black/40 rounded-[24px] p-1.5 shadow-inner backdrop-blur-md">
                         <div class="flex w-full overflow-x-auto no-scrollbar gap-1.5" id="planner-days"></div>
@@ -956,6 +968,25 @@
                                         <i class="fas fa-chevron-right text-xs"></i>
                                     </div>
                                 </div>
+
+                                <!-- Sem Pass Mark Matrix & Calculator Card -->
+                                <div id="others-pass-matrix-card" onclick="openPassMatrixModal()" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-rose-500/25 hover:border-rose-500/50 cursor-pointer active:scale-[0.98] transition-all group flex items-center justify-between shadow-lg bg-gradient-to-r from-rose-950/30 via-transparent to-amber-950/20">
+                                    <div class="flex items-center gap-3.5 min-w-0">
+                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 text-lg group-hover:scale-105 transition-transform shrink-0">
+                                            <i class="fas fa-bullseye"></i>
+                                        </div>
+                                        <div class="min-w-0">
+                                            <div class="flex items-center gap-2">
+                                                <h4 class="text-sm font-black text-white tracking-tight truncate">Sem Pass Target Predictor</h4>
+                                                <span class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-rose-500/25 text-rose-300 border border-rose-500/30 uppercase tracking-wider">40:60 Rule</span>
+                                            </div>
+                                            <p class="text-[11px] text-gray-400 mt-0.5 font-medium truncate">PSG Tech 40:60 formula &amp; instant mobile pass predictor</p>
+                                        </div>
+                                    </div>
+                                    <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-rose-300 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0">
+                                        <i class="fas fa-chevron-right text-xs"></i>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -1009,40 +1040,25 @@
                                         </label>
                                     </div>
 
-                                    <!-- Permanent Android APK Download Button -->
-                                    <div class="glass-panel rounded-[24px] p-4 border border-emerald-500/20 bg-gradient-to-r from-emerald-500/10 to-indigo-500/10 flex justify-between items-center cursor-pointer hover:border-emerald-500/40 active:scale-[0.98] transition-all group shadow-lg" onclick="downloadAndroidApk()">
+                                    <!-- Universal PWA App Install & Status Button (Android & iOS) -->
+                                    <div class="glass-panel rounded-[24px] p-4 border border-indigo-500/25 bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 flex justify-between items-center cursor-pointer hover:border-indigo-500/50 active:scale-[0.98] transition-all group shadow-lg" id="universal-install-card" onclick="triggerInstall()">
                                         <div class="flex items-center gap-3.5">
-                                            <div class="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-base group-hover:scale-105 transition-transform">
-                                                <i class="fab fa-android"></i>
+                                            <div class="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-base group-hover:scale-105 transition-transform" id="universal-install-icon">
+                                                <i class="fas fa-mobile-screen-button"></i>
                                             </div>
                                             <div>
                                                 <div class="text-xs font-bold text-white flex items-center gap-2">
-                                                    <span>Install Android APK</span>
-                                                    <span class="text-[8px] font-black text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30 uppercase tracking-widest">Latest</span>
+                                                    <span id="universal-install-title">Install Bunker App</span>
+                                                    <span id="universal-install-badge" class="text-[8px] font-black text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded-full border border-indigo-500/30 uppercase tracking-widest">PWA</span>
                                                 </div>
-                                                <div class="text-[10px] text-gray-400 mt-0.5 font-medium">Download latest APK directly &bull; Offline support</div>
+                                                <div class="text-[10px] text-gray-400 mt-0.5 font-medium" id="universal-install-sub">Add to Home Screen &bull; Instant 0ms Offline Speed</div>
                                             </div>
                                         </div>
-                                        <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-emerald-400 group-hover:translate-y-0.5 transition-transform shrink-0">
-                                            <i class="fas fa-download text-xs"></i>
+                                        <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-indigo-400 group-hover:translate-x-0.5 transition-transform shrink-0" id="universal-install-action-icon">
+                                            <i class="fas fa-arrow-down-to-bracket text-xs"></i>
                                         </div>
                                     </div>
-
-                                    <!-- Install App (PWA / iOS) -->
-                                    <div class="glass-panel rounded-[24px] p-4 border border-white/5 hidden" id="settings-install-btn">
-                                        <div class="flex justify-between items-center cursor-pointer" onclick="triggerInstall()">
-                                            <div class="flex items-center gap-3.5">
-                                                <div class="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400 text-base">
-                                                    <i class="fas fa-mobile-alt"></i>
-                                                </div>
-                                                <div>
-                                                    <div class="text-xs font-bold text-white">Add to Home Screen</div>
-                                                    <div class="text-[10px] text-gray-400 mt-0.5">Install as Web App (PWA / iPhone)</div>
-                                                </div>
-                                            </div>
-                                            <i class="fas fa-chevron-right text-white/20 text-xs"></i>
-                                        </div>
-                                    </div>
+                                    <div id="settings-install-btn" class="hidden"></div>
 
                                     <!-- Academic Regulations & Grading Button -->
                                     <div class="glass-panel rounded-[24px] p-4 border border-white/5 flex justify-between items-center cursor-pointer hover:bg-white/10 active:scale-[0.98] transition-all group" onclick="showAcademicRegulations()">
@@ -1053,23 +1069,6 @@
                                             <div>
                                                 <div class="text-xs font-bold text-white">Academic Regulations</div>
                                                 <div class="text-[10px] text-gray-400 mt-0.5 font-medium">PSG College of Technology Rules &amp; Grading</div>
-                                            </div>
-                                        </div>
-                                        <i class="fas fa-chevron-right text-white/20 text-xs"></i>
-                                    </div>
-
-                                    <!-- Features Tour & Guide Button -->
-                                    <div class="glass-panel rounded-[24px] p-4 border border-white/5 flex justify-between items-center cursor-pointer hover:bg-white/10 active:scale-[0.98] transition-all group" onclick="showFeaturesTourModal()">
-                                        <div class="flex items-center gap-3.5">
-                                            <div class="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center text-indigo-400 text-base group-hover:scale-105 transition-transform">
-                                                <i class="fas fa-sparkles"></i>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-bold text-white flex items-center gap-1.5">
-                                                    <span>Features Tour &amp; Guide</span>
-                                                    <span class="text-[8px] font-black text-indigo-300 bg-indigo-500/20 px-1.5 py-0.2 rounded border border-indigo-500/30 uppercase tracking-widest">Guide</span>
-                                                </div>
-                                                <div class="text-[10px] text-gray-400 mt-0.5 font-medium">Auto feedback, calendar, tracker, academics &amp; compare</div>
                                             </div>
                                         </div>
                                         <i class="fas fa-chevron-right text-white/20 text-xs"></i>
@@ -1163,6 +1162,25 @@
                                 </div>
                             </div>
 
+                            <!-- Sem Pass Mark Matrix Banner Card -->
+                            <div onclick="openPassMatrixModal()" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-rose-500/30 bg-gradient-to-r from-rose-950/40 via-purple-950/30 to-black/40 shadow-xl flex items-center justify-between gap-3 cursor-pointer active:scale-[0.99] transition-all group">
+                                <div class="flex items-center gap-3.5 min-w-0">
+                                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 shrink-0">
+                                        <i class="fas fa-bullseye text-base"></i>
+                                    </div>
+                                    <div class="min-w-0">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-xs font-black text-white truncate">PSG Sem Pass Target Predictor</span>
+                                            <span class="text-[8px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">Official 40:60</span>
+                                        </div>
+                                        <p class="text-[10px] text-gray-400 mt-0.5 font-medium truncate">Tap to predict exact semester marks needed to pass any subject</p>
+                                    </div>
+                                </div>
+                                <div class="w-8 h-8 rounded-xl bg-white/5 group-hover:bg-rose-500/20 flex items-center justify-center text-gray-400 group-hover:text-rose-300 transition shrink-0">
+                                    <i class="fas fa-chevron-right text-xs"></i>
+                                </div>
+                            </div>
+
                             <!-- CGPA Predictor Card -->
                             <details id="cgpa-predictor" class="group glass-panel rounded-[32px] p-6 border-l-4 border-purple-500 hidden transition-all duration-300 cursor-pointer">
                                 <summary class="flex items-center justify-between list-none select-none">
@@ -1180,11 +1198,25 @@
                                     <div class="mb-5">
                                         <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-3">Assume Final Exam Score (All Subjects)</p>
                                         <div class="grid grid-cols-2 gap-2">
+                                            <button id="btn-scenario-exact-pass" data-val="exact-pass"
+                                                onclick="setGlobalSemScenario('exact-pass')"
+                                                class="scenario-btn col-span-2 py-3 px-3 rounded-2xl bg-gradient-to-r from-rose-500/15 via-purple-500/15 to-indigo-500/15 border border-rose-500/30 text-xs font-black text-white transition-all duration-200 active:scale-95 flex items-center justify-between">
+                                                <div class="flex items-center gap-2.5">
+                                                    <div class="w-7 h-7 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 text-xs shrink-0">
+                                                        <i class="fas fa-bullseye"></i>
+                                                    </div>
+                                                    <div class="text-left">
+                                                        <div class="text-xs font-black text-rose-300">Exact Pass Matrix (Per Subject)</div>
+                                                        <div class="text-[9.5px] text-gray-400 font-medium">Auto-apply min sem marks based on PSG 40:60 table</div>
+                                                    </div>
+                                                </div>
+                                                <span class="text-[9.5px] font-black text-rose-300 px-2 py-0.5 rounded-lg bg-rose-500/20 border border-rose-500/30 shrink-0">Pass 50%</span>
+                                            </button>
                                             <button id="btn-scenario-pass" data-val="50"
                                                 onclick="setGlobalSemScenario(50)"
                                                 class="scenario-btn py-3 px-2 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-xs font-black text-rose-400 transition-all duration-200 active:scale-95">
-                                                <i class="fas fa-check-circle mr-1 text-[10px]"></i>Just Pass<br>
-                                                <span class="text-[9px] font-medium opacity-70">50 / 100</span>
+                                                <i class="fas fa-check-circle mr-1 text-[10px]"></i>Flat 50 / 100<br>
+                                                <span class="text-[9px] font-medium opacity-70">All subjects: 50</span>
                                             </button>
                                             <button id="btn-scenario-a" data-val="72"
                                                 onclick="setGlobalSemScenario(72)"
@@ -1705,6 +1737,157 @@
             <div id="full-history-content" class="flex-1 overflow-y-auto no-scrollbar space-y-4 pb-10">
                 <!-- History entries will be injected here -->
             </div>
+        </div>
+    </div>
+
+    <!-- PSG SEMESTER PASS TARGET PREDICTOR MODAL (MOBILE-FIRST) -->
+    <div id="pass-matrix-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-6">
+        <div class="absolute inset-0 bg-black/85 backdrop-blur-md opacity-0 transition-opacity duration-300" id="pass-matrix-backdrop" onclick="closePassMatrixModal()"></div>
+        <div class="w-full max-w-[480px] relative z-10 opacity-0 transition-all duration-300 transform scale-95 max-h-[92vh] flex flex-col rounded-[32px] p-5 sm:p-6 border border-rose-500/30 bg-[#0f1019] shadow-2xl overflow-y-auto no-scrollbar" id="pass-matrix-panel">
+            
+            <!-- Header -->
+            <div class="flex items-center justify-between mb-4 shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 text-lg shrink-0">
+                        <i class="fas fa-bullseye"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h3 class="text-base sm:text-lg font-black text-white tracking-tight">Sem Pass Target Predictor</h3>
+                            <span class="text-[8px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">40 : 60 Rule</span>
+                        </div>
+                        <p class="text-[10px] text-gray-400 font-medium">PSG Tech Continuous Assessment &amp; Semester Pass Math</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closePassMatrixModal()" class="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0">
+                    <i class="fas fa-times text-xs"></i>
+                </button>
+            </div>
+
+            <div id="pass-matrix-view-calc" class="space-y-4">
+                <!-- Subject Badge if opened for specific course -->
+                <div id="pass-matrix-course-badge" class="hidden p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0" id="pass-matrix-active-code">COURSE</span>
+                        <span class="text-xs font-bold text-white truncate" id="pass-matrix-active-name">Subject Name</span>
+                    </div>
+                    <button type="button" onclick="applyPassMatrixToActiveSubject()" id="pass-matrix-apply-active-btn" class="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] font-black uppercase tracking-wider shrink-0 transition active:scale-95 shadow">
+                        Apply to Sim
+                    </button>
+                </div>
+
+                <!-- Internal Mark Input & Slider Card -->
+                <div class="p-4 sm:p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3.5">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <span class="text-[10px] font-black uppercase tracking-widest text-gray-400 block">Internal Mark (CA)</span>
+                            <span class="text-[9px] text-gray-500">Continuous Assessment out of 40</span>
+                        </div>
+                        <div class="flex items-baseline gap-1 bg-black/60 px-3 py-1.5 rounded-xl border border-rose-500/30 shadow-inner">
+                            <span id="pass-matrix-input-val" class="text-2xl font-black text-white">18</span>
+                            <span class="text-[10px] font-bold text-gray-400">/ 40</span>
+                        </div>
+                    </div>
+
+                    <!-- Slider -->
+                    <div class="pt-1">
+                        <input type="range" id="pass-matrix-slider" min="0" max="40" step="1" value="18"
+                            oninput="updatePassMatrixFromSlider(this.value)"
+                            class="w-full bg-black/50 rounded-lg appearance-none cursor-pointer accent-rose-500 acad-slider" style="height: 8px;" />
+                    </div>
+
+                    <!-- Fast Tap Preset Chips (12 to 24 from PSG Tech table) -->
+                    <div>
+                        <span class="text-[8px] font-black uppercase tracking-widest text-gray-500 block mb-1.5">Common PSG Tech CA Scores (Tap to choose):</span>
+                        <div class="flex flex-wrap gap-1.5" id="pm-pills-container">
+                            <button type="button" onclick="setPassMatrixCA(12)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">12</button>
+                            <button type="button" onclick="setPassMatrixCA(14)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">14</button>
+                            <button type="button" onclick="setPassMatrixCA(16)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">16</button>
+                            <button type="button" onclick="setPassMatrixCA(18)" class="pm-pill px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-xs font-black text-rose-300 transition active:scale-95">18</button>
+                            <button type="button" onclick="setPassMatrixCA(20)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">20</button>
+                            <button type="button" onclick="setPassMatrixCA(22)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">22</button>
+                            <button type="button" onclick="setPassMatrixCA(24)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">24</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- HERO RESULT DISPLAY -->
+                <div class="p-5 rounded-3xl bg-gradient-to-br from-rose-950/40 via-purple-950/20 to-black/60 border border-rose-500/30 shadow-2xl relative overflow-hidden">
+                    <div class="flex items-start justify-between mb-3">
+                        <div>
+                            <span class="text-[9px] font-black uppercase tracking-[0.2em] text-rose-400 block mb-1">Required in Semester Exam</span>
+                            <div class="flex items-baseline gap-2">
+                                <span id="pm-res-sem100" class="text-4xl sm:text-5xl font-black text-white tracking-tight">52</span>
+                                <span class="text-sm font-bold text-gray-400">/ 100</span>
+                            </div>
+                        </div>
+                        <span id="pm-res-badge" class="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                            Minimum Pass
+                        </span>
+                    </div>
+
+                    <!-- 4-Step Mathematical Proof -->
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3 border-t border-white/10">
+                        <div class="bg-black/40 p-2 rounded-xl border border-white/5 text-center">
+                            <span class="text-[8px] font-black uppercase text-gray-400 block">For 40</span>
+                            <span id="pm-step-ca40" class="text-base font-black text-indigo-300">18.0</span>
+                            <span class="text-[7.5px] text-gray-500 block">Internal CA</span>
+                        </div>
+                        <div class="bg-rose-500/15 p-2 rounded-xl border border-rose-500/30 text-center">
+                            <span class="text-[8px] font-black uppercase text-rose-300 block">For 100</span>
+                            <span id="pm-step-sem100" class="text-base font-black text-white">52</span>
+                            <span class="text-[7.5px] text-rose-300 block">Sem Written</span>
+                        </div>
+                        <div class="bg-black/40 p-2 rounded-xl border border-white/5 text-center">
+                            <span class="text-[8px] font-black uppercase text-gray-400 block">For 60 ➔ Round</span>
+                            <span id="pm-step-sem60" class="text-base font-black text-purple-300">31.2 ➔ 32</span>
+                            <span class="text-[7.5px] text-gray-500 block">Scale &amp; Ceil</span>
+                        </div>
+                        <div class="bg-emerald-500/15 p-2 rounded-xl border border-emerald-500/30 text-center">
+                            <span class="text-[8px] font-black uppercase text-emerald-400 block">Final Mark</span>
+                            <span id="pm-step-final" class="text-base font-black text-emerald-300">50</span>
+                            <span class="text-[7.5px] text-emerald-400 font-bold block" id="pm-step-calc-text">18 + 32 = 50 ✅</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TARGET GRADES PREVIEW (MOBILE CARDS) -->
+                <div>
+                    <span class="text-[9px] font-black uppercase tracking-widest text-gray-400 block mb-2">Marks Needed in Sem Exam for Higher Grades:</span>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2" id="pm-grade-targets-grid">
+                        <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-center">
+                            <span class="text-[8px] font-bold text-rose-400 uppercase block">Pass (50%)</span>
+                            <span class="text-sm font-black text-white block mt-0.5" id="pm-tgt-pass">52 / 100</span>
+                        </div>
+                        <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-center">
+                            <span class="text-[8px] font-bold text-teal-400 uppercase block">Grade B (60%)</span>
+                            <span class="text-sm font-black text-white block mt-0.5" id="pm-tgt-b">70 / 100</span>
+                        </div>
+                        <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-center">
+                            <span class="text-[8px] font-bold text-indigo-400 uppercase block">Grade A (70%)</span>
+                            <span class="text-sm font-black text-white block mt-0.5" id="pm-tgt-a">87 / 100</span>
+                        </div>
+                        <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-center">
+                            <span class="text-[8px] font-bold text-purple-400 uppercase block">Grade A+ (80%)</span>
+                            <span class="text-sm font-black text-white block mt-0.5" id="pm-tgt-aplus">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Explanation & Share Action -->
+                <div class="flex items-center gap-2 pt-1">
+                    <button type="button" onclick="copyPassMatrixSummary()" class="w-full py-3 px-3 rounded-2xl bg-gradient-to-r from-rose-600/30 to-indigo-600/30 hover:from-rose-600/40 hover:to-indigo-600/40 border border-rose-500/30 text-xs font-bold text-white transition active:scale-95 flex items-center justify-center gap-2 shadow-lg">
+                        <i class="fas fa-copy text-xs text-rose-400"></i>
+                        <span>Copy Pass Target Summary</span>
+                    </button>
+                </div>
+
+                <div class="p-3.5 rounded-2xl bg-black/40 border border-white/5 text-[10px] text-gray-400 leading-relaxed">
+                    <span class="font-bold text-gray-300"><i class="fas fa-circle-info text-rose-400 mr-1"></i> PSG Tech Evaluation Rule:</span>
+                    Semester Theory Exam is out of 100 and converted to 60%. Any fraction is rounded <b>UP (ceiled)</b> to the next integer, then added to CA (out of 40). An aggregate of <b>50 marks (50%)</b> is mandatory to pass.
+                </div>
+            </div>
+
         </div>
     </div>
 

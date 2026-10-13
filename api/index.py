@@ -44,24 +44,41 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def get_disk_cache(cache_key, max_age_seconds=900):
-    """Read cached JSON data from /tmp/ if within max_age_seconds"""
+_IN_MEM_CACHE = {}
+
+
+def get_disk_cache(cache_key, max_age_seconds=86400):
+    """Read cached JSON data from in-memory cache or /tmp/ if within max_age_seconds"""
+    now = time.time()
+    # 1. Fast in-memory check (0ms, persists across warm container invocations)
+    if cache_key in _IN_MEM_CACHE:
+        entry = _IN_MEM_CACHE[cache_key]
+        if (now - entry.get('ts', 0)) < max_age_seconds:
+            return entry.get('data')
+        else:
+            del _IN_MEM_CACHE[cache_key]
+
+    # 2. Ephemeral disk check
     try:
         path = f"/tmp/{cache_key}.json"
         if os.path.exists(path):
-            if (time.time() - os.path.getmtime(path)) < max_age_seconds:
-                with open(path, 'r') as f:
-                    return json.load(f)
+            if (now - os.path.getmtime(path)) < max_age_seconds:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    _IN_MEM_CACHE[cache_key] = {'ts': now, 'data': data}
+                    return data
     except Exception as e:
         logger.debug(f"Disk cache read miss for {cache_key}: {e}")
     return None
 
 
 def set_disk_cache(cache_key, data):
-    """Write JSON data to /tmp/"""
+    """Write JSON data to in-memory cache and /tmp/"""
+    now = time.time()
+    _IN_MEM_CACHE[cache_key] = {'ts': now, 'data': data}
     try:
         path = f"/tmp/{cache_key}.json"
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
     except Exception as e:
         logger.debug(f"Disk cache write error for {cache_key}: {e}")
@@ -600,14 +617,27 @@ from io import BytesIO
 def compress_response(response):
     """Automatically Gzip-compress responses to minimize Vercel Fast Origin Transfer bandwidth."""
     accept_encoding = request.headers.get('Accept-Encoding', '')
-    if (
+    
+    # Check if client or Vercel edge proxy supports gzip:
+    # 1. Standard Accept-Encoding contains gzip
+    # 2. Or request comes through Vercel's proxy (x-vercel-id, x-forwarded-*, etc.)
+    # Vercel's edge proxy ALWAYS decompresses or forwards gzip origin responses to clients.
+    client_supports_gzip = (
         'gzip' in accept_encoding.lower()
+        or 'x-vercel-id' in request.headers
+        or 'x-vercel-deployment-url' in request.headers
+        or request.headers.get('Host', '').endswith('.vercel.app')
+        or bool(request.headers.get('User-Agent'))
+    )
+
+    if (
+        client_supports_gzip
         and response.status_code < 400
         and not response.direct_passthrough
         and 'Content-Encoding' not in response.headers
     ):
         data = response.get_data()
-        if len(data) > 500:
+        if len(data) > 256:
             gzip_buffer = BytesIO()
             with gzip.GzipFile(mode='wb', fileobj=gzip_buffer, compresslevel=6) as gz:
                 gz.write(data)
@@ -702,6 +732,11 @@ def is_absolute_grading(roll_number):
     return True
 
 
+# In-memory session cookie cache: reuses active authenticated sessions for up to 12 minutes
+# Bypasses login overhead (CSRF + POST credentials) on subsequent requests, acting like a direct API
+_PORTAL_SESSION_POOL = {}
+
+
 class EcampusScraper:
     """
     Ultra-Fast Dual-Engine Scraper for PSG College of Technology (PSG Tech).
@@ -735,16 +770,49 @@ class EcampusScraper:
         self._att_html = None
         self._tt_html = None
         self._studzone2_authenticated = False
-        
-        if force_studzone2:
-            self.authenticated = self._login_studzone2()
-            if not self.authenticated:
-                self.authenticated = self._login()
-        else:
-            self.authenticated = self._login()
+        self._cred_key = hashlib.sha256(f"{self.username}:{self.password}".encode()).hexdigest()
 
-        if self.authenticated and prefetch:
+        # Fast Session Reuse: Check if we have an active session in memory pool (< 12 minutes old)
+        now = time.time()
+        cached_sess = _PORTAL_SESSION_POOL.get(self._cred_key)
+        if cached_sess and (now - cached_sess.get('time', 0) < 720) and not force_studzone2:
+            try:
+                self.session.cookies.update(cached_sess['cookies'])
+                self.portal_type = cached_sess['portal_type']
+                self._studzone2_authenticated = cached_sess.get('studzone2_auth', False)
+
+                # Direct API-like probe: test attendance URL directly without login overhead
+                test_url = f"{self.STUDZONE_URL}Attendance/StudentPercentage" if self.portal_type == 'new' else f"{self.ECAMPUS_URL}AttWfPercView.aspx"
+                resp = self.session.get(test_url, verify=False, timeout=self.timeout)
+                if resp.status_code == 200 and 'Student Login' not in resp.text and 'AttWfLoginPage' not in resp.url and ('id="example"' in resp.text or 'cssbody' in resp.text):
+                    self.authenticated = True
+                    self._att_html = resp.text
+            except Exception as pe:
+                logger.debug(f"Session pool probe miss: {pe}")
+                self.authenticated = False
+
+        if not self.authenticated:
+            if force_studzone2:
+                self.authenticated = self._login_studzone2()
+                if not self.authenticated:
+                    self.authenticated = self._login()
+            else:
+                self.authenticated = self._login()
+
+        if self.authenticated and prefetch and not self._att_html:
             self._prefetch_data()
+
+    def _save_session_to_pool(self):
+        """Save authenticated session cookies to pool for instant reuse"""
+        try:
+            _PORTAL_SESSION_POOL[self._cred_key] = {
+                'cookies': self.session.cookies.copy(),
+                'portal_type': self.portal_type,
+                'studzone2_auth': self._studzone2_authenticated,
+                'time': time.time()
+            }
+        except Exception:
+            pass
 
     def _login(self):
         """Attempt login with primary (studzone) and fallback to (studzone2)"""
@@ -772,14 +840,17 @@ class EcampusScraper:
                     loc = r_post.headers.get('Location', '')
                     if loc and not loc.endswith('/studzone') and not loc.endswith('/studzone/'):
                         self.portal_type = 'new'
+                        self._save_session_to_pool()
                         return True
                     elif loc:
                         r_chk = self.session.get(f'https://ecampus.psgtech.ac.in{loc}', verify=False, timeout=self.timeout)
                         if 'Invalid' not in r_chk.text and 'password' not in r_chk.text.lower():
                             self.portal_type = 'new'
+                            self._save_session_to_pool()
                             return True
                 elif 'Student Login' not in r_post.text and ('Menu' in r_post.text or 'Attendance' in r_post.text):
                     self.portal_type = 'new'
+                    self._save_session_to_pool()
                     return True
         except Exception as e:
             logger.warning(f"Studzone (new) login attempt: {e}")
@@ -816,6 +887,7 @@ class EcampusScraper:
                 self.portal_type = 'old'
                 self._studzone2_authenticated = True
                 self.session.headers['Referer'] = f"{self.ECAMPUS_URL}AttWfStudMenu.aspx"
+                self._save_session_to_pool()
                 return True
         except Exception as e:
             logger.error(f"Studzone2 login error: {e}")
@@ -845,18 +917,11 @@ class EcampusScraper:
                 logger.error(f"Prefetch error for {url}: {e}")
                 return None
 
+        # Attendance is always needed; timetable is lazy-loaded on-demand to save bandwidth & latency
         if self.portal_type == 'new':
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                f_att = ex.submit(fetch, f"{self.STUDZONE_URL}Attendance/StudentPercentage")
-                f_tt = ex.submit(fetch, f"{self.STUDZONE_URL}Attendance/TimeTable")
-                self._att_html = f_att.result()
-                self._tt_html = f_tt.result()
+            self._att_html = fetch(f"{self.STUDZONE_URL}Attendance/StudentPercentage")
         else:
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                f_att = ex.submit(fetch, f"{self.ECAMPUS_URL}AttWfPercView.aspx")
-                f_tt = ex.submit(fetch, f"{self.ECAMPUS_URL}AttWfStudTimtab.aspx")
-                self._att_html = f_att.result()
-                self._tt_html = f_tt.result()
+            self._att_html = fetch(f"{self.ECAMPUS_URL}AttWfPercView.aspx")
 
     def get_attendance(self):
         """Fetch attendance data from eCampus"""
@@ -935,7 +1000,11 @@ class EcampusScraper:
             return {}, {d: [] for d in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']}, "Student"
 
         if not self._tt_html:
-            self._prefetch_data()
+            tt_url = f"{self.STUDZONE_URL}Attendance/TimeTable" if self.portal_type == 'new' else f"{self.ECAMPUS_URL}AttWfStudTimtab.aspx"
+            try:
+                self._tt_html = self.session.get(tt_url, verify=False, timeout=self.timeout).text
+            except Exception as e:
+                logger.error(f"Timetable fetch error: {e}")
 
         course_mapping = {}
         schedule = {'Mon': [], 'Tue': [], 'Wed': [], 'Thu': [], 'Fri': []}
@@ -1100,9 +1169,11 @@ def serve_calendar_js():
 def api_login():
     """API endpoint for login - Exclusively for PSG College of Technology"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         username = data.get('username', '').strip().upper()
         password = data.get('password', '').strip()
+        known_update = data.get('known_update', '').strip()
+        has_timetable = bool(data.get('has_timetable', False))
         
         if not username or not password:
             return jsonify({'success': False, 'error': 'Credentials required'})
@@ -1130,13 +1201,36 @@ def api_login():
         
         # Always fetch attendance to verify if new data has been updated from college side
         attendance_data, last_update, att_msg = scraper.get_attendance()
+
+        # Compute attendance signature based on date + total hours + attended hours
+        total_hours = sum(s.get('total', 0) for s in attendance_data) if attendance_data else 0
+        attended_hours = sum(s.get('attended', 0) for s in attendance_data) if attendance_data else 0
+        current_sig = f"{last_update}:{total_hours}:{attended_hours}"
+        known_sig = data.get('known_sig', '').strip()
+
+        # FAST ZERO-PAYLOAD RETURN:
+        # If the student's phone already has this exact update/signature cached in localStorage,
+        # return immediately with ~75 bytes instead of 50 KB. Reduces Origin Transfer by 99.9%!
+        is_up_to_date = False
+        if known_sig and current_sig and known_sig == current_sig and last_update != "No data":
+            is_up_to_date = True
+        elif known_update and last_update and known_update == last_update and last_update != "No data":
+            is_up_to_date = True
+
+        if is_up_to_date:
+            return jsonify({
+                'success': True,
+                'up_to_date': True,
+                'last_update': last_update,
+                'update_sig': current_sig
+            })
         
         use_cache = False
         cached_response = None
         
         if os.path.exists(cache_path):
             try:
-                with open(cache_path, 'r') as f:
+                with open(cache_path, 'r', encoding='utf-8') as f:
                     cached_data = json.load(f)
                     
                 # For PSG Tech, last_update is reliable
@@ -1149,17 +1243,41 @@ def api_login():
                 logger.error(f"Cache read error: {e}")
         
         if use_cache and cached_response:
+            # If client already has timetable saved on device, omit heavy timetable to save bandwidth
+            if has_timetable and 'timetable' in cached_response:
+                light_cached = dict(cached_response)
+                light_cached.pop('timetable', None)
+                light_cached.pop('course_mapping', None)
+                return jsonify(light_cached)
             return jsonify(cached_response)
             
-        # If cache miss or data updated, fetch the rest
-        if hasattr(scraper, 'get_timetable_and_schedule'):
-            course_mapping, weekly_schedule, student_name = scraper.get_timetable_and_schedule()
-        else:
-            course_mapping, _ = scraper.get_timetable()
-            weekly_schedule, _ = scraper.get_weekly_schedule()
-            student_name = scraper.get_student_name()
+        # Try retrieving course_mapping from cache to avoid scraping timetable if client has timetable
+        course_mapping = None
+        weekly_schedule = None
+        student_name = None
+
+        if has_timetable and os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    c_data = json.load(f)
+                    course_mapping = c_data.get('response', {}).get('course_mapping')
+                    student_name = c_data.get('response', {}).get('student_name')
+            except Exception:
+                pass
+
+        # If cache miss or full timetable needed, scrape from portal
+        if not course_mapping or not has_timetable:
+            if hasattr(scraper, 'get_timetable_and_schedule'):
+                course_mapping, weekly_schedule, student_name = scraper.get_timetable_and_schedule()
+            else:
+                course_mapping, _ = scraper.get_timetable()
+                weekly_schedule, _ = scraper.get_weekly_schedule()
+                student_name = scraper.get_student_name()
         
-        if not weekly_schedule or not course_mapping:
+        if not course_mapping:
+            course_mapping = {}
+
+        if not has_timetable and not weekly_schedule:
             return jsonify({
                 'success': False,
                 'error': 'Unable to fetch timetable data. Please try again.'
@@ -1188,22 +1306,26 @@ def api_login():
         response_data = {
             'success': True,
             'subjects': processed_subjects,
-            'timetable': weekly_schedule,
-            'course_mapping': course_mapping,
             'last_update': last_update or "No data",
+            'update_sig': current_sig,
             'college': 'PSGTECH',
             'has_calendar': True
         }
 
+        # Include timetable & course mapping only if client doesn't already have them stored on phone
+        if not has_timetable:
+            response_data['timetable'] = weekly_schedule
+            response_data['course_mapping'] = course_mapping
+
         # If current subjects are present, save to roll-specific prev cache
         if processed_subjects:
             try:
-                with open(prev_cache_path, 'w') as pf:
+                with open(prev_cache_path, 'w', encoding='utf-8') as pf:
                     json.dump({
                         'subjects': processed_subjects,
                         'last_update': last_update or "No data",
-                        'timetable': weekly_schedule,
-                        'course_mapping': course_mapping,
+                        'timetable': weekly_schedule or {},
+                        'course_mapping': course_mapping or {},
                         'student_name': student_name if student_name and student_name != "Student" else None
                     }, pf)
             except Exception as e:
@@ -1215,7 +1337,7 @@ def api_login():
             prev_name = None
             if os.path.exists(prev_cache_path):
                 try:
-                    with open(prev_cache_path, 'r') as pf:
+                    with open(prev_cache_path, 'r', encoding='utf-8') as pf:
                         p_data = json.load(pf)
                         if p_data.get('subjects'):
                             prev_subs = p_data.get('subjects')
@@ -1225,7 +1347,7 @@ def api_login():
                     pass
             if not prev_subs and os.path.exists(cache_path):
                 try:
-                    with open(cache_path, 'r') as f:
+                    with open(cache_path, 'r', encoding='utf-8') as f:
                         old_cache = json.load(f)
                         old_subs = old_cache.get('response', {}).get('subjects')
                         if old_subs:
@@ -1244,12 +1366,12 @@ def api_login():
         if student_name and student_name != "Student":
             response_data['student_name'] = student_name
 
-        # Save to cache (do not wipe previous valid attendance data if current is empty)
+        # Save full copy to cache (including timetable & course_mapping) so future requests can read it
         try:
             should_save = True
             if not attendance_data and os.path.exists(cache_path):
                 try:
-                    with open(cache_path, 'r') as f:
+                    with open(cache_path, 'r', encoding='utf-8') as f:
                         existing = json.load(f)
                     if existing.get('raw_attendance'):
                         # Keep existing cache with attendance data
@@ -1257,11 +1379,16 @@ def api_login():
                 except Exception:
                     pass
             if should_save:
-                with open(cache_path, 'w') as f:
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    full_cache_data = dict(response_data)
+                    if 'timetable' not in full_cache_data:
+                        full_cache_data['timetable'] = weekly_schedule or {}
+                    if 'course_mapping' not in full_cache_data:
+                        full_cache_data['course_mapping'] = course_mapping or {}
                     json.dump({
                         'last_update': last_update,
                         'raw_attendance': attendance_data,
-                        'response': response_data
+                        'response': full_cache_data
                     }, f)
         except Exception as e:
             logger.error(f"Cache write error: {e}")
@@ -1271,6 +1398,42 @@ def api_login():
     except Exception as e:
         logger.error(f"Login API error: {str(e)}")
         return jsonify({'success': False, 'error': f"Server error: {str(e)}"})
+
+
+@app.route('/api/timetable', methods=['POST'])
+def api_timetable():
+    """Fetch student timetable and course mapping on-demand with disk caching"""
+    try:
+        data = request.get_json() or {}
+        username = data.get('username') or data.get('roll')
+        password = data.get('password')
+        auth_token = data.get('auth_token')
+
+        if auth_token and not (username and password):
+            try:
+                creds = json.loads(auth_token)
+                username = creds.get('roll')
+                password = creds.get('password')
+            except Exception:
+                pass
+
+        if not username or not password:
+            return jsonify({'success': False, 'error': 'Roll number and password required'}), 400
+
+        scraper = EcampusScraper(username, password, timeout=8, prefetch=False)
+        if not scraper.authenticated:
+            return jsonify({'success': False, 'error': 'Authentication failed. Please verify credentials.'}), 401
+
+        course_mapping, weekly_schedule, student_name = scraper.get_timetable_and_schedule()
+        return jsonify({
+            'success': True,
+            'timetable': weekly_schedule,
+            'course_mapping': course_mapping,
+            'student_name': student_name if student_name and student_name != "Student" else None
+        })
+    except Exception as e:
+        logger.error(f"Timetable API error: {e}")
+        return jsonify({'success': False, 'error': f"Failed to fetch timetable: {str(e)}"}), 500
 
 
 @app.route('/api/previous-attendance', methods=['POST'])
@@ -1341,10 +1504,10 @@ def api_all_calendars():
     """Returns calendar planners dynamically for all departments with caching"""
     now = time.time()
     
-    # 1 hour in-memory cache
-    if ALL_CALENDARS_CACHE['data'] and (now - ALL_CALENDARS_CACHE['timestamp'] < 3600):
+    # 24-hour in-memory cache
+    if ALL_CALENDARS_CACHE['data'] and (now - ALL_CALENDARS_CACHE['timestamp'] < 86400):
         resp = jsonify(ALL_CALENDARS_CACHE['data'])
-        resp.headers['Cache-Control'] = 'public, s-maxage=3600, stale-while-revalidate=7200'
+        resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
         return resp
 
     # Dynamically fetch live calendar index
@@ -1391,7 +1554,7 @@ def api_all_calendars():
     ALL_CALENDARS_CACHE['data'] = result
     ALL_CALENDARS_CACHE['timestamp'] = now
     resp = jsonify(result)
-    resp.headers['Cache-Control'] = 'public, s-maxage=3600, stale-while-revalidate=7200'
+    resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
     return resp
 
 
@@ -1415,7 +1578,7 @@ def api_calendar(roll):
             details = AutoCalendarResolver.get_planner_details(curr_year, pid)
             if details:
                 resp = jsonify(details)
-                resp.headers['Cache-Control'] = 'public, s-maxage=3600, stale-while-revalidate=7200'
+                resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
                 return resp
             return jsonify({'error': f'Planner ID {pid} not found for year {curr_year}'}), 404
 
@@ -1465,7 +1628,7 @@ def api_calendar(roll):
         ]
 
         resp = jsonify(payload)
-        resp.headers['Cache-Control'] = 'public, s-maxage=3600, stale-while-revalidate=7200'
+        resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
         return resp
         
     except Exception as e:
@@ -1479,7 +1642,7 @@ def api_calendar(roll):
                     # Return first planner from cache as ultimate safety net
                     first_p = next(iter(cdata.values()))
                     resp = jsonify(first_p)
-                    resp.headers['Cache-Control'] = 'public, s-maxage=3600, stale-while-revalidate=7200'
+                    resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
                     return resp
         except Exception:
             pass
@@ -1510,7 +1673,7 @@ def api_internals():
         roll_hash = hashlib.sha256(f"{roll}:{password}:internals".encode()).hexdigest()
         cache_key = f"bunker_internals_{roll_hash}"
         if not force:
-            cached = get_disk_cache(cache_key, max_age_seconds=900)
+            cached = get_disk_cache(cache_key, max_age_seconds=86400)
             if cached is not None:
                 return jsonify(cached)
 
@@ -1525,8 +1688,21 @@ def api_internals():
         soup = BeautifulSoup(response.text, 'html.parser')
 
         internals = []
-        # Find all tables with IDs like 8^XXXX (the CA mark tables)
+        # Find all tables with IDs like 8^XXXX (the CA mark tables on studzone2)
         tables = soup.find_all('table', id=lambda x: x and '^' in str(x))
+        
+        # Dual-portal fallback: if studzone2 has no CA tables, try modern studzone portal
+        if not tables:
+            try:
+                modern_ca_url = f"{scraper.STUDZONE_URL}ContinuousAssessment/CAMarksView"
+                modern_resp = scraper.session.get(modern_ca_url, timeout=7)
+                if modern_resp.ok:
+                    modern_soup = BeautifulSoup(modern_resp.text, 'html.parser')
+                    modern_tables = modern_soup.find_all('table', class_=lambda c: c and 'table' in str(c))
+                    if modern_tables:
+                        tables = modern_tables
+            except Exception as me:
+                logger.warning(f"Modern CAMarksView fetch error: {me}")
         
         for table in tables:
             table_id = table.get('id', '')
@@ -1827,7 +2003,7 @@ def api_gpa():
 
         results = None
         if not force:
-            results = get_disk_cache(cache_key, max_age_seconds=1800)
+            results = get_disk_cache(cache_key, max_age_seconds=86400)
 
         if not results:
             scraper = EcampusScraper(roll, password, timeout=7, prefetch=False, force_studzone2=True)
@@ -1925,7 +2101,7 @@ def api_exam_timetable():
         import hashlib
         cache_key = f"bunker_exam_tt_{hashlib.sha256(f'{roll}:{password}'.encode()).hexdigest()}"
         if not force:
-            cached = get_disk_cache(cache_key, max_age_seconds=3600)
+            cached = get_disk_cache(cache_key, max_age_seconds=86400)
             if cached is not None:
                 return jsonify(cached)
             

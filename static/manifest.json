@@ -7,7 +7,7 @@
     "display_override": ["standalone", "minimal-ui"],
     "background_color": "#030206",
     "theme_color": "#030206",
-    "orientation": "portrait-primary",
+    "orientation": "portrait",
     "scope": "/",
     "start_url": "/?source=pwa",
     "lang": "en-IN",

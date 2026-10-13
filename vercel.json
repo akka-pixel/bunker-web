@@ -1,6 +1,9 @@
 {
   "version": 2,
   "cleanUrls": true,
+  "regions": [
+    "bom1"
+  ],
   "functions": {
     "api/index.py": {
       "maxDuration": 10,
@@ -128,7 +131,7 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, s-maxage=86400, stale-while-revalidate=604800"
+          "value": "public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800"
         }
       ]
     },
@@ -137,7 +140,7 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
+          "value": "public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800"
         }
       ]
     },
@@ -146,7 +149,7 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, s-maxage=300"
+          "value": "public, max-age=300, s-maxage=300"
         }
       ]
     },

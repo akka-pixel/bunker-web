@@ -13,7 +13,10 @@ github token.md
 m.md
 n.md
 static/bunker.apk
+*.apk
+version.json
 FEEDBACK Web/
 automate calendar/
 *.log
 .github/
+data/

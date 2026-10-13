@@ -19,6 +19,16 @@
     <meta property="og:description" content="View CA tests, assessment tutorials, lab &amp; semester exams for all PSG Tech departments with clash-free event planning on PSG Bunker.">
     <meta property="og:image" content="https://psg-bunk.vercel.app/static/icon.png">
 
+    <!-- PWA & Mobile Optimization -->
+    <meta name="theme-color" content="#030206">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="PSG Bunker">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="format-detection" content="telephone=no">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <link rel="manifest" href="/manifest.json?v=bunker7">
+
     <!-- Fonts & Icons -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -29,7 +39,7 @@
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
 
     <!-- Custom Styles -->
-    <link rel="stylesheet" href="/static/calendar.css?v=3.5.1">
+    <link rel="stylesheet" href="/static/calendar.css?v=3.5.2">
 
     <!-- Performance Optimization Script (Instant 60fps on all phones) -->
     <script>
@@ -85,8 +95,8 @@
     </div>
 
     <!-- Sticky Navigation Bar (Mobile Optimized) -->
-    <header class="sticky top-0 z-40 glass-header px-3 py-2.5 sm:px-6 sm:py-3 transition-colors">
-        <div class="max-w-7xl mx-auto flex items-center justify-between gap-2">
+    <header class="sticky top-0 z-40 glass-header px-3 py-2.5 sm:px-4 sm:py-3 transition-colors">
+        <div class="max-w-md sm:max-w-lg mx-auto flex items-center justify-between gap-2">
             
             <!-- Left: Brand & Return -->
             <div class="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -131,8 +141,8 @@
         </div>
     </header>
 
-    <!-- Main Container -->
-    <main class="max-w-7xl mx-auto px-2.5 sm:px-6 py-3 sm:py-4 space-y-3 sm:space-y-4 flex-1 w-full">
+    <!-- Main Container (Mobile Focused) -->
+    <main class="max-w-md sm:max-w-lg mx-auto px-2.5 sm:px-4 py-3 space-y-3 flex-1 w-full">
 
         <!-- ============================================================= -->
         <!-- TOP TOOLBAR: SINGLE CALENDAR SELECTOR & SEARCH                -->
@@ -338,7 +348,7 @@
     </div>
 
     <!-- Calendar JavaScript Engine -->
-    <script src="/static/calendar.js?v=3.5.1"></script>
+    <script src="/static/calendar.js?v=3.8.1"></script>
 </body>
 
 </html>

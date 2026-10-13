@@ -28,9 +28,8 @@ PSG Tech (PSG College of Technology) students, Coimbatore, Tamil Nadu, India. Wo
 - **GPA & CGPA Viewer**: See semester-wise GPA and cumulative CGPA with color-coded chips
 - **Academic Calendar**: Holiday lists, exam schedules, and semester dates
 - **Smart Planner**: Day-wise timetable with quick attendance marking
-- **Works Offline**: Fully offline-capable Progressive Web App (PWA)
-- **Android App**: Native APK available for download at https://github.com/akka9655/bunkakka/raw/main/static/bunker.apk
-- **iOS Support**: Add to Home Screen on iPhone via Safari for a native app feel
+- **Universal Mobile PWA**: Instant 1-tap install on both Android (Chrome/PWA) and iPhone (Safari "Add to Home Screen") with zero storage bloat and full offline support
+- **iOS & Android Support**: Native app look and feel with home screen shortcuts, instant 0ms caching, and safe area notch support
 
 ## FAQ
 
