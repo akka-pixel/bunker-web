@@ -18,3 +18,4 @@ data/
 static/bunker.apk
 *.apk
 version.json
+BUNKER_COMPLETE_DETAILS.md
