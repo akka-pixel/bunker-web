@@ -3261,7 +3261,7 @@ function renderOthersOverview() {
         const settingsRollEl = document.getElementById('settings-roll');
 
         if (profileRollEl) profileRollEl.textContent = studentInfo ? studentInfo.roll : roll;
-        if (profileBranchEl) profileBranchEl.textContent = studentInfo ? studentInfo.displayBranch : 'PSG College of Technology';
+        if (profileBranchEl) profileBranchEl.remove();
         if (profileMetaEl) profileMetaEl.textContent = studentInfo ? studentInfo.meta : 'eCampus Synced';
         if (settingsRollEl) settingsRollEl.textContent = roll;
     }
