@@ -658,11 +658,7 @@ if not os.path.isdir(_STATIC_DIR):
 app = Flask(__name__, template_folder=_TEMPLATES_DIR, static_folder=_STATIC_DIR)
 app.json.compact = True
 
-session_secret = os.environ.get("SESSION_SECRET")
-if not session_secret:
-    logger.warning("SESSION_SECRET not set - using development fallback")
-    session_secret = "bunker-dev-secret-key-change-in-production"
-
+session_secret = os.environ.get("BUNKER_SECRET_KEY") or os.environ.get("SESSION_SECRET", "fallback-deterministic-secret-key-psg-bunker-2026")
 app.secret_key = session_secret
 
 
@@ -806,7 +802,7 @@ def encode_session_token(username, cookies_dict, portal_type='new', studzone2_au
         }
         raw_json = json.dumps(payload, separators=(',', ':'))
         b64_payload = base64.urlsafe_b64encode(raw_json.encode('utf-8')).decode('ascii')
-        secret = (session_secret or 'bunker-secret-key').encode('utf-8')
+        secret = (os.environ.get('BUNKER_SECRET_KEY') or session_secret or 'fallback-deterministic-secret-key-psg-bunker-2026').encode('utf-8')
         sig = hmac.new(secret, b64_payload.encode('ascii'), hashlib.sha256).hexdigest()[:32]
         return f"{b64_payload}.{sig}"
     except Exception as e:
@@ -820,7 +816,7 @@ def decode_session_token(token, username=None, max_age=_SESSION_TOKEN_TTL):
         return None
     try:
         b64_payload, sig = token.split('.', 1)
-        secret = (session_secret or 'bunker-secret-key').encode('utf-8')
+        secret = (os.environ.get('BUNKER_SECRET_KEY') or session_secret or 'fallback-deterministic-secret-key-psg-bunker-2026').encode('utf-8')
         expected_sig = hmac.new(secret, b64_payload.encode('ascii'), hashlib.sha256).hexdigest()[:32]
         if not hmac.compare_digest(sig, expected_sig):
             return None
