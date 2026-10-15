@@ -305,14 +305,18 @@
         const startTime = Date.now();
 
         try {
+            const sessionToken = localStorage.getItem('bunker_session_token') || '';
             const res = await fetch('/api/feedback', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ rollno, password, mode: 'auto', rating_style: 'max' })
+                body: JSON.stringify({ rollno, password, mode: 'auto', rating_style: 'max', session_token: sessionToken })
             });
 
             const data = await res.json();
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            if (data.session_token) {
+                localStorage.setItem('bunker_session_token', data.session_token);
+            }
 
             if (res.ok && data.success) {
                 showStatus(`🎉 <strong>Success (${elapsed}s)!</strong><br>${data.message || 'Feedback submitted successfully!'}`, 'success');

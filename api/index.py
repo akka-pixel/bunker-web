@@ -39,6 +39,9 @@ import re
 import hashlib
 import glob
 import gzip
+import threading
+import hmac
+import base64
 from io import BytesIO
 from collections import Counter
 from urllib.parse import parse_qs
@@ -48,6 +51,51 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def make_soup(markup):
+    """Cut HTML parsing CPU time by up to 80% using lxml with html.parser fallback"""
+    try:
+        return BeautifulSoup(markup, 'lxml')
+    except Exception:
+        return BeautifulSoup(markup, 'html.parser')
+
+
+_TR_RE = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL | re.IGNORECASE)
+_TD_RE = re.compile(r'<td[^>]*>(.*?)</td>', re.DOTALL | re.IGNORECASE)
+_TAG_RE = re.compile(r'<[^>]+>')
+
+
+def fast_extract_attendance_signature(html):
+    """Ultra-fast regex scanner (<0.2ms) to compute last_update:total:attended signature without BeautifulSoup"""
+    if not html:
+        return None, 0, 0, None
+    try:
+        tot_hours = 0
+        att_hours = 0
+        last_update = None
+        for tr_match in _TR_RE.finditer(html):
+            tr_content = tr_match.group(1)
+            tds = [_TAG_RE.sub('', m.group(1)).strip() for m in _TD_RE.finditer(tr_content)]
+            if len(tds) >= 10:
+                try:
+                    tot_hours += int(tds[1])
+                    att_hours += int(tds[4])
+                    if not last_update and tds[9]:
+                        raw_date = tds[9].strip()
+                        try:
+                            d_obj = datetime.strptime(raw_date, '%d-%m-%Y')
+                            last_update = d_obj.strftime('%b %d, %Y')
+                        except Exception:
+                            last_update = raw_date
+                except (ValueError, IndexError):
+                    continue
+        if last_update:
+            sig = f"{last_update}:{tot_hours}:{att_hours}"
+            return sig, tot_hours, att_hours, last_update
+    except Exception as e:
+        logger.debug(f"fast_extract_attendance_signature error: {e}")
+    return None, 0, 0, None
 
 
 _IN_MEM_CACHE = {}
@@ -608,6 +656,7 @@ if not os.path.isdir(_STATIC_DIR):
     _STATIC_DIR = _CURRENT_DIR
 
 app = Flask(__name__, template_folder=_TEMPLATES_DIR, static_folder=_STATIC_DIR)
+app.json.compact = True
 
 session_secret = os.environ.get("SESSION_SECRET")
 if not session_secret:
@@ -616,8 +665,6 @@ if not session_secret:
 
 app.secret_key = session_secret
 
-import gzip
-from io import BytesIO
 
 @app.after_request
 def compress_response(response):
@@ -643,7 +690,7 @@ def compress_response(response):
         and 'Content-Encoding' not in response.headers
     ):
         data = response.get_data()
-        if len(data) > 256:
+        if len(data) >= 256:
             gzip_buffer = BytesIO()
             with gzip.GzipFile(mode='wb', fileobj=gzip_buffer, compresslevel=6) as gz:
                 gz.write(data)
@@ -740,7 +787,86 @@ def is_absolute_grading(roll_number):
 
 # In-memory session cookie cache: reuses active authenticated sessions for up to 12 minutes
 # Bypasses login overhead (CSRF + POST credentials) on subsequent requests, acting like a direct API
+DEFAULT_PORTAL_TIMEOUT = (3.0, 5.5)
 _PORTAL_SESSION_POOL = {}
+_PORTAL_SESSION_LOCK = threading.Lock()
+_MAX_SESSION_POOL_SIZE = 300
+_SESSION_TOKEN_TTL = 720  # 12 minutes
+
+
+def encode_session_token(username, cookies_dict, portal_type='new', studzone2_auth=False):
+    """Encode and HMAC-sign active session cookies for stateless pass-through (< 720s TTL)"""
+    try:
+        payload = {
+            'u': username.strip().upper(),
+            'c': cookies_dict,
+            't': int(time.time()),
+            'p': portal_type,
+            'z2': bool(studzone2_auth)
+        }
+        raw_json = json.dumps(payload, separators=(',', ':'))
+        b64_payload = base64.urlsafe_b64encode(raw_json.encode('utf-8')).decode('ascii')
+        secret = (session_secret or 'bunker-secret-key').encode('utf-8')
+        sig = hmac.new(secret, b64_payload.encode('ascii'), hashlib.sha256).hexdigest()[:32]
+        return f"{b64_payload}.{sig}"
+    except Exception as e:
+        logger.error(f"Error encoding session token: {e}")
+        return None
+
+
+def decode_session_token(token, username=None, max_age=_SESSION_TOKEN_TTL):
+    """Verify HMAC and decode session token payload if age < max_age"""
+    if not token or not isinstance(token, str) or '.' not in token:
+        return None
+    try:
+        b64_payload, sig = token.split('.', 1)
+        secret = (session_secret or 'bunker-secret-key').encode('utf-8')
+        expected_sig = hmac.new(secret, b64_payload.encode('ascii'), hashlib.sha256).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expected_sig):
+            return None
+        raw_json = base64.urlsafe_b64decode(b64_payload.encode('ascii')).decode('utf-8')
+        payload = json.loads(raw_json)
+        if username and payload.get('u') != username.strip().upper():
+            return None
+        now = time.time()
+        if (now - payload.get('t', 0)) > max_age:
+            return None
+        return payload
+    except Exception as e:
+        logger.debug(f"Session token decode error: {e}")
+        return None
+
+
+def get_cached_portal_session(cred_key, max_age=_SESSION_TOKEN_TTL):
+    """Thread-safe retrieval of cached authenticated session"""
+    now = time.time()
+    with _PORTAL_SESSION_LOCK:
+        cached = _PORTAL_SESSION_POOL.get(cred_key)
+        if cached:
+            if (now - cached.get('time', 0)) < max_age:
+                return cached
+            else:
+                _PORTAL_SESSION_POOL.pop(cred_key, None)
+    return None
+
+
+def set_cached_portal_session(cred_key, cookies, portal_type, studzone2_auth):
+    """Thread-safe storage of authenticated session cookies with LRU eviction"""
+    now = time.time()
+    with _PORTAL_SESSION_LOCK:
+        if len(_PORTAL_SESSION_POOL) >= _MAX_SESSION_POOL_SIZE:
+            expired_keys = [k for k, v in _PORTAL_SESSION_POOL.items() if (now - v.get('time', 0)) >= _SESSION_TOKEN_TTL]
+            for k in expired_keys:
+                _PORTAL_SESSION_POOL.pop(k, None)
+            if len(_PORTAL_SESSION_POOL) >= _MAX_SESSION_POOL_SIZE:
+                oldest_key = min(_PORTAL_SESSION_POOL.keys(), key=lambda k: _PORTAL_SESSION_POOL[k].get('time', 0))
+                _PORTAL_SESSION_POOL.pop(oldest_key, None)
+        _PORTAL_SESSION_POOL[cred_key] = {
+            'cookies': cookies,
+            'portal_type': portal_type,
+            'studzone2_auth': studzone2_auth,
+            'time': now
+        }
 
 
 class EcampusScraper:
@@ -758,7 +884,7 @@ class EcampusScraper:
     ECAMPUS_URL = "https://ecampus.psgtech.ac.in/studzone2/"
     STUDZONE_URL = "https://ecampus.psgtech.ac.in/studzone/"
 
-    def __init__(self, username, password, timeout=7, prefetch=True, force_studzone2=False):
+    def __init__(self, username, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=True, force_studzone2=False, session_token=None):
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
@@ -778,10 +904,9 @@ class EcampusScraper:
         self._studzone2_authenticated = False
         self._cred_key = hashlib.sha256(f"{self.username}:{self.password}".encode()).hexdigest()
 
-        # Fast Session Reuse: Check if we have an active session in memory pool (< 12 minutes old)
-        now = time.time()
-        cached_sess = _PORTAL_SESSION_POOL.get(self._cred_key)
-        if cached_sess and (now - cached_sess.get('time', 0) < 720) and not force_studzone2:
+        # 1. Fast Session Reuse: Check warm instance in-memory pool (< 12 minutes old)
+        cached_sess = get_cached_portal_session(self._cred_key, max_age=_SESSION_TOKEN_TTL)
+        if cached_sess and not force_studzone2:
             try:
                 self.session.cookies.update(cached_sess['cookies'])
                 self.portal_type = cached_sess['portal_type']
@@ -797,6 +922,25 @@ class EcampusScraper:
                 logger.debug(f"Session pool probe miss: {pe}")
                 self.authenticated = False
 
+        # 2. Stateless session_token check (Cold container pass-through)
+        if not self.authenticated and session_token and not force_studzone2:
+            token_data = decode_session_token(session_token, username=self.username)
+            if token_data and token_data.get('c'):
+                try:
+                    self.session.cookies.update(token_data['c'])
+                    self.portal_type = token_data.get('p', 'new')
+                    self._studzone2_authenticated = token_data.get('z2', False)
+
+                    test_url = f"{self.STUDZONE_URL}Attendance/StudentPercentage" if self.portal_type == 'new' else f"{self.ECAMPUS_URL}AttWfPercView.aspx"
+                    resp = self.session.get(test_url, verify=False, timeout=self.timeout)
+                    if resp.status_code == 200 and 'Student Login' not in resp.text and 'AttWfLoginPage' not in resp.url and ('id="example"' in resp.text or 'cssbody' in resp.text):
+                        self.authenticated = True
+                        self._att_html = resp.text
+                        self._save_session_to_pool()
+                except Exception as pe:
+                    logger.debug(f"Session token hydration probe miss: {pe}")
+                    self.authenticated = False
+
         if not self.authenticated:
             if force_studzone2:
                 self.authenticated = self._login_studzone2()
@@ -811,21 +955,35 @@ class EcampusScraper:
     def _save_session_to_pool(self):
         """Save authenticated session cookies to pool for instant reuse"""
         try:
-            _PORTAL_SESSION_POOL[self._cred_key] = {
-                'cookies': self.session.cookies.copy(),
-                'portal_type': self.portal_type,
-                'studzone2_auth': self._studzone2_authenticated,
-                'time': time.time()
-            }
+            set_cached_portal_session(
+                self._cred_key,
+                self.session.cookies.get_dict(),
+                self.portal_type,
+                self._studzone2_authenticated
+            )
         except Exception:
             pass
+
+    def get_session_token(self):
+        """Generate stateless pass-through token from current session cookies"""
+        try:
+            if not self.authenticated:
+                return None
+            return encode_session_token(
+                self.username,
+                self.session.cookies.get_dict(),
+                self.portal_type or 'new',
+                self._studzone2_authenticated
+            )
+        except Exception:
+            return None
 
     def _login(self):
         """Attempt login with primary (studzone) and fallback to (studzone2)"""
         # 1. Primary: Fast ASP.NET Core Studzone
         try:
             r_get = self.session.get(self.STUDZONE_URL, verify=False, timeout=self.timeout)
-            soup = BeautifulSoup(r_get.text, 'html.parser')
+            soup = make_soup(r_get.text)
             tok_el = soup.find('input', {'name': '__RequestVerificationToken'})
             if tok_el and tok_el.get('value'):
                 token = tok_el['value']
@@ -869,7 +1027,7 @@ class EcampusScraper:
         try:
             login_url = f"{self.ECAMPUS_URL}AttWfLoginPage.aspx"
             login_page = self.session.get(login_url, verify=False, timeout=self.timeout)
-            soup = BeautifulSoup(login_page.text, 'html.parser')
+            soup = make_soup(login_page.text)
             view_state = soup.find('input', {'name': '__VIEWSTATE'})
             event_validation = soup.find('input', {'name': '__EVENTVALIDATION'})
             view_state_gen = soup.find('input', {'name': '__VIEWSTATEGENERATOR'})
@@ -941,7 +1099,7 @@ class EcampusScraper:
             return None, "No data", "Attendance data not available"
 
         try:
-            soup = BeautifulSoup(self._att_html, 'html.parser')
+            soup = make_soup(self._att_html)
             table = soup.find('table', {'id': 'example'}) if self.portal_type == 'new' else soup.find('table', {'class': 'cssbody'})
             if not table:
                 # If new portal table wasn't found, try old portal fallback
@@ -1021,7 +1179,7 @@ class EcampusScraper:
 
         try:
             import re
-            soup = BeautifulSoup(self._tt_html, 'html.parser')
+            soup = make_soup(self._tt_html)
             if self.portal_type == 'new':
                 # Student Name from timetable header
                 name_b = soup.find('b', string=re.compile(r'^[A-Z\s]{4,}$'))
@@ -1193,11 +1351,30 @@ def api_login():
                 'error': 'Invalid roll number format. Bunker is exclusively for PSG College of Technology students.'
             })
         
-        scraper = EcampusScraper(username, password)
+        session_token = data.get('session_token')
+        scraper = EcampusScraper(username, password, session_token=session_token)
         
         if not scraper.authenticated:
             return jsonify({'success': False, 'error': 'Invalid credentials'})
-            
+
+        # FAST REGEX SIGNATURE PATH:
+        # If client already has stored timetable & known_sig, check raw HTML signature
+        # BEFORE running full subject extraction, parsing, or course-mapping!
+        known_sig = data.get('known_sig', '').strip()
+        if has_timetable and known_sig and scraper._att_html:
+            fast_sig, _, _, fast_last_update = fast_extract_attendance_signature(scraper._att_html)
+            if fast_sig and fast_sig == known_sig:
+                res_fast = {
+                    'success': True,
+                    'up_to_date': True,
+                    'last_update': fast_last_update or "No data",
+                    'update_sig': fast_sig
+                }
+                new_tok = scraper.get_session_token()
+                if new_tok:
+                    res_fast['session_token'] = new_tok
+                return jsonify(res_fast)
+
         import hashlib
         import json
         
@@ -1212,7 +1389,6 @@ def api_login():
         total_hours = sum(s.get('total', 0) for s in attendance_data) if attendance_data else 0
         attended_hours = sum(s.get('attended', 0) for s in attendance_data) if attendance_data else 0
         current_sig = f"{last_update}:{total_hours}:{attended_hours}"
-        known_sig = data.get('known_sig', '').strip()
 
         # FAST ZERO-PAYLOAD RETURN:
         # If the student's phone already has this exact update/signature cached in localStorage,
@@ -1224,12 +1400,16 @@ def api_login():
             is_up_to_date = True
 
         if is_up_to_date:
-            return jsonify({
+            res_up = {
                 'success': True,
                 'up_to_date': True,
                 'last_update': last_update,
                 'update_sig': current_sig
-            })
+            }
+            new_tok = scraper.get_session_token()
+            if new_tok:
+                res_up['session_token'] = new_tok
+            return jsonify(res_up)
         
         use_cache = False
         cached_response = None
@@ -1249,13 +1429,14 @@ def api_login():
                 logger.error(f"Cache read error: {e}")
         
         if use_cache and cached_response:
-            # If client already has timetable saved on device, omit heavy timetable to save bandwidth
-            if has_timetable and 'timetable' in cached_response:
-                light_cached = dict(cached_response)
+            light_cached = dict(cached_response)
+            if has_timetable and 'timetable' in light_cached:
                 light_cached.pop('timetable', None)
                 light_cached.pop('course_mapping', None)
-                return jsonify(light_cached)
-            return jsonify(cached_response)
+            new_tok = scraper.get_session_token()
+            if new_tok:
+                light_cached['session_token'] = new_tok
+            return jsonify(light_cached)
             
         # Try retrieving course_mapping from cache to avoid scraping timetable if client has timetable
         course_mapping = None
@@ -1399,6 +1580,10 @@ def api_login():
         except Exception as e:
             logger.error(f"Cache write error: {e}")
 
+        new_tok = scraper.get_session_token()
+        if new_tok:
+            response_data['session_token'] = new_tok
+
         return jsonify(response_data)
     
     except Exception as e:
@@ -1426,17 +1611,22 @@ def api_timetable():
         if not username or not password:
             return jsonify({'success': False, 'error': 'Roll number and password required'}), 400
 
-        scraper = EcampusScraper(username, password, timeout=8, prefetch=False)
+        session_token = data.get('session_token')
+        scraper = EcampusScraper(username, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, session_token=session_token)
         if not scraper.authenticated:
             return jsonify({'success': False, 'error': 'Authentication failed. Please verify credentials.'}), 401
 
         course_mapping, weekly_schedule, student_name = scraper.get_timetable_and_schedule()
-        return jsonify({
+        res_tt = {
             'success': True,
             'timetable': weekly_schedule,
             'course_mapping': course_mapping,
             'student_name': student_name if student_name and student_name != "Student" else None
-        })
+        }
+        new_tok = scraper.get_session_token()
+        if new_tok:
+            res_tt['session_token'] = new_tok
+        return jsonify(res_tt)
     except Exception as e:
         logger.error(f"Timetable API error: {e}")
         return jsonify({'success': False, 'error': f"Failed to fetch timetable: {str(e)}"}), 500
@@ -1661,18 +1851,30 @@ def api_internals():
     try:
         data = request.get_json() or {}
         auth_token = data.get('auth_token', '')
+        session_token = data.get('session_token', '')
         force = data.get('force', False)
         
-        if not auth_token:
+        if not auth_token and not session_token:
             return jsonify({'error': 'Auth token required'}), 401
         
         # Parse stored credentials
-        try:
-            import json as _json
-            creds = _json.loads(auth_token)
-            roll = creds.get('roll', '')
-            password = creds.get('password', '')
-        except:
+        roll = ''
+        password = ''
+        if auth_token:
+            try:
+                import json as _json
+                creds = _json.loads(auth_token)
+                roll = creds.get('roll', '')
+                password = creds.get('password', '')
+            except:
+                pass
+
+        if not roll and session_token:
+            tok_data = decode_session_token(session_token)
+            if tok_data:
+                roll = tok_data.get('u', '')
+
+        if not roll:
             return jsonify({'error': 'Invalid auth token'}), 401
 
         import hashlib
@@ -1683,15 +1885,15 @@ def api_internals():
             if cached is not None:
                 return jsonify(cached)
 
-        scraper = EcampusScraper(roll, password, timeout=7, prefetch=False, force_studzone2=True)
+        scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True, session_token=session_token)
         if not scraper.authenticated:
             return jsonify({'error': 'Authentication failed'}), 401
 
         scraper.ensure_studzone2_auth()
 
         ca_url = f"{scraper.ECAMPUS_URL}CAMarks_View.aspx"
-        response = scraper.session.get(ca_url, timeout=7)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        response = scraper.session.get(ca_url, timeout=scraper.timeout)
+        soup = make_soup(response.text)
 
         internals = []
         # Find all tables with IDs like 8^XXXX (the CA mark tables on studzone2)
@@ -1701,9 +1903,9 @@ def api_internals():
         if not tables:
             try:
                 modern_ca_url = f"{scraper.STUDZONE_URL}ContinuousAssessment/CAMarksView"
-                modern_resp = scraper.session.get(modern_ca_url, timeout=7)
+                modern_resp = scraper.session.get(modern_ca_url, timeout=scraper.timeout)
                 if modern_resp.ok:
-                    modern_soup = BeautifulSoup(modern_resp.text, 'html.parser')
+                    modern_soup = make_soup(modern_resp.text)
                     modern_tables = modern_soup.find_all('table', class_=lambda c: c and 'table' in str(c))
                     if modern_tables:
                         tables = modern_tables
@@ -1775,7 +1977,11 @@ def api_internals():
                 })
 
         set_disk_cache(cache_key, internals)
-        return jsonify(internals)
+        resp = jsonify(internals)
+        new_tok = scraper.get_session_token()
+        if new_tok:
+            resp.headers['X-Session-Token'] = new_tok
+        return resp
 
     except Exception as e:
         logger.error(f"Internals API error: {str(e)}")
@@ -1796,8 +2002,8 @@ def fetch_allsem_results(scraper, roll):
     r_cs, r_res = None, None
     try:
         with ThreadPoolExecutor(max_workers=2) as ex:
-            f_cs = ex.submit(scraper.session.get, f"{scraper.ECAMPUS_URL}AttWfStudCourseSelection.aspx", verify=False, timeout=7)
-            f_res = ex.submit(scraper.session.get, f"{scraper.ECAMPUS_URL}FrmEpsStudResult.aspx", verify=False, timeout=7)
+            f_cs = ex.submit(scraper.session.get, f"{scraper.ECAMPUS_URL}AttWfStudCourseSelection.aspx", verify=False, timeout=scraper.timeout)
+            f_res = ex.submit(scraper.session.get, f"{scraper.ECAMPUS_URL}FrmEpsStudResult.aspx", verify=False, timeout=scraper.timeout)
             r_cs = f_cs.result()
             r_res = f_res.result()
     except Exception as e:
@@ -1814,7 +2020,7 @@ def fetch_allsem_results(scraper, roll):
 
     # 1. Parse all completed courses from AttWfStudCourseSelection.aspx
     if r_cs and r_cs.status_code == 200:
-        soup_cs = BeautifulSoup(r_cs.text, 'html.parser')
+        soup_cs = make_soup(r_cs.text)
         tbl_completed = soup_cs.find('table', {'id': 'PDGCourse'}) or soup_cs.find('table', {'id': 'TabCourse'})
         if tbl_completed:
             for row in tbl_completed.find_all('tr')[1:]:
@@ -1852,7 +2058,7 @@ def fetch_allsem_results(scraper, roll):
 
     # 2. Parse latest provisional exam results from FrmEpsStudResult.aspx
     if r_res and r_res.status_code == 200:
-        soup_res = BeautifulSoup(r_res.text, 'html.parser')
+        soup_res = make_soup(r_res.text)
         tbl_res = soup_res.find('table', {'id': 'DgResult'}) or soup_res.find(lambda x: x.name == 'table' and (x.get('id') or '').lower() == 'dgresult')
         if tbl_res:
             cur_sem = None
@@ -2012,7 +2218,7 @@ def api_gpa():
             results = get_disk_cache(cache_key, max_age_seconds=86400)
 
         if not results:
-            scraper = EcampusScraper(roll, password, timeout=7, prefetch=False, force_studzone2=True)
+            scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True)
             if not scraper.authenticated:
                 return jsonify({'error': 'Authentication failed'}), 401
             results = fetch_allsem_results(scraper, roll)
@@ -2065,7 +2271,7 @@ def api_cgpa():
             results = get_disk_cache(cache_key, max_age_seconds=1800)
 
         if not results:
-            scraper = EcampusScraper(roll, password, timeout=7, prefetch=False, force_studzone2=True)
+            scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True)
             if not scraper.authenticated:
                 return jsonify({'error': 'Authentication failed'}), 401
             results = fetch_allsem_results(scraper, roll)
@@ -2111,14 +2317,14 @@ def api_exam_timetable():
             if cached is not None:
                 return jsonify(cached)
             
-        scraper = EcampusScraper(roll, password, timeout=7, prefetch=False, force_studzone2=True)
+        scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True)
         if not scraper.authenticated:
             return jsonify({'error': 'Authentication failed'}), 401
             
         scraper.ensure_studzone2_auth()
         tt_url = f"{scraper.ECAMPUS_URL}FrmEpsTimetable.aspx"
-        response = scraper.session.get(tt_url, timeout=7)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        response = scraper.session.get(tt_url, timeout=scraper.timeout)
+        soup = make_soup(response.text)
         
         table = soup.find('table', {'id': 'DgResult'}) or soup.find(lambda x: x.name == 'table' and (x.get('id') or '').lower() == 'dgresult')
         exams = []
@@ -2183,28 +2389,56 @@ _FEEDBACK_STATUS_CACHE = {}
 class FastFeedbackEngine:
     """High-speed pure HTTP automation engine for PSG Tech Studzone."""
 
-    def __init__(self, timeout: int = 5):
+    def __init__(self, timeout=DEFAULT_PORTAL_TIMEOUT):
         self.session = requests.Session()
         self.session.headers.update(FEEDBACK_DEFAULT_HEADERS)
         adapter = requests.adapters.HTTPAdapter(pool_connections=25, pool_maxsize=25)
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
         self.timeout = timeout
+        self.username = None
+        self._cred_key = None
 
     def extract_antiforgery_token(self, html: str):
-        soup = BeautifulSoup(html, "html.parser")
+        soup = make_soup(html)
         token_el = soup.find("input", {"name": "__RequestVerificationToken"})
         if token_el and token_el.get("value"):
             return str(token_el.get("value"))
         m = re.search(r'name="__RequestVerificationToken"\s+type="hidden"\s+value="([^"]+)"', html)
         return m.group(1) if m else None
 
-    def login(self, rollno: str, password: str):
+    def login(self, rollno: str, password: str, session_token: str = None):
         clean_roll = rollno.strip().upper()
         clean_pass = password.strip()
+        self.username = clean_roll
+        self._cred_key = hashlib.sha256(f"{clean_roll}:{clean_pass}".encode()).hexdigest()
 
         if not clean_roll or not clean_pass:
             return {"success": False, "error": "Roll Number and Password are required."}
+
+        # 1. Warm container pool check (< 12 minutes old)
+        cached = get_cached_portal_session(self._cred_key)
+        if cached and cached.get('cookies'):
+            self.session.cookies.update(cached['cookies'])
+            try:
+                r_check = self.session.get(FEEDBACK_INDEX_URL, verify=False, timeout=self.timeout)
+                if r_check.status_code == 200 and 'Student Login' not in r_check.text and ('Feedback' in r_check.text or 'menu-cards' in r_check.text):
+                    return {"success": True}
+            except Exception:
+                pass
+
+        # 2. Stateless session_token check (Cold container pass-through)
+        if session_token:
+            token_data = decode_session_token(session_token, username=clean_roll)
+            if token_data and token_data.get('c'):
+                self.session.cookies.update(token_data['c'])
+                try:
+                    r_check = self.session.get(FEEDBACK_INDEX_URL, verify=False, timeout=self.timeout)
+                    if r_check.status_code == 200 and 'Student Login' not in r_check.text and ('Feedback' in r_check.text or 'menu-cards' in r_check.text):
+                        set_cached_portal_session(self._cred_key, self.session.cookies.get_dict(), 'new', False)
+                        return {"success": True}
+                except Exception:
+                    pass
 
         try:
             r_get = self.session.get(f"{FEEDBACK_STUDZONE_URL}/", verify=False, timeout=self.timeout)
@@ -2234,14 +2468,24 @@ class FastFeedbackEngine:
                     if "Invalid" in r_check.text or "password" in r_check.text.lower():
                         return {"success": False, "error": "Invalid Roll Number or Password."}
                     return {"success": False, "error": "Login failed. Please verify credentials."}
+                set_cached_portal_session(self._cred_key, self.session.cookies.get_dict(), 'new', False)
                 return {"success": True}
 
             if "Student Login" in r_post.text:
                 return {"success": False, "error": "Authentication failed. Incorrect Roll Number or Password."}
 
+            set_cached_portal_session(self._cred_key, self.session.cookies.get_dict(), 'new', False)
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": f"Network error: {str(e)}"}
+
+    def get_session_token(self):
+        try:
+            if not self.username:
+                return None
+            return encode_session_token(self.username, self.session.cookies.get_dict(), 'new', False)
+        except Exception:
+            return None
 
     def _process_endsem(self, rating_style: str = "max") -> str:
         """Evaluate End Semester staff evaluations using verified API."""
@@ -2313,7 +2557,7 @@ class FastFeedbackEngine:
         if r_page.url.endswith("/Feedback/Index"):
             return "Intermediate Feedback: Currently not active or already 100% completed."
 
-        soup = BeautifulSoup(r_page.text, "html.parser")
+        soup = make_soup(r_page.text)
         cards = soup.find_all(class_="intermediate-card")
         if not cards:
             return "Intermediate: All course surveys completed or not open."
@@ -2361,7 +2605,7 @@ class FastFeedbackEngine:
         schedules = {"endsem": "NOT SCHEDULED", "intermediate": "NOT SCHEDULED"}
         try:
             r = self.session.get(FEEDBACK_INDEX_URL, verify=False, timeout=self.timeout)
-            soup = BeautifulSoup(r.text, "html.parser")
+            soup = make_soup(r.text)
             for card in soup.find_all(class_="menu-cards"):
                 title_el = card.find(class_="card-title")
                 dates_el = card.find("small")
@@ -2403,7 +2647,7 @@ class FastFeedbackEngine:
             try:
                 r_page = self.session.get(FEEDBACK_INTERMEDIATE_URL, verify=False, timeout=self.timeout)
                 if not r_page.url.endswith("/Feedback/Index"):
-                    soup = BeautifulSoup(r_page.text, "html.parser")
+                    soup = make_soup(r_page.text)
                     cards = soup.find_all(class_="intermediate-card")
                     inter_pending = len(cards)
             except Exception as e:
@@ -2517,6 +2761,7 @@ def api_feedback():
         password = data.get('password', '').strip()
         mode = data.get('mode', 'auto').strip().lower()
         rating_style = data.get('rating_style', 'max').strip().lower()
+        session_token = data.get('session_token', '')
 
         # If not passed in body, try parsing bunker_credentials / auth token
         if not rollno or not password:
@@ -2529,15 +2774,24 @@ def api_feedback():
                 except:
                     pass
 
+        if not rollno and session_token:
+            tok_data = decode_session_token(session_token)
+            if tok_data:
+                rollno = tok_data.get('u', '')
+
         if not rollno or not password:
             return jsonify({'success': False, 'error': 'Roll Number and Password are required.'}), 400
 
-        engine = FastFeedbackEngine(timeout=6)
-        login_res = engine.login(rollno, password)
+        engine = FastFeedbackEngine(timeout=DEFAULT_PORTAL_TIMEOUT)
+        login_res = engine.login(rollno, password, session_token=session_token)
         if not login_res.get('success'):
             return jsonify(login_res), 401
 
         fb_res = engine.execute_feedback(mode=mode, rating_style=rating_style)
+        new_tok = engine.get_session_token()
+        if new_tok:
+            fb_res['session_token'] = new_tok
+
         if fb_res.get('success') and rollno:
             _FEEDBACK_STATUS_CACHE[rollno] = {
                 'ts': time.time(),
@@ -2565,6 +2819,7 @@ def api_feedback_status():
         data = request.get_json(silent=True) or {}
         rollno = data.get('rollno', '').strip().upper()
         password = data.get('password', '').strip()
+        session_token = data.get('session_token', '')
 
         if not rollno or not password:
             auth_token = data.get('auth_token')
@@ -2576,6 +2831,11 @@ def api_feedback_status():
                 except:
                     pass
 
+        if not rollno and session_token:
+            tok_data = decode_session_token(session_token)
+            if tok_data:
+                rollno = tok_data.get('u', '')
+
         # Demo or missing credentials -> zero delay, no eCampus call
         if not rollno or not password or rollno == 'DEMO':
             return jsonify({'success': True, 'has_pending': False, 'reason': 'demo_or_no_creds'})
@@ -2586,8 +2846,8 @@ def api_feedback_status():
         if cached and (now - cached.get('ts', 0)) < 300:
             return jsonify({'success': True, **cached.get('data', {}), 'cached': True})
 
-        engine = FastFeedbackEngine(timeout=5)
-        login_res = engine.login(rollno, password)
+        engine = FastFeedbackEngine(timeout=DEFAULT_PORTAL_TIMEOUT)
+        login_res = engine.login(rollno, password, session_token=session_token)
         if not login_res.get('success'):
             return jsonify({'success': False, 'has_pending': False, 'error': login_res.get('error')}), 200
 

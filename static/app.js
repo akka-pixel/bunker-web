@@ -124,15 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function getSyncCooldownMs() {
-    const now = new Date();
-    const day = now.getDay(); // 0 is Sunday
-    const hour = now.getHours();
-    // Sundays: college is closed, attendance never changes
-    if (day === 0) return 6 * 60 * 60 * 1000; // 6 hours
-    // Evenings & nights (6 PM to 8 AM): college is closed
-    if (hour >= 18 || hour < 8) return 3 * 60 * 60 * 1000; // 3 hours
-    // Active college hours (Mon-Sat 8 AM to 6 PM): 45 minutes cooldown
-    return 45 * 60 * 1000; // 45 minutes
+    return 15 * 60 * 1000; // 15-minute smart cooldown
 }
 
 function triggerManualSync() {
@@ -142,30 +134,36 @@ function triggerManualSync() {
     }
 }
 
-async function backgroundSync(roll, password, force = false) {
-    const cooldownMs = getSyncCooldownMs();
-    const lastSyncTime = parseInt(localStorage.getItem(`bunker_last_sync_time_${roll}`) || '0');
-    const isFresh = (Date.now() - lastSyncTime) < cooldownMs;
+async function backgroundSync(roll, password, forceRefresh = false) {
+    const lastSyncTime = Number(localStorage.getItem('bunker_last_sync_timestamp') || localStorage.getItem(`bunker_last_sync_time_${roll}`) || '0');
+    const now = Date.now();
+    const hasCachedAttendance = (Array.isArray(state.subjects) && state.subjects.length > 0) ||
+                                !!localStorage.getItem('bunker_attendance') ||
+                                !!localStorage.getItem('bunker_subjects') ||
+                                !!localStorage.getItem(`bunker_subjects_${roll}`);
 
-    // If data is already fresh and we have subjects loaded, skip redundant API call
-    if (!force && isFresh && Array.isArray(state.subjects) && state.subjects.length > 0) {
-        showSyncIndicator('done');
-        setTimeout(() => hideSyncIndicator(), 1500);
-        return;
-    }
-
-    // Debounce manual sync if tapped within 45s
-    if (force && (Date.now() - lastSyncTime) < 45000 && Array.isArray(state.subjects) && state.subjects.length > 0) {
-        showToast('Attendance is already up to date!', 'info');
-        showSyncIndicator('done');
-        setTimeout(() => hideSyncIndicator(), 1500);
-        return;
+    // 15-Minute Auto-Sync Guard on app open
+    if (!forceRefresh) {
+        if (hasCachedAttendance && (now - lastSyncTime) < 900000) { // 15 minutes (900,000 ms)
+            showSyncIndicator('done');
+            setTimeout(() => hideSyncIndicator(), 1500);
+            return;
+        }
+    } else {
+        // Manual Refresh button cooldown: allow if at least 60,000 ms (1 minute) has passed
+        if ((now - lastSyncTime) < 60000 && hasCachedAttendance) {
+            showToast('Attendance is already up to date — checked just now', 'info');
+            showSyncIndicator('done');
+            setTimeout(() => hideSyncIndicator(), 1500);
+            return;
+        }
     }
 
     showSyncIndicator('syncing');
     try {
         const knownUpdate = localStorage.getItem('bunker_last_update') || '';
         const knownSig = localStorage.getItem('bunker_update_sig') || '';
+        const sessionToken = localStorage.getItem('bunker_session_token') || '';
         const hasStoredTimetable = !!(state.timetable && Object.keys(state.timetable).length > 0 && state.courseMapping && Object.keys(state.courseMapping).length > 0);
 
         const loginResponse = await fetch('/api/login', {
@@ -174,6 +172,7 @@ async function backgroundSync(roll, password, force = false) {
             body: JSON.stringify({
                 username: roll,
                 password: password,
+                session_token: sessionToken,
                 known_update: knownUpdate,
                 known_sig: knownSig,
                 has_timetable: hasStoredTimetable
@@ -186,8 +185,15 @@ async function backgroundSync(roll, password, force = false) {
             return;
         }
 
-        // Record successful sync time
-        localStorage.setItem(`bunker_last_sync_time_${roll}`, Date.now().toString());
+        // Record successful sync time in both timestamp keys
+        const syncTimestampStr = Date.now().toString();
+        localStorage.setItem('bunker_last_sync_timestamp', syncTimestampStr);
+        localStorage.setItem(`bunker_last_sync_time_${roll}`, syncTimestampStr);
+
+        // Store stateless session token if returned
+        if (loginData.session_token) {
+            localStorage.setItem('bunker_session_token', loginData.session_token);
+        }
 
         // FAST ZERO-PAYLOAD EXIT: If attendance on eCampus is unchanged, finish in 0ms!
         if (loginData.up_to_date) {
@@ -205,6 +211,7 @@ async function backgroundSync(roll, password, force = false) {
             state.subjects = loginData.subjects;
             state.isViewingPreviousAttendance = false;
             localStorage.setItem('bunker_subjects', JSON.stringify(state.subjects));
+            localStorage.setItem('bunker_attendance', JSON.stringify(state.subjects));
             localStorage.setItem(`bunker_subjects_${roll}`, JSON.stringify(state.subjects));
             saveAttendanceSnapshot(roll, state.subjects, loginData.last_update, loginData.previous_subjects, loginData.previous_last_update);
         } else {
@@ -374,10 +381,11 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     pushLoadingLog("Validating credentials with E-Campus API...", 28, '#818cf8');
 
     try {
+        const sessionToken = localStorage.getItem('bunker_session_token') || '';
         const loginResponse = await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: roll, password: password })
+            body: JSON.stringify({ username: roll, password: password, session_token: sessionToken })
         });
 
         const loginData = await loginResponse.json();
@@ -388,6 +396,11 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
             setTimeout(() => showLoadingError(body, title), 500);
             return;
         }
+
+        if (loginData.session_token) {
+            localStorage.setItem('bunker_session_token', loginData.session_token);
+        }
+        localStorage.setItem('bunker_last_sync_timestamp', Date.now().toString());
 
         // Store credentials for auto-login
         localStorage.setItem('bunker_credentials', JSON.stringify({ roll, password }));
@@ -419,6 +432,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
             state.subjects = loginData.subjects;
             state.isViewingPreviousAttendance = false;
             localStorage.setItem('bunker_subjects', JSON.stringify(state.subjects));
+            localStorage.setItem('bunker_attendance', JSON.stringify(state.subjects));
             localStorage.setItem(`bunker_subjects_${roll}`, JSON.stringify(state.subjects));
             saveAttendanceSnapshot(roll, state.subjects, loginData.last_update, loginData.previous_subjects, loginData.previous_last_update);
         } else {
@@ -3788,14 +3802,19 @@ async function submitFeedbackCore(rollno, password, mode, btn) {
     const startTime = Date.now();
 
     try {
+        const sessionToken = localStorage.getItem('bunker_session_token') || '';
         const res = await fetch('/api/feedback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ rollno, password, mode, rating_style: 'max' })
+            body: JSON.stringify({ rollno, password, mode, rating_style: 'max', session_token: sessionToken })
         });
 
         const data = await res.json();
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        if (data.session_token) {
+            localStorage.setItem('bunker_session_token', data.session_token);
+        }
 
         if (res.ok && data.success) {
             try {
@@ -4453,10 +4472,16 @@ async function loadAcademics(force = false, silent = false) {
     }
 
     try {
+        const sessionToken = localStorage.getItem('bunker_session_token') || '';
         const [internalsRes, gpaRes] = await Promise.all([
-            fetch('/api/internals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_token: authToken, force: force }) }),
-            fetch('/api/gpa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_token: authToken, force: force }) })
+            fetch('/api/internals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_token: authToken, session_token: sessionToken, force: force }) }),
+            fetch('/api/gpa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_token: authToken, session_token: sessionToken, force: force }) })
         ]);
+
+        const newTok = internalsRes.headers.get('X-Session-Token');
+        if (newTok) {
+            localStorage.setItem('bunker_session_token', newTok);
+        }
 
         const internals = await internalsRes.json();
         const gpa = await gpaRes.json();

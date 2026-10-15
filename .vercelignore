@@ -3,21 +3,20 @@ venv/
 __pycache__/
 *.pyc
 .git/
-test_wsgi.py
-api/test_wsgi.py
-api/test_headers.py
-github token.md
-*token*
-*.token
-*token*.md
-m.md
-n.md
-static/bunker.apk
+.github/
+test_*.py
+api/test_*.py
+*.log
+*.mp4
+*.png
+!static/*.png
+!public/*.png
 *.apk
+static/bunker.apk
 version.json
+data/
 FEEDBACK Web/
 automate calendar/
-*.log
-.github/
-data/
-BUNKER_COMPLETE_DETAILS.md
+*.md
+*token*
+*.token
