@@ -145,21 +145,21 @@ def set_disk_cache(cache_key, data):
 PSGTECH_BRANCH_MAP = {
     # BE Programs (4 Years)
     'A': {'degree': 'B.E.', 'name': 'Automobile Engineering', 'sandwich': False, 'years': 4},
-    'D': {'degree': 'B.E.', 'name': 'Civil Engineering', 'sandwich': False, 'years': 4},
-    'C': {'degree': 'B.E.', 'name': 'Computer Science & Engineering', 'sandwich': False, 'years': 4},
+    'C': {'degree': 'B.E.', 'name': 'Civil Engineering', 'sandwich': False, 'years': 4},
+    'D': {'degree': 'B.E.', 'name': 'Biomedical Engineering', 'sandwich': False, 'years': 4},
+    'E': {'degree': 'B.E.', 'name': 'Electrical & Electronics Engineering', 'sandwich': False, 'years': 4},
+    'L': {'degree': 'B.E.', 'name': 'Electronics & Communication Engineering', 'sandwich': False, 'years': 4},
+    'M': {'degree': 'B.E.', 'name': 'Mechanical Engineering', 'sandwich': False, 'years': 4},
+    'N': {'degree': 'B.E.', 'name': 'Computer Science (AI & ML)', 'sandwich': False, 'years': 4},
+    'P': {'degree': 'B.E.', 'name': 'Production Engineering', 'sandwich': False, 'years': 4},
+    'R': {'degree': 'B.E.', 'name': 'Robotics & Automation', 'sandwich': False, 'years': 4},
+    'U': {'degree': 'B.E.', 'name': 'Instrumentation & Control Engineering', 'sandwich': False, 'years': 4},
+    'Y': {'degree': 'B.E.', 'name': 'Metallurgical Engineering', 'sandwich': False, 'years': 4},
+    'Z': {'degree': 'B.E.', 'name': 'Computer Science & Engineering', 'sandwich': False, 'years': 4},
     'CS': {'degree': 'B.E.', 'name': 'Computer Science & Engineering', 'sandwich': False, 'years': 4},
-    'Z': {'degree': 'B.E.', 'name': 'Electronics & Communication Engineering', 'sandwich': False, 'years': 4},
-    'N': {'degree': 'B.E.', 'name': 'Electrical & Electronics Engineering', 'sandwich': False, 'years': 4},
-    'E': {'degree': 'B.E.', 'name': 'Electronics & Instrumentation Engineering', 'sandwich': False, 'years': 4},
-    'L': {'degree': 'B.E.', 'name': 'Mechanical Engineering', 'sandwich': False, 'years': 4},
-    'M': {'degree': 'B.E.', 'name': 'Metallurgical Engineering', 'sandwich': False, 'years': 4},
-    'Y': {'degree': 'B.E.', 'name': 'Production Engineering', 'sandwich': False, 'years': 4},
-    'P': {'degree': 'B.E. (Sandwich)', 'name': 'Production Engineering (Sandwich)', 'sandwich': True, 'years': 5},
     'K': {'degree': 'B.E. (Sandwich)', 'name': 'Mechanical Engineering (Sandwich)', 'sandwich': True, 'years': 5},
     'ES': {'degree': 'B.E. (Sandwich)', 'name': 'Electrical & Electronics (Sandwich)', 'sandwich': True, 'years': 5},
     'SW': {'degree': 'B.E. (Sandwich)', 'name': 'Sandwich Engineering Program', 'sandwich': True, 'years': 5},
-    'R': {'degree': 'B.E.', 'name': 'Robotics & Automation', 'sandwich': False, 'years': 4},
-    'U': {'degree': 'B.E.', 'name': 'Biomedical Engineering', 'sandwich': False, 'years': 4},
     
     # BTech Programs (4 Years)
     'B': {'degree': 'B.Tech', 'name': 'Biotechnology', 'sandwich': False, 'years': 4},
@@ -168,41 +168,41 @@ PSGTECH_BRANCH_MAP = {
     'T': {'degree': 'B.Tech', 'name': 'Textile Technology', 'sandwich': False, 'years': 4},
     
     # BSc Programs (3 Years)
-    'S': {'degree': 'B.Sc', 'name': 'Applied Science / Computer Systems', 'sandwich': False, 'years': 3},
-    'X': {'degree': 'B.Sc', 'name': 'Mathematics & Computing', 'sandwich': False, 'years': 3},
+    'S': {'degree': 'B.Sc', 'name': 'Applied Science', 'sandwich': False, 'years': 3},
+    'X': {'degree': 'B.Sc', 'name': 'Computer Systems & Design / Other B.Sc.', 'sandwich': False, 'years': 3},
     
     # MSc Programs (5 Years Integrated or 2 Years)
-    'SA': {'degree': 'M.Sc (Integrated)', 'name': 'Software Systems', 'sandwich': False, 'years': 5},
-    'FD': {'degree': 'M.Sc (Integrated)', 'name': 'Data Science', 'sandwich': False, 'years': 5},
+    'SA': {'degree': 'M.Sc (Integrated)', 'name': 'Software Systems / Applied Science', 'sandwich': False, 'years': 5},
+    'FD': {'degree': 'M.Sc (Integrated)', 'name': 'Data Science / Fashion Design', 'sandwich': False, 'years': 5},
     'XW': {'degree': 'M.Sc (Integrated)', 'name': 'Cyber Security', 'sandwich': False, 'years': 5},
-    'XT': {'degree': 'M.Sc (Integrated)', 'name': 'Theoretical Computer Science', 'sandwich': False, 'years': 5},
-    'XD': {'degree': 'M.Sc (Integrated)', 'name': 'Decision & Computing Sciences', 'sandwich': False, 'years': 5},
-    'XC': {'degree': 'M.Sc (Integrated)', 'name': 'Theoretical Computer Science', 'sandwich': False, 'years': 5},
+    'XT': {'degree': 'M.Sc (Integrated)', 'name': 'Theoretical Computer Science / Textile Science', 'sandwich': False, 'years': 5},
+    'XD': {'degree': 'M.Sc (Integrated)', 'name': 'Decision & Computing Sciences / Data Science', 'sandwich': False, 'years': 5},
+    'XC': {'degree': 'M.Sc (Integrated)', 'name': 'Theoretical Computer Science / Chemistry', 'sandwich': False, 'years': 5},
     
     # MCA (2 Years)
     'MX': {'degree': 'M.C.A.', 'name': 'Master of Computer Applications', 'sandwich': False, 'years': 2},
     
     # ME / MTech Programs (2 Years)
     'AE': {'degree': 'M.E.', 'name': 'Automotive Engineering', 'sandwich': False, 'years': 2},
-    'NB': {'degree': 'M.E.', 'name': 'Energy Engineering', 'sandwich': False, 'years': 2},
-    'ZC': {'degree': 'M.E.', 'name': 'Communication Systems', 'sandwich': False, 'years': 2},
-    'UC': {'degree': 'M.E.', 'name': 'Embedded & Real-Time Systems', 'sandwich': False, 'years': 2},
-    'EE': {'degree': 'M.E.', 'name': 'Power Electronics & Drives', 'sandwich': False, 'years': 2},
-    'MD': {'degree': 'M.E.', 'name': 'Manufacturing Engineering', 'sandwich': False, 'years': 2},
-    'MN': {'degree': 'M.E.', 'name': 'Engineering Design', 'sandwich': False, 'years': 2},
-    'PP': {'degree': 'M.E.', 'name': 'Computer Science & Engineering', 'sandwich': False, 'years': 2},
-    'ED': {'degree': 'M.E.', 'name': 'Industrial Engineering', 'sandwich': False, 'years': 2},
+    'BT': {'degree': 'M.E.', 'name': 'Biotechnology', 'sandwich': False, 'years': 2},
     'CS': {'degree': 'M.E.', 'name': 'Computer Science & Engineering', 'sandwich': False, 'years': 2},
-    'LV': {'degree': 'M.E.', 'name': 'VLSI Design', 'sandwich': False, 'years': 2},
-    'BT': {'degree': 'M.Tech', 'name': 'Biotechnology', 'sandwich': False, 'years': 2},
-    'LN': {'degree': 'M.Tech', 'name': 'Nano Science & Technology', 'sandwich': False, 'years': 2},
-    'TT': {'degree': 'M.Tech', 'name': 'Textile Technology', 'sandwich': False, 'years': 2},
+    'ED': {'degree': 'M.E.', 'name': 'Engineering Design', 'sandwich': False, 'years': 2},
+    'EE': {'degree': 'M.E.', 'name': 'Embedded & Real-Time Systems', 'sandwich': False, 'years': 2},
+    'LN': {'degree': 'M.E.', 'name': 'VLSI Design', 'sandwich': False, 'years': 2},
+    'LV': {'degree': 'M.E.', 'name': 'Communication Systems', 'sandwich': False, 'years': 2},
+    'MD': {'degree': 'M.E.', 'name': 'Manufacturing Engineering / Mechanical Design', 'sandwich': False, 'years': 2},
+    'MN': {'degree': 'M.E.', 'name': 'Mechatronics', 'sandwich': False, 'years': 2},
+    'NB': {'degree': 'M.E.', 'name': 'Biometrics & Cybersecurity', 'sandwich': False, 'years': 2},
+    'PP': {'degree': 'M.E.', 'name': 'Power Systems / Production', 'sandwich': False, 'years': 2},
     'SE': {'degree': 'M.E.', 'name': 'Structural Engineering', 'sandwich': False, 'years': 2},
+    'TT': {'degree': 'M.E.', 'name': 'Textile Technology', 'sandwich': False, 'years': 2},
+    'UC': {'degree': 'M.E.', 'name': 'Control Systems', 'sandwich': False, 'years': 2},
+    'ZC': {'degree': 'M.E.', 'name': 'Computer Science & Engineering', 'sandwich': False, 'years': 2},
     'CE': {'degree': 'M.Tech', 'name': 'Chemical Engineering', 'sandwich': False, 'years': 2},
     'EC': {'degree': 'M.Tech', 'name': 'Electronics & Communication', 'sandwich': False, 'years': 2},
     'IT': {'degree': 'M.Tech', 'name': 'Information Technology', 'sandwich': False, 'years': 2},
-    'GM': {'degree': 'M.B.A.', 'name': 'Master of Business Administration', 'sandwich': False, 'years': 2},
-    'GW': {'degree': 'M.B.A.', 'name': 'Master of Business Administration', 'sandwich': False, 'years': 2}
+    'GM': {'degree': 'M.B.A.', 'name': 'MBA General Management', 'sandwich': False, 'years': 2},
+    'GW': {'degree': 'M.B.A.', 'name': 'MBA Specializations', 'sandwich': False, 'years': 2}
 }
 
 
@@ -224,6 +224,26 @@ class AutoCalendarResolver:
         return now.year - 1 if (1 <= now.month <= 5) else now.year
 
     @classmethod
+    def get_static_json_planners(cls):
+        """Loads static JSON cache of all planners from static/all_calendars_cache.json with multi-path resolution"""
+        candidate_paths = [
+            os.path.join(os.path.dirname(__file__), '..', 'static', 'all_calendars_cache.json'),
+            os.path.join(os.path.dirname(__file__), 'static', 'all_calendars_cache.json'),
+            os.path.join(os.path.dirname(__file__), 'all_calendars_cache.json'),
+            os.path.join(os.getcwd(), 'static', 'all_calendars_cache.json')
+        ]
+        for p in candidate_paths:
+            if os.path.exists(p):
+                try:
+                    with open(p, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        if data and isinstance(data, dict):
+                            return data
+                except Exception as e:
+                    logger.warning(f"Error reading {p}: {e}")
+        return {}
+
+    @classmethod
     def get_calendar_index(cls, force_refresh=False):
         now = time.time()
         if not force_refresh and cls._CALENDARS_INDEX_CACHE['data'] and (now - cls._CALENDARS_INDEX_CACHE['timestamp'] < 3600):
@@ -235,34 +255,47 @@ class AutoCalendarResolver:
             cls._CALENDARS_INDEX_CACHE['timestamp'] = now
             return disk_data
 
+        # 1. Primary zero-latency path: synthesize index from local static JSON cache
+        static_planners = cls.get_static_json_planners()
+        if static_planners:
+            planners_list = []
+            holidays_list = []
+            for pid, p in static_planners.items():
+                if isinstance(p, dict):
+                    planners_list.append({
+                        'id': p.get('id', int(pid) if str(pid).isdigit() else pid),
+                        'name': p.get('name', ''),
+                        'startDate': p.get('startDate'),
+                        'lastDate': p.get('lastDate'),
+                        'totalWorkingDays': p.get('totalWorkingDays', 0),
+                        'calendarYear': p.get('calendarYear', cls.get_current_academic_year()),
+                        'isPublished': p.get('isPublished', True)
+                    })
+                    if not holidays_list and p.get('calendar') and p['calendar'].get('holidays'):
+                        holidays_list = p['calendar']['holidays']
+            
+            synthesized = [{
+                'year': cls.get_current_academic_year(),
+                'holidays': holidays_list,
+                'planner': planners_list
+            }]
+            cls._CALENDARS_INDEX_CACHE['data'] = synthesized
+            cls._CALENDARS_INDEX_CACHE['timestamp'] = now
+            return synthesized
+
+        # 2. Live network fallback
         try:
-            url = "https://academicschedule.psgtech.ac.in/api/calendar"
-            res = requests.get(url, timeout=4, verify=False)
+            url = "https://academicschedule.psgtech.ac.in/api/calendar/2026"
+            res = requests.get(url, timeout=3, verify=False)
             if res.status_code == 200:
-                data = res.json()
+                raw_data = res.json()
+                data = [raw_data] if isinstance(raw_data, dict) else raw_data
                 cls._CALENDARS_INDEX_CACHE['data'] = data
                 cls._CALENDARS_INDEX_CACHE['timestamp'] = now
                 set_disk_cache('psg_academic_calendar_index', data)
                 return data
         except Exception as e:
             logger.warning(f"Error fetching live calendar index: {e}")
-
-        # Fallback to local cache if present
-        fallback_path = os.path.join(os.path.dirname(__file__), '..', 'static', 'all_calendars_cache.json')
-        if os.path.exists(fallback_path):
-            try:
-                with open(fallback_path, 'r', encoding='utf-8') as f:
-                    cached_planners = json.load(f)
-                    planners_list = list(cached_planners.values())
-                    synthesized = [{
-                        'year': cls.get_current_academic_year(),
-                        'planner': planners_list
-                    }]
-                    cls._CALENDARS_INDEX_CACHE['data'] = synthesized
-                    cls._CALENDARS_INDEX_CACHE['timestamp'] = now
-                    return synthesized
-            except Exception as e:
-                logger.error(f"Failed to read static fallback cache: {e}")
 
         return cls._CALENDARS_INDEX_CACHE.get('data') or []
 
@@ -510,10 +543,20 @@ class AutoCalendarResolver:
                 return 100 if any(w in c for w in ['bsc', 'msc', 'b.sc', 'm.sc', 'all_bsc_msc']) else 0
 
             if s['is_mca']:
-                if 'mca' not in c: return 0
-                if y == 1 and any(w in c for w in ['first', '1st', 'i year', 'i ']): return 100
-                if y >= 2 and any(w in c for w in ['second', '2nd', 'ii year', 'ii ']): return 100
-                return 80
+                if y == 1:
+                    if any(w in c for w in ['i year mca', 'first year mca', '1st year mca']):
+                        return 110
+                    if any(w in c for w in ['first', '1st', 'i year', 'i ']):
+                        return 90 if 'mca' in c else 0
+                    return 80 if 'mca' in c else 0
+                if y >= 2:
+                    if any(w in c for w in ['first year mca', 'first  year mca', '1st year mca', 'i year mca', 'i mca']):
+                        return 0
+                    if 'mca' in c and any(w in c for w in ['second', '2nd', 'ii year', 'ii ']):
+                        return 100
+                    if any(w in c for w in ['third and fourth', 'all bsc & msc', 'me/mtech']):
+                        return 90
+                    return 80 if 'mca' in c else 0
 
             if s['is_pg']:
                 if not any(w in c for w in ['me', 'mtech', 'm.tech', 'pg']): return 0
@@ -524,22 +567,28 @@ class AutoCalendarResolver:
             if course_norm in ['BE', 'BTECH']:
                 if ('mca' in c and not any(w in c for w in ['be', 'btech'])) or ('all_bsc_msc' in c and not any(w in c for w in ['be', 'btech'])):
                     return 0
+                if any(w in c for w in ['me', 'mtech', 'm.tech']) and not any(w in c for w in ['be', 'btech']):
+                    return 0
                 if y == 1 and any(w in c for w in ['first year', '1st year', 'i year', 'first  year']): return 100
                 elif y == 2 and any(w in c for w in ['second year', '2nd year', 'ii year']): return 100
                 elif y in [3, 4] and any(w in c for w in ['3rd', '4th', 'third', 'fourth', 'iii', 'iv']): return 100
 
             return 0
 
-        # Filter by semester
+        # Filter by semester:
+        # Odd (Jun-Nov 2026): 32, 33, 34, 35, 39
+        # Even (Dec 2026-Jun 2027): 40, 41, 42, 43, 44
         semester = (semester or 'odd').lower()
         active_planners = []
         for p in planners:
-            name_lower = p.get('name', '').lower()
+            pid = int(p.get('id', 0)) if str(p.get('id', '')).isdigit() else 0
+            start_date = str(p.get('startDate', ''))
+            is_odd = pid in [32, 33, 34, 35, 39] or ('2026-0' in start_date and '2026-12' not in start_date)
             if semester == 'odd':
-                if p.get('isPublished') or ('odd' in name_lower and 'even' not in name_lower):
+                if is_odd:
                     active_planners.append(p)
             else:
-                if not p.get('isPublished') or 'even' in name_lower:
+                if not is_odd:
                     active_planners.append(p)
                     
         if not active_planners:
@@ -568,27 +617,26 @@ class AutoCalendarResolver:
             cls._PLANNER_CACHE[key] = {'data': disk_data, 'time': now}
             return disk_data
 
+        # 1. Primary zero-latency path: load planner directly from local static JSON
+        static_planners = cls.get_static_json_planners()
+        if str(planner_id) in static_planners:
+            data = static_planners[str(planner_id)]
+            cls._PLANNER_CACHE[key] = {'data': data, 'time': now}
+            set_disk_cache(f"psg_planner_{key}", data)
+            return data
+
+        # 2. Live network fallback if planner ID is not in static JSON
         try:
             url = f"https://academicschedule.psgtech.ac.in/api/calendar/{year}/planner/{planner_id}"
-            res = requests.get(url, timeout=4, verify=False)
+            res = requests.get(url, timeout=3, verify=False)
             if res.status_code == 200:
                 data = res.json()
                 cls._PLANNER_CACHE[key] = {'data': data, 'time': now}
                 set_disk_cache(f"psg_planner_{key}", data)
                 return data
         except Exception as e:
-            logger.warning(f"Error fetching planner {key}: {e}")
+            logger.warning(f"Error fetching live planner {key}: {e}")
 
-        # Check static fallback cache
-        fallback_path = os.path.join(os.path.dirname(__file__), '..', 'static', 'all_calendars_cache.json')
-        if os.path.exists(fallback_path):
-            try:
-                with open(fallback_path, 'r', encoding='utf-8') as f:
-                    cdata = json.load(f)
-                    if str(planner_id) in cdata:
-                        return cdata[str(planner_id)]
-            except Exception:
-                pass
         return None
 
     @classmethod
@@ -637,9 +685,31 @@ class AutoCalendarResolver:
 
 # Backward compatibility CONFIG dictionary
 CONFIG = {
-    'API_YEAR': AutoCalendarResolver.get_current_academic_year(),
+    'API_YEAR': 2026,
     'COURSE_CODES': {k: v['degree'] for k, v in PSGTECH_BRANCH_MAP.items()},
-    'PLANNER_MAP': {}  # Handled dynamically by AutoCalendarResolver
+    'PLANNER_MAP': {
+        "BE_1": 39, "BE_1_even": 42,
+        "BTech_1": 39, "BTech_1_even": 42,
+        "BE_2": 33, "BE_2_even": 41,
+        "BTech_2": 33, "BTech_2_even": 41,
+        "BE_3": 32, "BE_3_even": 40,
+        "BTech_3": 32, "BTech_3_even": 40,
+        "BE_4": 32, "BE_4_even": 40,
+        "BTech_4": 32, "BTech_4_even": 40,
+        "BE_SW_4": 34, "BE_SW_4_even": 44,
+        "BE_5": 35, "BE_5_even": 44,
+        "BSc_1": 32, "BSc_1_even": 40,
+        "BSc_2": 32, "BSc_2_even": 40,
+        "BSc_3": 32, "BSc_3_even": 40,
+        "MSc_1": 32, "MSc_1_even": 40,
+        "MSc_2": 32, "MSc_2_even": 40,
+        "ME_1": 32, "ME_1_even": 40,
+        "MTech_1": 32, "MTech_1_even": 40,
+        "ME_2": 32, "ME_2_even": 40,
+        "MTech_2": 32, "MTech_2_even": 40,
+        "MCA_1": 33, "MCA_1_even": 43,
+        "MCA_2": 32, "MCA_2_even": 40
+    }
 }
 
 # ============================================================================
@@ -647,7 +717,9 @@ CONFIG = {
 # ============================================================================
 
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-_TEMPLATES_DIR = os.path.join(_CURRENT_DIR, 'templates')
+_TEMPLATES_DIR = os.path.join(_CURRENT_DIR, '..', 'public')
+if not os.path.isdir(_TEMPLATES_DIR):
+    _TEMPLATES_DIR = os.path.join(_CURRENT_DIR, 'templates')
 if not os.path.isdir(_TEMPLATES_DIR):
     _TEMPLATES_DIR = _CURRENT_DIR
 
@@ -686,7 +758,7 @@ def compress_response(response):
         and 'Content-Encoding' not in response.headers
     ):
         data = response.get_data()
-        if len(data) >= 256:
+        if len(data) >= 128:
             gzip_buffer = BytesIO()
             with gzip.GzipFile(mode='wb', fileobj=gzip_buffer, compresslevel=6) as gz:
                 gz.write(data)
@@ -1485,6 +1557,15 @@ def api_login():
         roll_hash = hashlib.sha256(f"{username.strip().upper()}:PSGTECH".encode()).hexdigest()
         prev_cache_path = f"/tmp/bunker_prev_{roll_hash}.json"
 
+        # Check if previous attendance exists before overwriting so we can return it for comparison
+        prev_existing = None
+        if os.path.exists(prev_cache_path):
+            try:
+                with open(prev_cache_path, 'r', encoding='utf-8') as pf:
+                    prev_existing = json.load(pf)
+            except Exception:
+                pass
+
         # Prepare response data
         response_data = {
             'success': True,
@@ -1494,6 +1575,11 @@ def api_login():
             'college': 'PSGTECH',
             'has_calendar': True
         }
+
+        # Attach previous baseline if attendance was updated or changed
+        if prev_existing and prev_existing.get('subjects'):
+            response_data['previous_subjects'] = prev_existing.get('subjects')
+            response_data['previous_last_update'] = prev_existing.get('last_update')
 
         # Include timetable & course mapping only if client doesn't already have them stored on phone
         if not has_timetable:
@@ -1691,9 +1777,9 @@ ALL_CALENDARS_CACHE = {
     'timestamp': 0
 }
 
-@app.route('/api/all-calendars')
+@app.route('/api/all-calendars', methods=['GET', 'POST'])
 def api_all_calendars():
-    """Returns calendar planners dynamically for all departments with caching"""
+    """Returns calendar planners dynamically for all departments using static JSON cache (0ms latency)"""
     now = time.time()
     
     # 24-hour in-memory cache
@@ -1702,27 +1788,23 @@ def api_all_calendars():
         resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
         return resp
 
-    # Dynamically fetch live calendar index
-    calendar_index = AutoCalendarResolver.get_calendar_index()
     curr_year = AutoCalendarResolver.get_current_academic_year()
+    static_planners = AutoCalendarResolver.get_static_json_planners()
     
-    target_year_entry = next((y for y in calendar_index if y.get('year') == curr_year), None)
-    if not target_year_entry and calendar_index:
-        target_year_entry = calendar_index[0]
-        curr_year = target_year_entry.get('year', curr_year)
-        
-    planners_list = target_year_entry.get('planner', []) if target_year_entry else []
-    
-    # Fetch full planner details for active planners with concurrency/caching
-    live_data = {}
-    for p in planners_list:
-        pid = p.get('id')
-        if pid:
-            p_details = AutoCalendarResolver.get_planner_details(curr_year, pid)
-            if p_details:
-                live_data[str(pid)] = p_details
-            else:
-                live_data[str(pid)] = p
+    # Build live_data from static JSON directly (Zero external network latency or timeouts)
+    live_data = dict(static_planners)
+    planners_list = []
+    for pid, p in static_planners.items():
+        if isinstance(p, dict):
+            planners_list.append({
+                'id': p.get('id', int(pid) if str(pid).isdigit() else pid),
+                'name': p.get('name', ''),
+                'startDate': p.get('startDate'),
+                'lastDate': p.get('lastDate'),
+                'totalWorkingDays': p.get('totalWorkingDays', 0),
+                'calendarYear': p.get('calendarYear', curr_year),
+                'isPublished': p.get('isPublished', True)
+            })
 
     # Built-in department shortcuts for legacy UI compatibility
     departments = [
@@ -1731,7 +1813,9 @@ def api_all_calendars():
         {"id": "be_1", "name": "1st Year BE / B.Tech", "planner_odd": 39, "planner_even": 42, "color": "#ec4899"},
         {"id": "bsc_msc", "name": "B.Sc & M.Sc (All Years)", "planner_odd": 32, "planner_even": 40, "color": "#06b6d4"},
         {"id": "pg", "name": "ME / M.Tech & MCA", "planner_odd": 32, "planner_even": 40, "color": "#f59e0b"},
-        {"id": "sandwich", "name": "BE Sandwich (SW)", "planner_odd": 35, "planner_even": 44, "color": "#10b981"}
+        {"id": "sandwich_4", "name": "4th Year BE Sandwich (SW)", "planner_odd": 34, "planner_even": 44, "color": "#14b8a6"},
+        {"id": "sandwich_5", "name": "5th Year BE Sandwich (SW)", "planner_odd": 35, "planner_even": 44, "color": "#10b981"},
+        {"id": "mca_1", "name": "1st Year MCA", "planner_odd": 33, "planner_even": 43, "color": "#8b5cf6"}
     ]
 
     result = {
@@ -1740,7 +1824,7 @@ def api_all_calendars():
         'planners': live_data,
         'all_planners_meta': planners_list,
         'departments': departments,
-        'available_years': [y.get('year') for y in calendar_index if 'year' in y]
+        'available_years': [curr_year, curr_year - 1]
     }
     
     ALL_CALENDARS_CACHE['data'] = result
@@ -1750,18 +1834,76 @@ def api_all_calendars():
     return resp
 
 
-@app.route('/api/calendar/<roll>')
-def api_calendar(roll):
+@app.route('/api/calendar', methods=['GET', 'POST'])
+@app.route('/api/calendar/<path:roll>', methods=['GET', 'POST'])
+def api_calendar(roll=None):
     """
-    Automated Calendar API:
-    Accepts roll number (e.g. 23L101, 24C001, 22CSA01, 25MX01), or planner ID directly.
-    Dynamically identifies student, year of study, program, semester, and returns matching schedule.
-    Optional query params: ?sem=odd|even &year=2026
+    Automated Calendar API with Token & JSON Support:
+    Accepts:
+      - roll number in path: /api/calendar/25U201
+      - roll number in query: /api/calendar?roll=25U201
+      - session token in query or body: ?token=<tok> or ?session_token=<tok>
+      - session/auth token in path: /api/calendar/<session_token>
+      - JSON body via POST: {"roll": "...", "session_token": "...", "auth_token": "..."}
+      - Planner ID directly: /api/calendar/33
+    Resolves using the static JSON cache (all_calendars_cache.json) for instant 0ms responses.
     """
     try:
-        roll = AutoCalendarResolver.clean_roll_input(roll)
-        sem = request.args.get('sem', '').strip().lower() or None
-        target_year = request.args.get('year', '').strip() or None
+        data = {}
+        if request.method == 'POST':
+            data = request.get_json(silent=True) or {}
+
+        # 1. Extract token if provided in headers, query, or body
+        token = (
+            request.headers.get('X-Session-Token') or
+            request.args.get('token') or
+            request.args.get('session_token') or
+            data.get('token') or
+            data.get('session_token') or
+            ''
+        )
+        if not token and request.headers.get('Authorization', '').startswith('Bearer '):
+            token = request.headers.get('Authorization')[7:].strip()
+
+        auth_token = (
+            request.headers.get('X-Auth-Token') or
+            request.args.get('auth_token') or
+            data.get('auth_token') or
+            ''
+        )
+
+        # 2. Extract roll from path, query string, or JSON body
+        if not roll:
+            roll = request.args.get('roll') or request.args.get('rollno') or request.args.get('username') or data.get('roll') or data.get('rollno') or data.get('username') or ''
+
+        # 3. If roll itself is a token (contains dot '.' from HMAC token format or exceeds 15 chars)
+        if roll and ('.' in str(roll) or len(str(roll)) > 15):
+            if not token:
+                token = str(roll)
+            roll = ''
+
+        # 4. Decode session_token to extract student roll
+        if not roll and token:
+            tok_data = decode_session_token(token)
+            if tok_data and tok_data.get('u'):
+                roll = tok_data.get('u')
+
+        # 5. Decode auth_token JSON to extract student roll
+        if not roll and auth_token:
+            try:
+                import json as _json
+                creds = _json.loads(auth_token)
+                roll = creds.get('roll', '')
+            except:
+                pass
+
+        # 6. Default showcase fallback if no roll or token provided
+        if not roll:
+            roll = '25U201'
+
+        roll = AutoCalendarResolver.clean_roll_input(str(roll))
+        sem = request.args.get('sem', '').strip().lower() or data.get('sem', '').strip().lower() or None
+        target_year = request.args.get('year', '').strip() or data.get('year', '').strip() or None
         
         # Direct planner ID access (e.g., /api/calendar/33)
         if roll.isdigit() and len(roll) <= 3:
@@ -1771,6 +1913,8 @@ def api_calendar(roll):
             if details:
                 resp = jsonify(details)
                 resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
+                if token:
+                    resp.headers['X-Session-Token'] = token
                 return resp
             return jsonify({'error': f'Planner ID {pid} not found for year {curr_year}'}), 404
 
@@ -1786,7 +1930,7 @@ def api_calendar(roll):
                 'activities': []
             }), 400
             
-        # Automated PSG Tech Planner Resolution
+        # Automated PSG Tech Planner Resolution from local JSON
         student, matched_planner, details, year_planners = AutoCalendarResolver.resolve_calendar(
             roll, semester=sem, year=target_year
         )
@@ -1808,6 +1952,8 @@ def api_calendar(roll):
         payload['isLateralEntry'] = student.get('is_lateral_entry', False) if student else False
         payload['ecampusSynced'] = student.get('ecampus_synced', False) if student else False
         payload['academicYear'] = student.get('academic_year') if student else AutoCalendarResolver.get_current_academic_year()
+        if token:
+            payload['session_token'] = token
         payload['availablePlanners'] = [
             {
                 'id': p.get('id'),
@@ -1821,24 +1967,40 @@ def api_calendar(roll):
 
         resp = jsonify(payload)
         resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
+        if token:
+            resp.headers['X-Session-Token'] = token
         return resp
         
     except Exception as e:
         logger.error(f"Calendar API error for {roll}: {str(e)}")
-        # Fallback to local cache if network/API fails
+        # Safe fallback from local static JSON
         try:
-            fallback_path = os.path.join(os.path.dirname(__file__), '..', 'static', 'all_calendars_cache.json')
-            if os.path.exists(fallback_path):
-                with open(fallback_path, 'r', encoding='utf-8') as f:
-                    cdata = json.load(f)
-                    # Return first planner from cache as ultimate safety net
-                    first_p = next(iter(cdata.values()))
-                    resp = jsonify(first_p)
-                    resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
-                    return resp
+            static_planners = AutoCalendarResolver.get_static_json_planners()
+            if static_planners:
+                first_p = next(iter(static_planners.values()))
+                resp = jsonify(first_p)
+                resp.headers['Cache-Control'] = 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800'
+                return resp
         except Exception:
             pass
         return jsonify({'error': 'Server error fetching calendar'}), 500
+
+
+def compute_ca_sig(internals_list):
+    """Deterministic 16-char SHA-256 signature for internal assessment marks"""
+    if not internals_list or not isinstance(internals_list, list):
+        return ""
+    import hashlib
+    parts = []
+    for s in internals_list:
+        if isinstance(s, dict):
+            c = str(s.get('course_code', ''))
+            t = str(s.get('total', ''))
+            tc = str(s.get('total_converted', ''))
+            r = "".join(str(x) for x in s.get('row_data', []))
+            parts.append(f"{c}:{t}:{tc}:{r}")
+    raw = "|".join(parts)
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]
 
 
 @app.route('/api/internals', methods=['POST'])
@@ -1848,6 +2010,7 @@ def api_internals():
         data = request.get_json() or {}
         auth_token = data.get('auth_token', '')
         session_token = data.get('session_token', '')
+        known_ca_sig = (data.get('known_ca_sig') or '').strip()
         force = data.get('force', False)
         
         if not auth_token and not session_token:
@@ -1879,7 +2042,16 @@ def api_internals():
         if not force:
             cached = get_disk_cache(cache_key, max_age_seconds=86400)
             if cached is not None:
-                return jsonify(cached)
+                ca_sig = compute_ca_sig(cached)
+                if known_ca_sig and ca_sig and known_ca_sig == ca_sig:
+                    resp = jsonify({'up_to_date': True, 'ca_sig': ca_sig})
+                else:
+                    resp = jsonify(cached)
+                resp.headers['X-CA-Sig'] = ca_sig
+                resp.headers['Cache-Control'] = 'private, max-age=1800'
+                if session_token:
+                    resp.headers['X-Session-Token'] = session_token
+                return resp
 
         scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True, session_token=session_token)
         if not scraper.authenticated:
@@ -1892,6 +2064,15 @@ def api_internals():
         soup = make_soup(response.text)
 
         internals = []
+        def safe_float(v):
+            if v is None:
+                return None
+            try:
+                cleaned = re.sub(r'[^\d.]', '', str(v)).strip()
+                return float(cleaned) if cleaned else None
+            except:
+                return None
+
         # Find all tables with IDs like 8^XXXX (the CA mark tables on studzone2)
         tables = soup.find_all('table', id=lambda x: x and '^' in str(x))
         
@@ -1910,71 +2091,200 @@ def api_internals():
         
         for table in tables:
             table_id = table.get('id', '')
-            rows = table.find_all('tr')
+            thead = table.find('thead')
+            header_rows = thead.find_all('tr') if thead else table.find_all('tr')[:2]
             
-            # Get header to find column count/schema
-            header_cells = []
-            for r in rows[:2]:
-                for td in r.find_all('td'):
-                    header_cells.append(td.get_text(strip=True))
+            col_names = []
+            max_marks = []
+            if len(header_rows) >= 1:
+                col_names = [th.get_text(strip=True) for th in header_rows[0].find_all(['th', 'td'])]
+            if len(header_rows) >= 2:
+                max_marks = [th.get_text(strip=True) for th in header_rows[1].find_all(['th', 'td'])]
             
-            # Data rows start after 2 header rows
-            data_rows = rows[2:] if len(rows) > 2 else []
-            
+            # Determine table category from headers
+            headers_text = ' '.join(col_names).upper()
+            is_table_lab = 'IR I' in headers_text or 'PLRO' in headers_text or table_id.startswith('8^16') or table_id.startswith('8^10')
+            is_table_env = 'ENVIRONMENTAL' in headers_text or ('A I' in col_names and 'A II' in col_names)
+            is_table_app = 'EH' in col_names or 'ACTIVITY POINT' in headers_text
+            is_table_at = any(x in col_names for x in ['AT1', 'AT 1', 'AT 2', 'AT2'])
+            is_table_ap = 'AP' in col_names and not is_table_at
+
+            table_type = 'theory'
+            if is_table_lab:
+                table_type = 'lab'
+            elif is_table_env:
+                table_type = 'environmental'
+            elif is_table_app:
+                table_type = 'activity_points'
+            elif is_table_at:
+                table_type = 'theory_tutorial'
+            elif is_table_ap:
+                table_type = 'theory_ap'
+
+            tbody = table.find('tbody')
+            data_rows = tbody.find_all('tr') if tbody else table.find_all('tr')[len(header_rows):]
+
             for row in data_rows:
                 cols = [td.get_text(strip=True) for td in row.find_all('td')]
                 if len(cols) < 3:
                     continue
-                
+
                 course_code = cols[0].strip()
                 course_name = cols[1].strip()
-                
-                # row_data is the list of mark columns (skip code+name)
                 row_data = cols[2:]
-                
-                # The last column is 'Total'
-                total_raw = row_data[-1].strip() if row_data else ''
-                total = total_raw if total_raw and total_raw != '' else 'Not Updated Yet'
-                
-                # Calculate converted mark based on table type
-                is_lab = table_id.startswith('8^16') or table_id.startswith('8^10')
-                
-                def safe_float(v):
-                    try:
-                        return float(v.replace('*','').strip()) if v and v != '*' and v.strip() else None
-                    except:
-                        return None
-                
-                total_val = safe_float(total)
-                total_converted = 'Not Updated Yet'
+
+                is_lab = is_table_lab or 'LABORATORY' in course_name.upper() or 'LAB' in course_name.upper()
+                is_app = is_table_app or course_code in ('23U315', '23U215') or 'ACTIVITY POINT' in course_name.upper()
+                is_env = is_table_env or course_code == '23K312' or 'ENVIRONMENTAL' in course_name.upper()
+
                 target_max = 40
-                
-                is_zero = course_code.strip().upper() == '23U215' or 'ACTIVITY POINT' in course_name.strip().upper()
-                if total_val is not None:
-                    if is_zero:
-                        total_converted = str(round(total_val))
-                        target_max = 100
-                    elif is_lab:
-                        total_converted = str(round(total_val * 1.2))
-                        target_max = 60
+                if is_lab:
+                    target_max = 60
+                elif is_env or is_app:
+                    target_max = 100
+
+                mark_headers = col_names[2:] if len(col_names) > 2 else []
+                total_idx = None
+                conv_idx = None
+                for idx, h in enumerate(mark_headers):
+                    h_clean = h.strip().lower()
+                    if 'conv' in h_clean:
+                        conv_idx = idx
+                    elif h_clean == 'total':
+                        total_idx = idx
+
+                total_raw = ''
+                conv_raw = ''
+                if total_idx is not None and total_idx < len(row_data):
+                    total_raw = row_data[total_idx].strip()
+                elif conv_idx is not None and conv_idx > 0 and (conv_idx - 1) < len(row_data):
+                    total_raw = row_data[conv_idx - 1].strip()
+                elif len(row_data) >= 2 and any('conv' in h.lower() for h in mark_headers):
+                    total_raw = row_data[-2].strip()
+                elif row_data:
+                    total_raw = row_data[-1].strip()
+
+                if conv_idx is not None and conv_idx < len(row_data):
+                    conv_raw = row_data[conv_idx].strip()
+                elif total_idx is not None and total_idx < len(row_data) - 1:
+                    conv_raw = row_data[-1].strip()
+
+                tot_val = safe_float(total_raw)
+                conv_val = safe_float(conv_raw)
+
+                if conv_val is not None:
+                    total_converted = str(round(conv_val, 2) if not conv_val.is_integer() else int(conv_val))
+                elif tot_val is not None:
+                    if target_max == 60:
+                        calc = tot_val * 1.2
+                    elif target_max == 100:
+                        calc = (tot_val / 150.0 * 100.0) if is_app else tot_val
                     else:
-                        total_converted = str(round(total_val * 0.8))
-                        target_max = 40
+                        calc = tot_val * 0.8
+                    total_converted = str(round(calc, 2) if not calc.is_integer() else int(calc))
+                else:
+                    total_converted = 'Not Updated Yet'
+
+                total_display = total_raw if (total_raw and total_raw != '*') else 'Not Updated Yet'
+
+                # Schema normalization
+                schema = 'theory_ap'
+                if is_lab:
+                    schema = 'lab'
+                elif is_env:
+                    schema = 'evs'
+                elif is_app:
+                    schema = 'activity'
+                elif is_table_at:
+                    schema = 'theory_at'
+
+                # Infer credits
+                credits = 3
+                if schema == 'activity' or course_code in ('23U315', '23U215', '23IP15', '23Q213'):
+                    credits = 0
+                elif schema == 'lab' or course_code.endswith(('10', '11')):
+                    credits = 2
+                elif schema == 'evs' or course_code == '23K312':
+                    credits = 0
+                elif course_code.endswith(('01', '03')):
+                    credits = 4 if any(w in course_name.upper() for w in ['CALCULUS', 'ALGEBRA', 'COMPLEX', 'ELECTRIC CIRCUITS', 'DIGITAL']) else 3
+
+                # Normalized component dictionary mapping keys to float or None
+                comp = {}
+                for h, val in zip(mark_headers, row_data):
+                    h_norm = h.lower().replace(' ', '').replace('.', '').replace('-', '')
+                    v_flt = safe_float(val)
+                    if h_norm in ('iri', 'ir1'): comp['ir1'] = v_flt
+                    elif h_norm in ('irii', 'ir2'): comp['ir2'] = v_flt
+                    elif h_norm in ('plroi', 'plro1'): comp['plro1'] = v_flt
+                    elif h_norm in ('plroii', 'plro2'): comp['plro2'] = v_flt
+                    elif h_norm == 't1': comp['t1'] = v_flt
+                    elif h_norm == 't2': comp['t2'] = v_flt
+                    elif h_norm == 'rt': comp['rt'] = v_flt
+                    elif h_norm == 'rt1': comp['rt1'] = v_flt
+                    elif h_norm == 'rt2': comp['rt2'] = v_flt
+                    elif h_norm == 'ap': comp['ap'] = v_flt
+                    elif h_norm in ('at1', 'ap1'): comp['at1'] = v_flt
+                    elif h_norm in ('at2', 'ap2'): comp['at2'] = v_flt
+                    elif h_norm == 'mq1': comp['mq1'] = v_flt
+                    elif h_norm == 'mq2': comp['mq2'] = v_flt
+                    elif h_norm in ('ai', 'a1'): comp['a1'] = v_flt
+                    elif h_norm in ('aii', 'a2'): comp['a2'] = v_flt
+                    elif h_norm == 'eh': comp['eh'] = v_flt
+
+                # Subtotals calculation
+                subtotals = {
+                    'best2t': None,
+                    'ap_total': None,
+                    'best_mcq': None,
+                    'entered_raw50': tot_val,
+                    'entered_ca40': conv_val if conv_val is not None else (round(tot_val * 0.8, 2) if tot_val is not None and not is_lab else (round(tot_val * 1.2, 2) if tot_val is not None else None))
+                }
+                if 't1' in comp or 't2' in comp:
+                    t_vals = [comp[k] for k in ('t1', 't2') if comp.get(k) is not None]
+                    if t_vals:
+                        subtotals['best2t'] = round(sum(t_vals) / 2.0, 2) if len(t_vals) == 2 else round(t_vals[0] / 2.0, 2)
+                if 'at1' in comp or 'at2' in comp:
+                    at_vals = [comp[k] for k in ('at1', 'at2') if comp.get(k) is not None]
+                    if at_vals:
+                        subtotals['ap_total'] = round(sum(at_vals), 2)
+                elif 'ap' in comp and comp['ap'] is not None:
+                    subtotals['ap_total'] = comp['ap']
+                if 'mq1' in comp or 'mq2' in comp:
+                    mq_vals = [comp[k] for k in ('mq1', 'mq2') if comp.get(k) is not None]
+                    if mq_vals:
+                        subtotals['best_mcq'] = round(sum(mq_vals) / 2.0, 2) if len(mq_vals) == 2 else round(mq_vals[0] / 2.0, 2)
 
                 internals.append({
                     'course_code': course_code,
                     'course_name': course_name,
                     'table_id': table_id,
+                    'table_type': table_type,
+                    'schema': schema,
+                    'credits': credits,
+                    'comp': comp,
+                    'subtotals': subtotals,
                     'is_lab': is_lab,
                     'row_data': row_data,
-                    'total': total,
+                    'headers': mark_headers,
+                    'max_marks': max_marks[2:] if len(max_marks) > 2 else [],
+                    'total': total_display,
                     'total_converted': total_converted,
                     'target_max': target_max
                 })
 
         set_disk_cache(cache_key, internals)
-        resp = jsonify(internals)
-        new_tok = scraper.get_session_token()
+        ca_sig = compute_ca_sig(internals)
+        new_tok = scraper.get_session_token() or session_token
+        if known_ca_sig and ca_sig and known_ca_sig == ca_sig and not force:
+            res_payload = {'up_to_date': True, 'ca_sig': ca_sig}
+            if new_tok:
+                res_payload['session_token'] = new_tok
+            resp = jsonify(res_payload)
+        else:
+            resp = jsonify(internals)
+        resp.headers['X-CA-Sig'] = ca_sig
+        resp.headers['Cache-Control'] = 'private, max-age=1800'
         if new_tok:
             resp.headers['X-Session-Token'] = new_tok
         return resp
@@ -2006,17 +2316,24 @@ def fetch_allsem_results(scraper, roll):
         logger.error(f"Error fetching studzone2 results concurrently: {e}")
 
     grades_map = {
-        'S': 10, 'O': 10, 'A+': 9, 'A': 8, 'B+': 7, 'B': 6, 'C+': 6, 'C': 5,
+        'S': 10, 'O': 10, 'A+': 9, 'A': 8, 'B+': 7, 'B': 6.5, 'C+': 6, 'C': 5,
         'D': 6, 'E': 5, 'P': 5, 'RA': 0, 'U': 0, 'W': 0, 'SA': 0, 'WD': 0,
         'Completed': None
     }
 
     all_subjects = []
     seen_courses = {}
+    portal_completed_credits = None
 
     # 1. Parse all completed courses from AttWfStudCourseSelection.aspx
     if r_cs and r_cs.status_code == 200:
         soup_cs = make_soup(r_cs.text)
+        
+        # Extract official portal completed credits counter if present
+        tot_comp_el = soup_cs.find('span', {'id': 'tot_credit_comp'})
+        if tot_comp_el and tot_comp_el.get_text(strip=True).isdigit():
+            portal_completed_credits = int(tot_comp_el.get_text(strip=True))
+
         tbl_completed = soup_cs.find('table', {'id': 'PDGCourse'}) or soup_cs.find('table', {'id': 'TabCourse'})
         if tbl_completed:
             for row in tbl_completed.find_all('tr')[1:]:
@@ -2051,6 +2368,38 @@ def fetch_allsem_results(scraper, roll):
                     }
                     all_subjects.append(subj_obj)
                     seen_courses[code] = subj_obj
+
+        # 1b. Parse currently registered/studying courses to detect uncleared/arrear subjects
+        tbl_studying = soup_cs.find('table', {'id': 'Prettydatagrid3'}) or soup_cs.find('table', {'id': 'Table3'})
+        if tbl_studying:
+            max_completed_sem = max([c['sem'] for c in seen_courses.values()]) if seen_courses else 1
+            for row in tbl_studying.find_all('tr')[1:]:
+                cols = [td.get_text(strip=True) for td in row.find_all('td')]
+                if len(cols) >= 7:
+                    code = cols[1].strip()
+                    title = cols[2].strip()
+                    cat = cols[3].strip()
+                    sem = int(cols[4].strip()) if cols[4].strip().isdigit() else 1
+                    credits_str = cols[6].strip() if len(cols) > 6 else '0'
+                    credits = int(credits_str) if credits_str.isdigit() else 0
+                    is_non_cgpa = (credits == 0)
+
+                    # If course from a past semester is still in studying table and NOT cleared in PDGCourse:
+                    if code not in seen_courses and sem <= max_completed_sem:
+                        arrear_subj = {
+                            'sem': sem,
+                            'course': code,
+                            'title': title,
+                            'category': cat,
+                            'credits': str(credits),
+                            'grade': 'RA',
+                            'grade_points': 0 if not is_non_cgpa else None,
+                            'is_non_cgpa': is_non_cgpa,
+                            'result': 'Fail',
+                            'passing': ''
+                        }
+                        all_subjects.append(arrear_subj)
+                        seen_courses[code] = arrear_subj
 
     # 2. Parse latest provisional exam results from FrmEpsStudResult.aspx
     if r_res and r_res.status_code == 200:
@@ -2128,6 +2477,7 @@ def fetch_allsem_results(scraper, roll):
         sem_courses = [c for c in all_subjects if c['sem'] == sem]
         credit_courses = [c for c in sem_courses if not c.get('is_non_cgpa') and str(c.get('credits', '')).isdigit() and int(c.get('credits', 0)) > 0 and c.get('grade_points') is not None]
         sem_cr = sum(int(c['credits']) for c in credit_courses)
+        sem_earned_cr = sum(int(c['credits']) for c in credit_courses if (not c.get('result') or c.get('result', '').lower() == 'pass') and str(c.get('grade', '')) not in ('RA', 'U', 'W', 'SA', 'WD') and (c.get('grade_points') is not None and c.get('grade_points') > 0))
         sem_cp = sum(int(c['credits']) * c['grade_points'] for c in credit_courses)
         sem_has_ra = any(c.get('grade') in ('RA', 'U') or str(c.get('grade', '')).startswith('RA') or c.get('result', '').lower() == 'fail' for c in sem_courses)
         
@@ -2136,11 +2486,13 @@ def fetch_allsem_results(scraper, roll):
 
         cum_courses = [c for c in all_subjects if c['sem'] <= sem and not c.get('is_non_cgpa') and str(c.get('credits', '')).isdigit() and int(c.get('credits', 0)) > 0 and c.get('grade_points') is not None]
         cum_cr = sum(int(c['credits']) for c in cum_courses)
+        cum_earned_cr = sum(int(c['credits']) for c in cum_courses if (not c.get('result') or c.get('result', '').lower() == 'pass') and str(c.get('grade', '')) not in ('RA', 'U', 'W', 'SA', 'WD') and (c.get('grade_points') is not None and c.get('grade_points') > 0))
         cum_cp = sum(int(c['credits']) * c['grade_points'] for c in cum_courses)
         cum_has_ra = any(c.get('grade') in ('RA', 'U') or str(c.get('grade', '')).startswith('RA') or c.get('result', '').lower() == 'fail' for c in all_subjects if c['sem'] <= sem)
         
         cgpa_val = round(cum_cp / cum_cr, 2) if cum_cr > 0 else 0
-        cgpa_display = 'RA' if cum_has_ra else cgpa_val
+        # Official PSG Tech Statement of Grades rule: CGPA is printed as *** if candidate has uncleared registered courses
+        cgpa_display = '***' if cum_has_ra else cgpa_val
 
         semwise_gpa[str(sem)] = sgpa_display
         semwise_credits[str(sem)] = sem_cr
@@ -2151,19 +2503,31 @@ def fetch_allsem_results(scraper, roll):
             'cgpa': cgpa_display,
             'cgpa_numeric': cgpa_val,
             'credits': sem_cr,
+            'credits_enrolled': sem_cr,
+            'credits_earned': sem_earned_cr,
+            'cum_credits_enrolled': cum_cr,
+            'cum_credits_earned': cum_earned_cr,
             'has_ra': sem_has_ra,
             'total_subjects': len(sem_courses)
         })
 
     latest_sem = semesters_found[-1] if semesters_found else 1
     latest_gpa = semwise_gpa.get(str(latest_sem), 0)
-    overall_cgpa = semwise_data[-1]['cgpa'] if semwise_data else 0
+    has_any_ra = any(s['has_ra'] for s in semwise_data)
+    overall_cgpa = '***' if has_any_ra else (semwise_data[-1]['cgpa'] if semwise_data else 0)
     overall_cgpa_numeric = semwise_data[-1]['cgpa_numeric'] if semwise_data else 0
+    cgpa_note = "CGPA is computed only if candidate passes all the courses registered." if has_any_ra else ""
+
     total_earned_credits = sum(
         int(c['credits']) for c in all_subjects
         if not c.get('is_non_cgpa') and str(c.get('credits', '')).isdigit() and int(c.get('credits', 0)) > 0
         and (not c.get('result') or c.get('result', '').lower() == 'pass')
-        and str(c.get('grade', '')) not in ('RA', 'U')
+        and str(c.get('grade', '')) not in ('RA', 'U', 'W', 'SA', 'WD')
+        and (c.get('grade_points') is not None and c.get('grade_points') > 0)
+    )
+    total_enrolled_credits = sum(
+        int(c['credits']) for c in all_subjects
+        if str(c.get('credits', '')).isdigit() and int(c.get('credits', 0)) > 0
     )
     credit_points_total = sum(
         int(c['credits']) * c['grade_points'] for c in all_subjects
@@ -2182,7 +2546,11 @@ def fetch_allsem_results(scraper, roll):
         'latest_gpa': latest_gpa,
         'overall_cgpa': overall_cgpa,
         'overall_cgpa_numeric': overall_cgpa_numeric,
+        'cgpa_note': cgpa_note,
+        'has_arrears': has_any_ra,
+        'portal_completed_credits': portal_completed_credits,
         'total_credits': total_earned_credits,
+        'total_enrolled_credits': total_enrolled_credits,
         'credit_points_total': credit_points_total
     }
 
@@ -2193,16 +2561,28 @@ def api_gpa():
     try:
         data = request.get_json() or {}
         auth_token = data.get('auth_token', '')
+        session_token = data.get('session_token', '')
         force = data.get('force', False)
         
-        if not auth_token:
+        if not auth_token and not session_token:
             return jsonify({'error': 'Auth token required'}), 401
         
-        try:
-            creds = json.loads(auth_token)
-            roll = creds.get('roll', '')
-            password = creds.get('password', '')
-        except:
+        roll = ''
+        password = ''
+        if auth_token:
+            try:
+                creds = json.loads(auth_token)
+                roll = creds.get('roll', '')
+                password = creds.get('password', '')
+            except:
+                pass
+
+        if not roll and session_token:
+            tok_data = decode_session_token(session_token)
+            if tok_data:
+                roll = tok_data.get('u', '')
+
+        if not roll:
             return jsonify({'error': 'Invalid auth token'}), 401
 
         import hashlib
@@ -2213,17 +2593,21 @@ def api_gpa():
         if not force:
             results = get_disk_cache(cache_key, max_age_seconds=86400)
 
+        scraper = None
         if not results:
-            scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True)
+            scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True, session_token=session_token)
             if not scraper.authenticated:
                 return jsonify({'error': 'Authentication failed'}), 401
             results = fetch_allsem_results(scraper, roll)
             set_disk_cache(cache_key, results)
 
-        return jsonify({
+        new_tok = scraper.get_session_token() if scraper else session_token
+        res_payload = {
             'gpa': results['latest_gpa'],
             'latest_sem': results['latest_sem'],
             'total_credits': results['total_credits'],
+            'total_enrolled_credits': results.get('total_enrolled_credits', 0),
+            'portal_completed_credits': results.get('portal_completed_credits'),
             'credit_points_total': results.get('credit_points_total', 0),
             'semwise_gpa': results['semwise_gpa'],
             'semwise_credits': results['semwise_credits'],
@@ -2231,9 +2615,18 @@ def api_gpa():
             'cgpa': results['overall_cgpa'],
             'overall_cgpa': results['overall_cgpa'],
             'overall_cgpa_numeric': results.get('overall_cgpa_numeric', 0),
+            'cgpa_note': results.get('cgpa_note', ''),
+            'has_arrears': results.get('has_arrears', False),
             'all_subjects': results['all_subjects'],
             'table': results['all_subjects']
-        })
+        }
+        if new_tok:
+            res_payload['session_token'] = new_tok
+        resp = jsonify(res_payload)
+        resp.headers['Cache-Control'] = 'private, max-age=1800'
+        if new_tok:
+            resp.headers['X-Session-Token'] = new_tok
+        return resp
 
     except Exception as e:
         logger.error(f"GPA API error: {str(e)}")
@@ -2246,16 +2639,28 @@ def api_cgpa():
     try:
         data = request.get_json() or {}
         auth_token = data.get('auth_token', '')
+        session_token = data.get('session_token', '')
         force = data.get('force', False)
         
-        if not auth_token:
+        if not auth_token and not session_token:
             return jsonify({'error': 'Auth token required'}), 401
         
-        try:
-            creds = json.loads(auth_token)
-            roll = creds.get('roll', '')
-            password = creds.get('password', '')
-        except:
+        roll = ''
+        password = ''
+        if auth_token:
+            try:
+                creds = json.loads(auth_token)
+                roll = creds.get('roll', '')
+                password = creds.get('password', '')
+            except:
+                pass
+
+        if not roll and session_token:
+            tok_data = decode_session_token(session_token)
+            if tok_data:
+                roll = tok_data.get('u', '')
+
+        if not roll:
             return jsonify({'error': 'Invalid auth token'}), 401
 
         import hashlib
@@ -2266,23 +2671,36 @@ def api_cgpa():
         if not force:
             results = get_disk_cache(cache_key, max_age_seconds=1800)
 
+        scraper = None
         if not results:
-            scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True)
+            scraper = EcampusScraper(roll, password, timeout=DEFAULT_PORTAL_TIMEOUT, prefetch=False, force_studzone2=True, session_token=session_token)
             if not scraper.authenticated:
                 return jsonify({'error': 'Authentication failed'}), 401
             results = fetch_allsem_results(scraper, roll)
             set_disk_cache(cache_key, results)
 
-        return jsonify({
+        new_tok = scraper.get_session_token() if scraper else session_token
+        res_payload = {
             'cgpa': results['overall_cgpa'],
             'overall_cgpa': results['overall_cgpa'],
             'overall_cgpa_numeric': results.get('overall_cgpa_numeric', 0),
+            'cgpa_note': results.get('cgpa_note', ''),
+            'has_arrears': results.get('has_arrears', False),
             'total_credits': results['total_credits'],
+            'total_enrolled_credits': results.get('total_enrolled_credits', 0),
+            'portal_completed_credits': results.get('portal_completed_credits'),
             'credit_points_total': results.get('credit_points_total', 0),
             'semwise_data': results['semwise_data'],
             'all_subjects': results['all_subjects'],
             'table': results['all_subjects']
-        })
+        }
+        if new_tok:
+            res_payload['session_token'] = new_tok
+        resp = jsonify(res_payload)
+        resp.headers['Cache-Control'] = 'private, max-age=1800'
+        if new_tok:
+            resp.headers['X-Session-Token'] = new_tok
+        return resp
 
     except Exception as e:
         logger.error(f"CGPA API error: {str(e)}")

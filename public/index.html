@@ -237,7 +237,8 @@
     </script>
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
-    <script defer src="/static/app.js?v=3.8.3"></script>
+    <script defer src="/static/calendar.js?v=3.8.6"></script>
+    <script defer src="/static/app.js?v=3.8.6"></script>
     <script defer src="/static/legal.js?v=1.0.1"></script>
 
     <script>
@@ -251,7 +252,7 @@
                 // Register Service Worker for total offline functionality
                 if ('serviceWorker' in navigator) {
                     window.addEventListener('load', () => {
-                        navigator.serviceWorker.register('/sw.js?v=11').then((reg) => {
+                        navigator.serviceWorker.register('/sw.js?v=13').then((reg) => {
                             console.log('PWA: Service Worker registered.', reg.scope);
                         }).catch((err) => {
                             console.log('PWA: Service Worker registration failed: ', err);
@@ -711,89 +712,88 @@
                     </div>
                 </div>
 
-                <!-- TAB: SMART TRACKER (Combined Planner & Edit) -->
-                <div id="tab-planner" class="tab-content space-y-5 pt-2">
-
-                    <!-- Smart Tracker Attendance Panel (collapsible, hidden by default) -->
-                    <div id="smart-tracker-panel"
-                        class="hidden glass-panel p-5 rounded-[32px] border-l-4 border-indigo-500 shadow-xl overflow-hidden relative">
-                        <div class="absolute top-0 right-0 p-4 opacity-10 text-4xl">📊</div>
-                        <p class="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em] mb-3">Smart Tracker
-                            Attendance</p>
-                        <div id="planner-impact-list" class="space-y-3">
-                            <div class="text-center py-2 text-gray-500 text-[10px] italic font-medium">Mark classes to
-                                see today's tracker stats</div>
+                                <!-- TAB 3: SMART TRACKER (DATE-AWARE & MOBILE-OPTIMIZED) -->
+                <div id="tab-planner" class="tab-content space-y-4 pt-2">
+                    <!-- Smart Tracker Attendance Impact Panel (Collapsible) -->
+                    <div id="smart-tracker-panel" class="hidden bento-card p-4 relative overflow-hidden">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-[9px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-1.5">
+                                <i class="fas fa-chart-line text-indigo-400"></i>
+                                <span>Smart Tracker Impact</span>
+                            </span>
+                            <span class="text-[8px] font-bold text-gray-400">Simulated Attendance</span>
+                        </div>
+                        <div id="planner-impact-list" class="space-y-2">
+                            <div class="text-center py-2 text-gray-500 text-[10px] italic font-medium">Mark classes to see today's tracker stats</div>
                         </div>
                     </div>
 
-                    <!-- Timetable Header (Auto-Synced Daily) -->
-                    <div class="flex items-center justify-between px-2 pt-1">
-                        <div class="flex items-center gap-2">
-                            <span class="text-[11px] font-black uppercase tracking-widest text-white/80"><i class="fas fa-calendar-alt text-indigo-400 mr-1.5"></i>Class Schedule</span>
-                            <span id="timetable-status-pill" class="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Auto-Synced Daily</span>
+                    <!-- Date-Aware Tracker Header -->
+                    <div class="flex items-center justify-between px-1 stagger-item stagger-1">
+                        <div>
+                            <span class="text-[11px] font-black uppercase tracking-widest text-white/95 flex items-center gap-1.5">
+                                <i class="fas fa-calendar-check text-indigo-400"></i>
+                                <span>Class Schedule</span>
+                            </span>
+                            <p class="text-[10px] font-bold text-indigo-300 mt-0.5" id="tracker-selected-date-label">Friday, Oct 23, 2026</p>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <button type="button" onclick="jumpToTodayTracker()" class="px-2.5 py-1.5 rounded-xl bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-[9px] font-black uppercase tracking-wider active:scale-95 transition">Today</button>
+                            <label class="relative w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-indigo-300 cursor-pointer active:scale-95 transition" title="Pick specific date">
+                                <i class="fas fa-calendar-day text-xs"></i>
+                                <input type="date" id="tracker-date-picker" onchange="onTrackerDateChange(this.value)" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full">
+                            </label>
+                            <button type="button" onclick="toggleSmartTrackerPanel(this)" class="px-2.5 py-1.5 rounded-xl bg-white/5 border border-white/10 text-gray-400 text-[9px] font-black uppercase tracking-wider hover:bg-white/10 transition active:scale-95 flex items-center gap-1">
+                                <i class="fas fa-chart-bar text-[8px]"></i>
+                                <span>Stats</span>
+                            </button>
                         </div>
                     </div>
 
-                    <!-- Day Selector -->
-                    <div class="flex bg-black/40 rounded-[24px] p-1.5 shadow-inner backdrop-blur-md">
-                        <div class="flex w-full overflow-x-auto no-scrollbar gap-1.5" id="planner-days"></div>
+                    <!-- Interactive Week Date Strip -->
+                    <div class="bento-card p-2 stagger-item stagger-2">
+                        <div class="grid grid-cols-5 gap-1.5" id="planner-days"></div>
                     </div>
 
-                    <!-- Row: Mark All + Show Stats toggle -->
-                    <div
-                        class="flex justify-between items-center px-4 py-2 bg-white/5 rounded-2xl border border-white/5">
-                        <button onclick="toggleSelectAllCards()"
-                            class="py-1.5 px-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-[9px] font-black uppercase tracking-widest hover:bg-indigo-500/20 transition-all active:scale-95">
-                            Mark All Attended
+                    <div class="flex justify-between items-center px-3.5 py-2.5 bento-card stagger-item stagger-2">
+                        <button onclick="toggleSelectAllCards()" class="py-1.5 px-3 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[9px] font-black uppercase tracking-widest active:scale-95 transition">
+                            <i class="fas fa-check-double mr-1"></i>Mark All Attended
                         </button>
-                        <button onclick="toggleSmartTrackerPanel(this)"
-                            class="py-1.5 px-3 rounded-xl bg-white/5 border border-white/10 text-gray-400 text-[9px] font-black uppercase tracking-widest hover:bg-white/10 transition-all active:scale-95 flex items-center gap-1.5">
-                            <i class="fas fa-chart-bar text-[8px]"></i> Show Stats
-                        </button>
+                        <span class="text-[9px] font-bold text-gray-400" id="tracker-day-summary">Tap ✓ or ✕ per period</span>
                     </div>
 
-                    <!-- Interactive Timetable Cards -->
-                    <div class="space-y-3" id="planner-classes">
-                        <!-- Class cards injected by JS -->
-                    </div>
+                    <div class="space-y-3 stagger-item stagger-3" id="planner-classes"></div>
 
-                    <!-- Recent History & Logs -->
-                    <div class="glass-panel p-6 rounded-[32px] border-l-4 border-violet-500 mt-4">
-                        <div class="border-t border-white/0 pt-0">
-                            <div class="flex justify-between items-center mb-4 px-1">
-                                <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest">Recent History
-                                </p>
-                                <button onclick="showFullHistory()"
-                                    class="text-[9px] font-black text-indigo-400 uppercase tracking-widest hover:text-indigo-300 transition">View
-                                    Full Log</button>
+                    <div class="bento-card p-5 mt-4 stagger-item stagger-4">
+                        <div class="flex justify-between items-center mb-3">
+                            <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Tracked History</p>
+                            <div class="flex items-center gap-2">
+                                <span class="text-[9px] font-bold text-indigo-400" id="manual-count-badge">0 Logs</span>
+                                <button onclick="showFullHistory()" class="text-[9px] font-black text-indigo-400 uppercase tracking-widest hover:text-indigo-300 transition">View Full Log</button>
                             </div>
-                            <div id="manual-history" class="space-y-2.5"></div>
                         </div>
+                        <div id="manual-history" class="space-y-2"></div>
                     </div>
                 </div>
 
-                <!-- TAB: OTHERS (Academics & Settings Hub) -->
-                <div id="tab-others" class="tab-content space-y-5 pt-2">
+                <!-- TAB 4: ULTRA-BEAUTIFUL BENTO OTHERS SECTION -->
+                <div id="tab-others" class="tab-content space-y-4 pt-2">
 
                     <!-- Loading State -->
                     <div id="acad-loading" class="hidden py-12 flex flex-col items-center justify-center">
                         <div style="position:relative;width:96px;height:96px;margin-bottom:20px;">
-                            <!-- Outer Ring -->
                             <svg style="position:absolute;inset:0;width:100%;height:100%;animation:splashSpin 3.5s linear infinite;" viewBox="0 0 100 100">
                                 <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(99,102,241,0.08)" stroke-width="1.5"/>
                                 <circle cx="50" cy="50" r="46" fill="none" stroke="#6366f1" stroke-width="2.5" stroke-dasharray="65 180" stroke-linecap="round"/>
                             </svg>
-                            <!-- Middle Ring -->
                             <svg style="position:absolute;inset:7px;width:calc(100% - 14px);height:calc(100% - 14px);animation:splashSpinRev 2.2s linear infinite;" viewBox="0 0 80 80">
                                 <circle cx="40" cy="40" r="36" fill="none" stroke="rgba(168,85,247,0.08)" stroke-width="1"/>
                                 <circle cx="40" cy="40" r="36" fill="none" stroke="#a855f7" stroke-width="2" stroke-dasharray="40 120" stroke-linecap="round"/>
                             </svg>
-                            <!-- Inner Ring -->
                             <svg style="position:absolute;inset:14px;width:calc(100% - 28px);height:calc(100% - 28px);animation:splashSpin 1.4s linear infinite;" viewBox="0 0 60 60">
                                 <circle cx="30" cy="30" r="26" fill="none" stroke="rgba(59,130,246,0.05)" stroke-width="1"/>
                                 <circle cx="30" cy="30" r="26" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="20 80" stroke-linecap="round"/>
                             </svg>
-                            <!-- Center Core -->
                             <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
                                 <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#a855f7);box-shadow:0 0 20px rgba(99,102,241,0.5);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.1);">
                                     <i class="fas fa-graduation-cap" style="color:white;font-size:16px;animation:splashPulse 1.2s ease-in-out infinite;"></i>
@@ -816,481 +816,331 @@
                         </button>
                     </div>
 
-                    <!-- MAIN OTHERS HUB (Default View) -->
-                    <div id="others-hub" class="space-y-4">
+                    <!-- MAIN OTHERS HUB -->
+                    <div id="others-hub" class="space-y-4 pb-6">
 
-                        <!-- 1. TOP HERO CARD: CGPA & GPA OF ALL SEMESTERS -->
-                        <div id="others-academic-card" class="glass-panel rounded-[32px] p-6 border border-indigo-500/30 shadow-2xl relative overflow-hidden bg-gradient-to-br from-indigo-950/40 via-[#0b0c14] to-purple-950/30">
-                            <div class="flex items-start justify-between mb-4">
+                        <!-- 1. HERO ACADEMIC STANDING (CGPA + Horizontal Semester Pills) -->
+                        <div id="others-academic-card" class="bento-hero p-5 relative overflow-hidden stagger-item stagger-1">
+                            <div class="absolute -right-8 -top-8 w-36 h-36 rounded-full bg-purple-500/20 blur-3xl pointer-events-none"></div>
+                            <div class="flex items-start justify-between mb-4 relative z-10">
                                 <div>
-                                    <div class="flex items-center gap-2 mb-1.5">
-                                        <span class="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em]">Academic Standing</span>
-                                        <span id="others-cgpa-badge" class="text-[8px] font-black px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider">Overall</span>
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <span class="text-[9px] font-black text-indigo-300 uppercase tracking-[0.2em]">Academic Standing</span>
+                                        <span id="others-cgpa-badge" class="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 uppercase tracking-wider">★ Distinction</span>
                                     </div>
-                                    <div class="flex items-baseline gap-2">
-                                        <span class="text-4xl sm:text-5xl font-black text-white tracking-tight" id="others-cgpa-value">--</span>
-                                        <span class="text-gray-400 text-sm font-bold">/ 10</span>
+                                    <div class="flex items-baseline gap-1.5 mt-1">
+                                        <span class="text-5xl font-black text-emerald-400 tracking-tighter leading-none drop-shadow-[0_0_20px_rgba(16,185,129,0.3)]" id="others-cgpa-value">--</span>
+                                        <span class="text-gray-400 text-xs font-bold uppercase tracking-widest">/ 10 CGPA</span>
                                     </div>
-                                    <p class="text-[11px] text-gray-400 mt-1.5 font-medium" id="others-cgpa-sub">Loading semester records...</p>
+                                    <p class="text-[11px] text-gray-300/90 mt-1.5 font-medium" id="others-cgpa-sub">Loading academic records...</p>
                                 </div>
-                                <div class="w-13 h-13 p-3 rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center text-indigo-400 text-2xl shadow-lg shadow-indigo-500/20 shrink-0">
+                                <div class="w-12 h-12 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 text-xl shadow-lg shadow-indigo-500/20 shrink-0">
                                     <i class="fas fa-graduation-cap"></i>
                                 </div>
                             </div>
 
-                            <!-- Sem-wise GPA chips list -->
-                            <div class="pt-4 border-t border-white/10">
-                                <div class="flex items-center justify-between mb-2.5">
-                                    <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Semester Performance</p>
-                                    <span class="text-[9px] font-bold text-indigo-300/80">Tap any semester to inspect</span>
+                            <!-- Horizontal Scrollable Sem Chips -->
+                            <div class="pt-3.5 border-t border-white/10 relative z-10">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-[8.5px] font-black text-gray-400 uppercase tracking-widest">Semester Performance</span>
+                                    <span class="text-[8.5px] font-bold text-indigo-300">Tap any sem to inspect</span>
                                 </div>
-                                <div id="others-sem-chips-list" class="flex flex-wrap gap-2">
-                                    <div class="text-[10px] text-gray-500 italic py-1">Semester GPAs will appear once synced</div>
-                                </div>
+                                <div id="others-sem-chips-list" class="flex gap-2 overflow-x-auto no-scrollbar pb-0.5"></div>
                             </div>
                         </div>
 
-                        <!-- 3. SECTION: ACADEMICS & EVALUATION -->
-                        <div>
-                            <div class="flex items-center justify-between px-1 mb-2.5">
-                                <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <!-- 2. ACADEMICS BENTO DUO (2-Column Side-by-Side) -->
+                        <div class="stagger-item stagger-2">
+                            <div class="flex items-center justify-between px-1 mb-2">
+                                <span class="text-[9px] font-black text-gray-400 uppercase tracking-[0.18em] flex items-center gap-1.5">
                                     <i class="fas fa-book-open text-indigo-400 text-[10px]"></i>
                                     <span>Academics &amp; Evaluation</span>
-                                </p>
-                                <span class="text-[9px] font-bold text-gray-500">CA &amp; Grade Transcripts</span>
+                                </span>
+                                <span class="text-[8.5px] font-bold text-indigo-400">CA &amp; Grade Transcripts</span>
                             </div>
-
-                            <div class="space-y-3">
-                                <!-- Internal Marks Card -->
-                                <div onclick="openOthersSubView('internals')" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-white/10 hover:border-indigo-500/40 cursor-pointer active:scale-[0.98] transition-all group flex items-center justify-between shadow-lg">
-                                    <div class="flex items-center gap-3.5 min-w-0">
-                                        <div class="w-11 h-11 rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center text-indigo-400 text-lg group-hover:scale-105 transition-transform shrink-0">
+                            <div class="grid grid-cols-2 gap-3">
+                                <!-- Internal Marks Tile -->
+                                <div onclick="openOthersSubView('internals')" class="bento-tile p-4 flex flex-col justify-between cursor-pointer group relative overflow-hidden">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div class="w-11 h-11 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-lg group-hover:scale-105 transition">
                                             <i class="fas fa-pen-nib"></i>
                                         </div>
-                                        <div class="min-w-0">
-                                            <div class="flex items-center gap-2">
-                                                <h4 class="text-sm font-black text-white tracking-tight truncate">Internal Marks</h4>
-                                                <span class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider">CA Tracker</span>
-                                            </div>
-                                            <p class="text-[11px] text-gray-400 mt-0.5 font-medium truncate" id="others-internals-desc">Test 1, Test 2, Tutorials, Labs &amp; CGPA Predictor</p>
-                                        </div>
+                                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase">CA Tracker</span>
                                     </div>
-                                    <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0">
-                                        <i class="fas fa-chevron-right text-xs"></i>
+                                    <div>
+                                        <div class="flex items-center justify-between">
+                                            <h4 class="text-sm font-black text-white tracking-tight">Internal Marks</h4>
+                                            <i class="fas fa-chevron-right text-[10px] text-gray-400 group-hover:text-white group-hover:translate-x-0.5 transition"></i>
+                                        </div>
+                                        <p class="text-[10px] text-gray-400 mt-0.5 leading-snug" id="others-internals-desc">Test 1, Test 2, Tutorials &amp; CGPA Predictor</p>
                                     </div>
                                 </div>
 
-                                <!-- Semester Results Card -->
-                                <div onclick="openOthersSubView('results')" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-white/10 hover:border-emerald-500/40 cursor-pointer active:scale-[0.98] transition-all group flex items-center justify-between shadow-lg">
-                                    <div class="flex items-center gap-3.5 min-w-0">
-                                        <div class="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center text-emerald-400 text-lg group-hover:scale-105 transition-transform shrink-0">
+                                <!-- Semester Results Tile -->
+                                <div onclick="openOthersSubView('results')" class="bento-tile bento-emerald p-4 flex flex-col justify-between cursor-pointer group relative overflow-hidden">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div class="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-lg group-hover:scale-105 transition">
                                             <i class="fas fa-award"></i>
                                         </div>
-                                        <div class="min-w-0">
-                                            <div class="flex items-center gap-2">
-                                                <h4 class="text-sm font-black text-white tracking-tight truncate">Semester Results</h4>
-                                                <span class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase tracking-wider">Grades</span>
-                                            </div>
-                                            <p class="text-[11px] text-gray-400 mt-0.5 font-medium truncate">SGPA progression, degree class &amp; full grades table</p>
-                                        </div>
+                                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase">Grades</span>
                                     </div>
-                                    <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0">
-                                        <i class="fas fa-chevron-right text-xs"></i>
+                                    <div>
+                                        <div class="flex items-center justify-between">
+                                            <h4 class="text-sm font-black text-white tracking-tight">Sem Results</h4>
+                                            <i class="fas fa-chevron-right text-[10px] text-gray-400 group-hover:text-white group-hover:translate-x-0.5 transition"></i>
+                                        </div>
+                                        <p class="text-[10px] text-gray-400 mt-0.5 leading-snug">SGPA progression, degree class &amp; credits</p>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- 4. SECTION: CAMPUS UTILITIES & TOOLS -->
-                        <div>
-                            <div class="flex items-center justify-between px-1 mb-2.5">
-                                <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <!-- 3. CAMPUS HUB & POWER TOOLS (2x2 BENTO GRID) -->
+                        <div class="stagger-item stagger-3">
+                            <div class="flex items-center justify-between px-1 mb-2">
+                                <span class="text-[9px] font-black text-gray-400 uppercase tracking-[0.18em] flex items-center gap-1.5">
                                     <i class="fas fa-compass text-purple-400 text-[10px]"></i>
                                     <span>Campus Hub &amp; Tools</span>
-                                </p>
-                                <span class="text-[9px] font-bold text-gray-500">Calendar &bull; Diff &bull; Bot</span>
+                                </span>
+                                <span class="text-[8.5px] font-bold text-purple-400">Calendar • Diff • Bot</span>
                             </div>
 
-                            <div class="space-y-3">
-                                <!-- Feedback Automation Card (Top of Campus Hub) -->
-                                <div id="others-feedback-card" onclick="openFeedbackModal()" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-purple-500/25 hover:border-purple-500/50 cursor-pointer active:scale-[0.98] transition-all group flex items-center justify-between shadow-lg bg-gradient-to-r from-purple-950/30 via-transparent to-pink-950/20">
-                                    <div class="flex items-center gap-3.5 min-w-0">
-                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-pink-600 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-purple-500/30 text-lg group-hover:scale-105 transition-transform shrink-0">
+                            <div class="grid grid-cols-2 gap-3">
+                                <!-- Tool 1: Feedback Automation -->
+                                <div id="others-feedback-card" onclick="openFeedbackModal()" class="bento-tile bento-purple p-4 flex flex-col justify-between cursor-pointer group">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-pink-600 to-amber-500 flex items-center justify-center text-white text-lg shadow-lg shadow-purple-500/30 group-hover:scale-105 transition">
                                             <i class="fas fa-bolt"></i>
                                         </div>
-                                        <div class="min-w-0">
-                                            <div class="flex items-center gap-2">
-                                                <h4 class="text-sm font-black text-white tracking-tight truncate">Feedback Automation</h4>
-                                                <span class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-purple-500/25 text-purple-300 border border-purple-500/30 uppercase tracking-wider">Auto 5★</span>
-                                            </div>
-                                            <p class="text-[11px] text-gray-400 mt-0.5 font-medium truncate">1-Click 5-Star automated entry bot for Intermediate &amp; EndSem</p>
-                                        </div>
+                                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-purple-500/25 text-purple-200 border border-purple-400/30 uppercase">Auto 5★</span>
                                     </div>
-                                    <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-purple-300 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0">
-                                        <i class="fas fa-chevron-right text-xs"></i>
+                                    <div>
+                                        <div class="flex items-center justify-between">
+                                            <h4 class="text-xs font-black text-white">Feedback Automation</h4>
+                                            <i class="fas fa-chevron-right text-[9px] text-purple-300"></i>
+                                        </div>
+                                        <p class="text-[10px] text-gray-400 mt-0.5 leading-tight">1-Click 5-Star automated entry bot</p>
                                     </div>
                                 </div>
 
-                                <!-- Academic Calendar Hub Card -->
-                                <div onclick="openFullAcademicCalendar()" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-indigo-500/25 hover:border-indigo-500/50 cursor-pointer active:scale-[0.98] transition-all group flex items-center justify-between shadow-lg bg-gradient-to-r from-indigo-950/25 via-transparent to-purple-950/20">
-                                    <div class="flex items-center gap-3.5 min-w-0">
-                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30 text-lg group-hover:scale-105 transition-transform shrink-0">
-                                            <i class="fas fa-calendar-alt"></i>
-                                        </div>
-                                        <div class="min-w-0">
-                                            <div class="flex items-center gap-2">
-                                                <h4 class="text-sm font-black text-white tracking-tight truncate">Academic Calendar Hub</h4>
-                                                <span class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider">Academic Planner</span>
-                                            </div>
-                                            <p class="text-[11px] text-gray-400 mt-0.5 font-medium truncate">Google Calendar view, Event Planner &amp; CA/Exam dates</p>
-                                        </div>
-                                    </div>
-                                    <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-indigo-300 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0">
-                                        <i class="fas fa-arrow-up-right-from-square text-xs"></i>
-                                    </div>
-                                </div>
-
-                                <!-- Attendance Comparison Card (Below Academic Calendar Hub) -->
-                                <div id="others-attendance-compare-card" onclick="openAttendanceComparisonModal()" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-purple-500/25 hover:border-indigo-500/50 cursor-pointer active:scale-[0.98] transition-all group flex items-center justify-between shadow-lg bg-gradient-to-r from-purple-950/25 via-transparent to-indigo-950/20">
-                                    <div class="flex items-center gap-3.5 min-w-0">
-                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-pink-500 flex items-center justify-center text-white shadow-lg shadow-purple-500/30 text-lg group-hover:scale-105 transition-transform shrink-0">
-                                            <i class="fas fa-history"></i>
-                                        </div>
-                                        <div class="min-w-0">
-                                            <div class="flex items-center gap-2">
-                                                <h4 class="text-sm font-black text-white tracking-tight truncate">Compare Attendance</h4>
-                                                <span id="compare-change-badge" class="hidden text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">--</span>
-                                            </div>
-                                            <p class="text-[11px] text-gray-400 mt-0.5 font-medium truncate" id="compare-dates-preview">Compare before vs now &bull; eCampus update log</p>
-                                        </div>
-                                    </div>
-                                    <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-indigo-300 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0">
-                                        <i class="fas fa-chevron-right text-xs"></i>
-                                    </div>
-                                </div>
-
-                                <!-- Sem Pass Mark Matrix & Calculator Card -->
-                                <div id="others-pass-matrix-card" onclick="openPassMatrixModal()" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-rose-500/25 hover:border-rose-500/50 cursor-pointer active:scale-[0.98] transition-all group flex items-center justify-between shadow-lg bg-gradient-to-r from-rose-950/30 via-transparent to-amber-950/20">
-                                    <div class="flex items-center gap-3.5 min-w-0">
-                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 text-lg group-hover:scale-105 transition-transform shrink-0">
+                                <!-- Tool 2: Pass Target Matrix -->
+                                <div id="others-pass-matrix-card" onclick="openPassMatrixModal()" class="bento-tile bento-rose p-4 flex flex-col justify-between cursor-pointer group">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white text-lg shadow-lg shadow-rose-500/30 group-hover:scale-105 transition">
                                             <i class="fas fa-bullseye"></i>
                                         </div>
-                                        <div class="min-w-0">
-                                            <div class="flex items-center gap-2">
-                                                <h4 class="text-sm font-black text-white tracking-tight truncate">Sem Pass Target Predictor</h4>
-                                                <span class="text-[8px] font-extrabold px-2 py-0.5 rounded-full bg-rose-500/25 text-rose-300 border border-rose-500/30 uppercase tracking-wider">40:60 Rule</span>
-                                            </div>
-                                            <p class="text-[11px] text-gray-400 mt-0.5 font-medium truncate">PSG Tech 40:60 formula &amp; instant mobile pass predictor</p>
-                                        </div>
+                                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-rose-500/25 text-rose-200 border border-rose-400/30 uppercase">40:60 Rule</span>
                                     </div>
-                                    <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-rose-300 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0">
-                                        <i class="fas fa-chevron-right text-xs"></i>
+                                    <div>
+                                        <div class="flex items-center justify-between">
+                                            <h4 class="text-xs font-black text-white">Sem Pass Target Predictor</h4>
+                                            <i class="fas fa-chevron-right text-[9px] text-rose-300"></i>
+                                        </div>
+                                        <p class="text-[10px] text-gray-400 mt-0.5 leading-tight">PSG Tech 40:60 formula &amp; pass math</p>
+                                    </div>
+                                </div>
+
+                                <!-- Tool 3: Compare Attendance -->
+                                <div id="others-attendance-compare-card" onclick="openAttendanceComparisonModal()" class="bento-tile bento-cyan p-4 flex flex-col justify-between cursor-pointer group">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center text-white text-lg shadow-lg shadow-cyan-500/25 group-hover:scale-105 transition">
+                                            <i class="fas fa-history"></i>
+                                        </div>
+                                        <span id="compare-change-badge" class="text-[8px] font-black px-2 py-0.5 rounded-full uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Baseline</span>
+                                    </div>
+                                    <div>
+                                        <div class="flex items-center justify-between">
+                                            <h4 class="text-xs font-black text-white">Compare Attendance</h4>
+                                            <i class="fas fa-chevron-right text-[9px] text-cyan-300"></i>
+                                        </div>
+                                        <p class="text-[10px] text-gray-400 mt-0.5 truncate" id="compare-dates-preview">Compare before vs latest sync</p>
+                                    </div>
+                                </div>
+
+                                <!-- Tool 4: Academic Calendar -->
+                                <div onclick="switchTab('calendar', 1)" class="bento-tile bento-amber p-4 flex flex-col justify-between cursor-pointer group">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white text-lg shadow-lg shadow-amber-500/25 group-hover:scale-105 transition">
+                                            <i class="fas fa-calendar-alt"></i>
+                                        </div>
+                                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-amber-500/25 text-amber-200 border border-amber-400/30 uppercase">2026 Odd</span>
+                                    </div>
+                                    <div>
+                                        <div class="flex items-center justify-between">
+                                            <h4 class="text-xs font-black text-white">Academic Calendar</h4>
+                                            <i class="fas fa-chevron-right text-[9px] text-amber-300"></i>
+                                        </div>
+                                        <p class="text-[10px] text-gray-400 mt-0.5 leading-tight">Cycle tests, exams &amp; holidays</p>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
-                            <!-- SETTINGS & PREFERENCES SECTION -->
-                            <div class="pt-2">
-                                <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest px-1 mb-2.5">Settings &amp; App</p>
-
-                                <div class="space-y-3">
-                                    <!-- Student Profile & Academic Identity Card -->
-                                    <div class="glass-panel rounded-[24px] p-4 border border-indigo-500/20 relative overflow-hidden bg-gradient-to-r from-indigo-950/30 via-white/[0.02] to-purple-950/20 shadow-lg">
-                                        <div class="flex items-center justify-between gap-3">
-                                            <div class="flex items-center gap-3.5 min-w-0">
-                                                <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 p-0.5 shadow-lg shadow-indigo-500/20 shrink-0">
-                                                    <div class="w-full h-full rounded-[13px] bg-[#0c0d14] flex items-center justify-center text-white text-base font-black">
-                                                        <i class="fas fa-user-graduate text-indigo-400"></i>
-                                                    </div>
-                                                </div>
-                                                <div class="min-w-0">
-                                                    <div class="flex items-center gap-2">
-                                                        <h3 class="text-sm font-black text-white tracking-tight uppercase truncate" id="others-profile-roll">--</h3>
-                                                        <span id="settings-roll" class="hidden">--</span>
-                                                        <span class="px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0 flex items-center gap-1">
-                                                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                                            <span>PSG Tech</span>
-                                                        </span>
-                                                    </div>
-                                                    <p class="text-[10px] text-indigo-300/80 font-bold uppercase tracking-wider mt-0.5" id="others-profile-meta">Undergraduate &bull; eCampus Synced</p>
-                                                </div>
-                                            </div>
-                                            <button type="button" onclick="refreshAcademics()" class="w-9 h-9 rounded-xl bg-white/5 hover:bg-white/10 active:scale-95 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white transition cursor-pointer shrink-0" title="Refresh Academic Records">
-                                                <i class="fas fa-arrows-rotate text-xs"></i>
-                                            </button>
-                                        </div>
+                        <!-- 4. STUDENT PROFILE & SETTINGS GROUPED LIST -->
+                        <div class="bento-group stagger-item stagger-4 overflow-hidden">
+                            <!-- Profile Header -->
+                            <div class="p-4 flex items-center gap-3.5 border-b border-white/10 bg-white/[0.02]">
+                                <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center text-white text-lg shadow-lg shadow-indigo-500/30 shrink-0">
+                                    <i class="fas fa-user-graduate"></i>
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center gap-2">
+                                        <h3 class="text-sm font-black text-white tracking-wide uppercase truncate" id="others-profile-roll">STUDENT</h3>
+                                        <span class="text-[8px] font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30 uppercase tracking-widest shrink-0">Synced</span>
                                     </div>
-
-                                    <!-- Manual Attendance Include Toggle -->
-                                    <div class="glass-panel rounded-[24px] p-4 border border-white/5 flex justify-between items-center">
-                                        <div class="flex items-center gap-3.5">
-                                            <div class="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center text-violet-400 text-base">
-                                                <i class="fas fa-calendar-check"></i>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-bold text-white">Include Manual Entries</div>
-                                                <div class="text-[10px] text-gray-400 mt-0.5 font-medium">Affects home dashboard stats</div>
-                                            </div>
-                                        </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
-                                            <input type="checkbox" id="settings-include-manual" class="sr-only peer" onchange="toggleManualImpact(this)">
-                                            <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                                        </label>
-                                    </div>
-
-                                    <!-- Universal PWA App Install & Status Button (Android & iOS) -->
-                                    <div class="glass-panel rounded-[24px] p-4 border border-indigo-500/25 bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 flex justify-between items-center cursor-pointer hover:border-indigo-500/50 active:scale-[0.98] transition-all group shadow-lg" id="universal-install-card" onclick="triggerInstall()">
-                                        <div class="flex items-center gap-3.5">
-                                            <div class="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-base group-hover:scale-105 transition-transform" id="universal-install-icon">
-                                                <i class="fas fa-mobile-screen-button"></i>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-bold text-white flex items-center gap-2">
-                                                    <span id="universal-install-title">Install Bunker App</span>
-                                                    <span id="universal-install-badge" class="text-[8px] font-black text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded-full border border-indigo-500/30 uppercase tracking-widest">PWA</span>
-                                                </div>
-                                                <div class="text-[10px] text-gray-400 mt-0.5 font-medium" id="universal-install-sub">Add to Home Screen &bull; Instant 0ms Offline Speed</div>
-                                            </div>
-                                        </div>
-                                        <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-indigo-400 group-hover:translate-x-0.5 transition-transform shrink-0" id="universal-install-action-icon">
-                                            <i class="fas fa-arrow-down-to-bracket text-xs"></i>
-                                        </div>
-                                    </div>
-                                    <div id="settings-install-btn" class="hidden"></div>
-
-                                    <!-- Academic Regulations & Grading Button -->
-                                    <div class="glass-panel rounded-[24px] p-4 border border-white/5 flex justify-between items-center cursor-pointer hover:bg-white/10 active:scale-[0.98] transition-all group" onclick="showAcademicRegulations()">
-                                        <div class="flex items-center gap-3.5">
-                                            <div class="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400 text-base group-hover:scale-105 transition-transform">
-                                                <i class="fas fa-book-reader"></i>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-bold text-white">Academic Regulations</div>
-                                                <div class="text-[10px] text-gray-400 mt-0.5 font-medium">PSG College of Technology Rules &amp; Grading</div>
-                                            </div>
-                                        </div>
-                                        <i class="fas fa-chevron-right text-white/20 text-xs"></i>
-                                    </div>
-
-                                    <!-- Demo Time Travel (Hidden by default) -->
-                                    <div id="demo-date-picker" class="hidden glass-panel rounded-[24px] p-4 border border-indigo-500/20 bg-indigo-500/10">
-                                        <div class="flex justify-between items-center mb-2.5">
-                                            <div>
-                                                <div class="text-xs font-bold text-indigo-300">Time Travel</div>
-                                                <div class="text-[9px] text-indigo-400/60 font-bold uppercase tracking-widest">Demo Mode Only</div>
-                                            </div>
-                                            <i class="fas fa-history text-indigo-400 text-sm"></i>
-                                        </div>
-                                        <input type="date" id="sim-date-input" onchange="updateSimDate(this)"
-                                            class="w-full bg-[#111] text-white text-xs font-bold p-2.5 rounded-xl border border-white/10 outline-none focus:border-indigo-500 transition shadow-inner">
-                                    </div>
-
-                                    <!-- Clear Cache & Re-Sync Button (Hidden) -->
-                                    <div id="settings-clear-cache-btn" class="hidden glass-panel rounded-[24px] p-4 border border-white/5 flex justify-between items-center cursor-pointer hover:bg-white/10 active:scale-[0.98] transition-all group" onclick="clearBunkerCache()">
-                                        <div class="flex items-center gap-3.5">
-                                            <div class="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400 text-base group-hover:scale-105 transition-transform">
-                                                <i class="fas fa-broom"></i>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-bold text-white">Clear Cache &amp; Re-Sync</div>
-                                                <div class="text-[10px] text-gray-400 mt-0.5 font-medium">Reset local storage &amp; fetch clean eCampus data</div>
-                                            </div>
-                                        </div>
-                                        <i class="fas fa-chevron-right text-white/20 text-xs"></i>
-                                    </div>
-
-                                    <!-- Privacy Policy & Terms Button -->
-                                    <div class="glass-panel rounded-[24px] p-4 border border-white/5 flex justify-between items-center cursor-pointer hover:bg-white/10 active:scale-[0.98] transition-all group" onclick="showPrivacyPolicy()">
-                                        <div class="flex items-center gap-3.5">
-                                            <div class="w-10 h-10 rounded-xl bg-gray-500/10 flex items-center justify-center text-gray-400 text-base group-hover:scale-105 transition-transform">
-                                                <i class="fas fa-shield-alt"></i>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-bold text-white">Privacy Policy &amp; Terms</div>
-                                                <div class="text-[10px] text-gray-400 mt-0.5 font-medium">Data privacy &amp; security guidelines</div>
-                                            </div>
-                                        </div>
-                                        <i class="fas fa-chevron-right text-white/20 text-xs"></i>
-                                    </div>
-
-                                    <!-- Logout / Sign Out Button -->
-                                    <button onclick="logout()" class="w-full py-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 font-black text-xs uppercase tracking-wider hover:bg-rose-500/20 active:scale-95 transition-all flex items-center justify-center gap-2.5 mt-2 shadow-lg">
-                                        <i class="fas fa-sign-out-alt text-sm"></i>
-                                        <span>Sign Out</span>
-                                    </button>
+                                    <p class="text-[11px] text-indigo-300/80 font-medium truncate mt-0.5" id="others-profile-meta">PSG College of Technology</p>
                                 </div>
                             </div>
+
+                            <!-- Settings Options List -->
+                            <div class="divide-y divide-white/5 text-xs">
+                                <!-- Row 1: Manual Attendance in Dashboard -->
+                                <div class="p-3.5 px-4 flex items-center justify-between">
+                                    <div class="flex items-center gap-3.5">
+                                        <div class="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center text-indigo-400 text-sm">
+                                            <i class="fas fa-toggle-on"></i>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs font-bold text-white">Include Manual Entries</div>
+                                            <div class="text-[10px] text-gray-400">Factor tracker logs into dashboard calculations</div>
+                                        </div>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="settings-include-manual" class="sr-only peer" onchange="toggleManualImpact(this)">
+                                        <div class="w-11 h-6 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                    </label>
+                                </div>
+
+                                <!-- Row 2: Install Bunker App PWA -->
+                                <div id="universal-install-card" onclick="triggerUniversalInstall()" class="p-3.5 px-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.03] active:bg-white/5 transition">
+                                    <div class="flex items-center gap-3.5">
+                                        <div class="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-sm">
+                                            <i class="fas fa-mobile-screen-button"></i>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs font-bold text-white flex items-center gap-2">
+                                                <span id="universal-install-title">Install Bunker App</span>
+                                                <span class="text-[8px] font-black text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded-full border border-indigo-500/30 uppercase tracking-widest">PWA</span>
+                                            </div>
+                                            <div class="text-[10px] text-gray-400">Add to Home Screen • Instant 0ms Offline Speed</div>
+                                        </div>
+                                    </div>
+                                    <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-indigo-400">
+                                        <i class="fas fa-arrow-down-to-bracket text-xs"></i>
+                                    </div>
+                                </div>
+
+                                <!-- Row 3: Academic Regulations -->
+                                <div onclick="showAcademicRegulations()" class="p-3.5 px-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.03] active:bg-white/5 transition">
+                                    <div class="flex items-center gap-3.5">
+                                        <div class="w-9 h-9 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-400 text-sm">
+                                            <i class="fas fa-book-reader"></i>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs font-bold text-white">Academic Regulations</div>
+                                            <div class="text-[10px] text-gray-400">PSG College of Technology Rules &amp; Grading</div>
+                                        </div>
+                                    </div>
+                                    <i class="fas fa-chevron-right text-white/25 text-xs"></i>
+                                </div>
+
+                                <!-- Row 4: Privacy & Security -->
+                                <div onclick="showPrivacyPolicy()" class="p-3.5 px-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.03] active:bg-white/5 transition">
+                                    <div class="flex items-center gap-3.5">
+                                        <div class="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center text-emerald-400 text-sm">
+                                            <i class="fas fa-shield-alt"></i>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs font-bold text-white">Privacy Policy &amp; Terms</div>
+                                            <div class="text-[10px] text-gray-400">Data privacy &amp; zero logging guidelines</div>
+                                        </div>
+                                    </div>
+                                    <i class="fas fa-chevron-right text-white/25 text-xs"></i>
+                                </div>
+                            </div>
+
+                            <!-- Sleek Sign Out Button -->
+                            <button onclick="logout()" class="w-full py-4 mt-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-400 font-black text-xs uppercase tracking-wider active:scale-95 transition-all flex items-center justify-center gap-2.5 shadow-lg">
+                                <i class="fas fa-sign-out-alt text-sm"></i>
+                                <span>Sign Out</span>
+                            </button>
                         </div>
                     </div>
 
-                    <!-- SUBVIEW: INTERNAL MARKS -->
-                    <div id="others-subview-internals" class="hidden space-y-4">
-                        <div class="flex items-center justify-between py-2 px-1 sticky top-0 z-20 backdrop-blur-xl bg-[#04030a]/85 border-b border-white/5">
-                            <button type="button" onclick="closeOthersSubView()" class="flex items-center gap-2 py-2 px-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-indigo-300 hover:text-white text-xs font-bold active:scale-95 transition">
-                                <i class="fas fa-arrow-left text-[11px]"></i>
-                                <span>Back to Others</span>
+                    <!-- SUBVIEW 1: INTERNAL MARKS + GPA/CGPA PREDICTOR SETUP -->
+                    <div id="others-subview-internals" class="hidden space-y-4 pb-6">
+                        <div class="flex items-center justify-between py-2 px-1 sticky top-0 z-20 backdrop-blur-xl bg-[#04030a]/90 border-b border-white/5">
+                            <button type="button" onclick="closeOthersSubView()" class="flex items-center gap-2 py-2 px-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-indigo-300 text-xs font-bold active:scale-95 transition">
+                                <i class="fas fa-arrow-left text-[10px]"></i>
+                                <span>Back</span>
                             </button>
                             <span class="text-xs font-black text-white uppercase tracking-wider">Internal Marks</span>
-                            <button type="button" onclick="refreshAcademics()" class="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white active:scale-95 transition" title="Refresh">
-                                <i class="fas fa-redo text-xs"></i>
+                            <button type="button" onclick="openPassMatrixModal()" class="px-2.5 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-black uppercase active:scale-95 transition">
+                                Pass Targets
                             </button>
                         </div>
 
-                        <!-- INTERNALS PANEL CONTENT -->
-                        <div id="acad-panel-internals" class="space-y-4">
-                            <!-- Hero Summary -->
-                            <div id="internals-hero" class="glass-panel rounded-[32px] p-6 border-l-4 border-indigo-500">
-                                <div class="flex items-start justify-between mb-3">
+                        <!-- Accurate Live & Max Possible SGPA / CGPA Card -->
+                        <div class="bento-hero p-5 space-y-3.5">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <span class="text-[9px] font-black text-indigo-300 uppercase tracking-[0.2em] block">Accurate Grade Engine</span>
+                                    <h4 class="text-sm font-black text-white mt-0.5">SGPA &amp; CGPA Ceiling</h4>
+                                </div>
+                                <span class="text-[8.5px] font-black px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 uppercase" id="internals-Sync-Pill">40:60 Ceiled</span>
+                            </div>
+
+                            <!-- 4-Column Accurate Metrics: Simulated vs Max Possible -->
+                            <div class="grid grid-cols-2 gap-2.5">
+                                <div class="bg-black/45 p-3 rounded-2xl border border-white/10 flex items-center justify-between">
                                     <div>
-                                        <p class="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em] mb-1">Cumulative GPA</p>
-                                        <div class="flex items-end gap-2">
-                                            <span class="text-4xl font-black text-white leading-none" id="internals-cgpa-value">--</span>
-                                            <span class="text-gray-500 text-xs font-bold mb-1">/10</span>
-                                        </div>
-                                        <p class="text-[10px] text-gray-500 mt-1 font-medium" id="internals-status">Loading marks...</p>
+                                        <span class="text-[8px] font-black text-gray-400 uppercase tracking-wider block">Sim SGPA</span>
+                                        <span class="text-2xl font-black text-white leading-tight" id="predicted-sgpa-value">--</span>
                                     </div>
-                                    <div class="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center shrink-0">
-                                        <i class="fas fa-graduation-cap text-xl text-indigo-400"></i>
+                                    <div class="text-right border-l border-white/10 pl-3">
+                                        <span class="text-[8px] font-black text-amber-300 uppercase tracking-wider block">Max SGPA</span>
+                                        <span class="text-lg font-black text-amber-400 leading-tight" id="max-sgpa-value">--</span>
                                     </div>
                                 </div>
-                                <!-- Sem-wise GPA chips -->
-                                <div id="internals-sem-chips" class="hidden pt-3 border-t border-white/5">
-                                    <p class="text-[8px] font-black text-gray-600 uppercase tracking-widest mb-2">Semester GPA</p>
-                                    <div id="internals-sem-chips-list" class="flex flex-wrap gap-2"></div>
+                                <div class="bg-black/45 p-3 rounded-2xl border border-white/10 flex items-center justify-between">
+                                    <div>
+                                        <span class="text-[8px] font-black text-gray-400 uppercase tracking-wider block">Sim CGPA</span>
+                                        <span class="text-2xl font-black text-emerald-400 leading-tight" id="predicted-cgpa-value">--</span>
+                                    </div>
+                                    <div class="text-right border-l border-white/10 pl-3">
+                                        <span class="text-[8px] font-black text-purple-300 uppercase tracking-wider block">Max CGPA</span>
+                                        <span class="text-lg font-black text-purple-300 leading-tight" id="max-cgpa-value">--</span>
+                                    </div>
                                 </div>
                             </div>
 
-                            <!-- Sem Pass Mark Matrix Banner Card -->
-                            <div onclick="openPassMatrixModal()" class="glass-panel rounded-[26px] p-4 sm:p-5 border border-rose-500/30 bg-gradient-to-r from-rose-950/40 via-purple-950/30 to-black/40 shadow-xl flex items-center justify-between gap-3 cursor-pointer active:scale-[0.99] transition-all group">
-                                <div class="flex items-center gap-3.5 min-w-0">
-                                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 shrink-0">
-                                        <i class="fas fa-bullseye text-base"></i>
-                                    </div>
-                                    <div class="min-w-0">
-                                        <div class="flex items-center gap-2">
-                                            <span class="text-xs font-black text-white truncate">PSG Sem Pass Target Predictor</span>
-                                            <span class="text-[8px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">Official 40:60</span>
-                                        </div>
-                                        <p class="text-[10px] text-gray-400 mt-0.5 font-medium truncate">Tap to predict exact semester marks needed to pass any subject</p>
-                                    </div>
-                                </div>
-                                <div class="w-8 h-8 rounded-xl bg-white/5 group-hover:bg-rose-500/20 flex items-center justify-center text-gray-400 group-hover:text-rose-300 transition shrink-0">
-                                    <i class="fas fa-chevron-right text-xs"></i>
-                                </div>
+                            <!-- Quick Scenario Presets -->
+                            <div class="grid grid-cols-4 gap-1.5 pt-0.5">
+                                <button type="button" onclick="applyGlobalExamPreset('pass')" class="py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[9px] font-black uppercase active:scale-95 transition">Min Pass</button>
+                                <button type="button" onclick="applyGlobalExamPreset(75)" class="py-2 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[9px] font-black uppercase active:scale-95 transition">75 / 100</button>
+                                <button type="button" onclick="applyGlobalExamPreset(85)" class="py-2 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-300 text-[9px] font-black uppercase active:scale-95 transition">85 / 100</button>
+                                <button type="button" onclick="applyGlobalExamPreset(100)" class="py-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[9px] font-black uppercase active:scale-95 transition">Max (100)</button>
                             </div>
-
-                            <!-- CGPA Predictor Card -->
-                            <details id="cgpa-predictor" class="group glass-panel rounded-[32px] p-6 border-l-4 border-purple-500 hidden transition-all duration-300 cursor-pointer">
-                                <summary class="flex items-center justify-between list-none select-none">
-                                    <div>
-                                        <p class="text-[9px] font-black text-purple-400 uppercase tracking-[0.2em] mb-1">Semester &amp; CGPA Predictor</p>
-                                        <h3 class="text-white font-bold text-sm group-open:mb-0">Predict from Simulated Grades</h3>
-                                    </div>
-                                    <div class="w-10 h-10 rounded-2xl bg-purple-500/10 flex items-center justify-center transition-all group-open:bg-white/5">
-                                        <i class="fas fa-chevron-down text-purple-400 text-xs transition-transform duration-300 group-open:rotate-180"></i>
-                                    </div>
-                                </summary>
-
-                                <div class="pt-5 mt-5 border-t border-white/5 cursor-default">
-                                    <!-- Global Final Exam Scenario Picker -->
-                                    <div class="mb-5">
-                                        <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-3">Assume Final Exam Score (All Subjects)</p>
-                                        <div class="grid grid-cols-2 gap-2">
-                                            <button id="btn-scenario-exact-pass" data-val="exact-pass"
-                                                onclick="setGlobalSemScenario('exact-pass')"
-                                                class="scenario-btn col-span-2 py-3 px-3 rounded-2xl bg-gradient-to-r from-rose-500/15 via-purple-500/15 to-indigo-500/15 border border-rose-500/30 text-xs font-black text-white transition-all duration-200 active:scale-95 flex items-center justify-between">
-                                                <div class="flex items-center gap-2.5">
-                                                    <div class="w-7 h-7 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 text-xs shrink-0">
-                                                        <i class="fas fa-bullseye"></i>
-                                                    </div>
-                                                    <div class="text-left">
-                                                        <div class="text-xs font-black text-rose-300">Exact Pass Matrix (Per Subject)</div>
-                                                        <div class="text-[9.5px] text-gray-400 font-medium">Auto-apply min sem marks based on PSG 40:60 table</div>
-                                                    </div>
-                                                </div>
-                                                <span class="text-[9.5px] font-black text-rose-300 px-2 py-0.5 rounded-lg bg-rose-500/20 border border-rose-500/30 shrink-0">Pass 50%</span>
-                                            </button>
-                                            <button id="btn-scenario-pass" data-val="50"
-                                                onclick="setGlobalSemScenario(50)"
-                                                class="scenario-btn py-3 px-2 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-xs font-black text-rose-400 transition-all duration-200 active:scale-95">
-                                                <i class="fas fa-check-circle mr-1 text-[10px]"></i>Flat 50 / 100<br>
-                                                <span class="text-[9px] font-medium opacity-70">All subjects: 50</span>
-                                            </button>
-                                            <button id="btn-scenario-a" data-val="72"
-                                                onclick="setGlobalSemScenario(72)"
-                                                class="scenario-btn py-3 px-2 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-black text-indigo-400 transition-all duration-200 active:scale-95">
-                                                <i class="fas fa-graduation-cap mr-1 text-[10px]"></i>Aim A (71%)<br>
-                                                <span class="text-[9px] font-medium opacity-70">72 / 100</span>
-                                            </button>
-                                            <button id="btn-scenario-aplus" data-val="82"
-                                                onclick="setGlobalSemScenario(82)"
-                                                class="scenario-btn py-3 px-2 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-xs font-black text-purple-400 transition-all duration-200 active:scale-95">
-                                                <i class="fas fa-star mr-1 text-[10px]"></i>Aim A+ (81%)<br>
-                                                <span class="text-[9px] font-medium opacity-70">82 / 100</span>
-                                            </button>
-                                            <button id="btn-scenario-s" data-val="92"
-                                                onclick="setGlobalSemScenario(92)"
-                                                class="scenario-btn py-3 px-2 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs font-black text-amber-400 transition-all duration-200 active:scale-95">
-                                                <i class="fas fa-trophy mr-1 text-[10px]"></i>Aim S (91%)<br>
-                                                <span class="text-[9px] font-medium opacity-70">92 / 100</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- Predictor Stats -->
-                                    <div class="grid grid-cols-2 gap-4 bg-black/20 p-4 rounded-[24px] border border-white/5 mb-4 shadow-inner">
-                                        <div class="text-center">
-                                            <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">Predicted SGPA</p>
-                                            <span class="text-2xl font-black text-white" id="predicted-sgpa-value">--</span>
-                                        </div>
-                                        <div class="text-center border-l border-white/5">
-                                            <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">Predicted CGPA</p>
-                                            <span class="text-2xl font-black text-purple-400" id="predicted-cgpa-value">--</span>
-                                        </div>
-                                    </div>
-
-                                    <!-- Target 8.5 CGPA Info -->
-                                    <div id="target-cgpa-container" class="bg-indigo-500/10 border border-indigo-500/20 p-3 rounded-xl mb-4 text-center hidden">
-                                        <p class="text-[10px] text-indigo-300 font-bold tracking-wide uppercase mb-1">Target 8.5 CGPA</p>
-                                        <p class="text-xs text-white">You need <span id="required-sgpa-85" class="font-black text-indigo-400 text-sm">--</span> SGPA this semester</p>
-                                    </div>
-
-                                    <!-- Subject Credits Breakdown (collapsible details) -->
-                                    <details class="group/sub">
-                                        <summary class="flex justify-between items-center text-[9px] text-gray-400 font-bold uppercase tracking-widest cursor-pointer list-none select-none">
-                                            <span>Subject Credits &amp; Grades</span>
-                                            <i class="fas fa-chevron-down text-[8px] transition-transform duration-300 group-open/sub:rotate-180"></i>
-                                        </summary>
-                                        <div id="predictor-subjects-list" class="space-y-3 mt-4 transition-all duration-300">
-                                            <!-- Injected by JS -->
-                                        </div>
-                                    </details>
-                                </div>
-                            </details>
-
-                            <!-- Subject Cards -->
-                            <div id="internals-list" class="space-y-3"></div>
                         </div>
+
+                        <div id="internals-list" class="space-y-3"></div>
                     </div>
 
-                    <!-- SUBVIEW: SEMESTER RESULTS -->
-                    <div id="others-subview-results" class="hidden space-y-4">
-                        <div class="flex items-center justify-between py-2 px-1 sticky top-0 z-20 backdrop-blur-xl bg-[#04030a]/85 border-b border-white/5">
-                            <button type="button" onclick="closeOthersSubView()" class="flex items-center gap-2 py-2 px-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-emerald-300 hover:text-white text-xs font-bold active:scale-95 transition">
-                                <i class="fas fa-arrow-left text-[11px]"></i>
+                    <!-- SUBVIEW 2: SEMESTER RESULTS -->
+                    <div id="others-subview-results" class="hidden space-y-4 pb-6">
+                        <div class="flex items-center justify-between py-2 px-1 sticky top-0 z-20 backdrop-blur-xl bg-[#04030a]/90 border-b border-white/5">
+                            <button type="button" onclick="closeOthersSubView()" class="flex items-center gap-2 py-2 px-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-emerald-300 text-xs font-bold active:scale-95 transition">
+                                <i class="fas fa-arrow-left text-[10px]"></i>
                                 <span>Back to Others</span>
                             </button>
                             <span class="text-xs font-black text-white uppercase tracking-wider">Semester Results</span>
-                            <button type="button" onclick="refreshAcademics()" class="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white active:scale-95 transition" title="Refresh">
-                                <i class="fas fa-redo text-xs"></i>
-                            </button>
+                            <span class="text-[10px] font-black text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20" id="results-cgpa-pill">-- CGPA</span>
                         </div>
 
-                        <!-- RESULTS PANEL CONTENT -->
+                        <!-- Results Panel Content -->
                         <div id="acad-panel-results" class="space-y-4">
-                            <!-- Hero -->
-                            <div class="glass-panel rounded-[32px] p-6 border-l-4 border-emerald-500">
+                            <!-- Hero Statement of Grades -->
+                            <div class="bento-hero p-5">
                                 <div class="flex items-center justify-between">
                                     <div>
                                         <p class="text-[9px] font-black text-emerald-400 uppercase tracking-[0.2em] mb-1" id="gpa-hero-title">Semester GPA</p>
@@ -1301,7 +1151,7 @@
                                         <p class="text-[10px] text-gray-500 mt-1 font-medium" id="cgpa-credits">-- total credits</p>
                                     </div>
                                     <div class="w-14 h-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center">
-                                        <i class="fas fa-star text-xl text-emerald-400"></i>
+                                        <i class="fas fa-award text-2xl text-emerald-400"></i>
                                     </div>
                                 </div>
                                 <!-- Sem-wise GPA chips in Results -->
@@ -1315,368 +1165,379 @@
                             </div>
 
                             <!-- Progression Chart -->
-                            <div class="glass-panel rounded-[32px] p-5">
-                                <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-4">Semester Progression</p>
-                                <div id="cgpa-chart" class="w-full overflow-x-auto">
-                                    <!-- SVG chart injected by JS -->
-                                </div>
+                            <div class="bento-card p-5">
+                                <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-4">Semester Progression</p>
+                                <div id="cgpa-chart" class="w-full overflow-x-auto"></div>
                             </div>
 
                             <!-- Degree Classification Projection -->
-                            <div class="glass-panel rounded-[32px] p-5 border-l-4 border-indigo-500" id="degree-classification-card">
+                            <div class="bento-card p-5 border-l-4 border-indigo-500" id="degree-classification-card">
                                 <p class="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em] mb-3">Degree Classification</p>
                                 <div class="flex items-center justify-between mb-3">
                                     <div>
                                         <p id="degree-class-label" class="text-lg font-black text-white">--</p>
-                                        <p id="degree-class-sub" class="text-[10px] text-gray-500 mt-0.5 font-medium">Loading...</p>
+                                        <p id="degree-class-sub" class="text-[10px] text-gray-400 mt-0.5 font-medium">Loading...</p>
                                     </div>
                                     <div id="degree-class-icon" class="w-12 h-12 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-xl">🎓</div>
                                 </div>
-                                <div id="degree-class-progress" class="bg-black/30 rounded-xl p-3 border border-white/5 text-[10px] text-gray-400 font-medium leading-relaxed"></div>
+                                <div id="degree-class-progress" class="bg-black/30 rounded-xl p-3 border border-white/5 text-[10px] text-gray-300 font-medium leading-relaxed"></div>
                             </div>
 
-                            <!-- Sem-by-Sem Breakdown -->
-                            <div id="cgpa-semlist" class="space-y-3"></div>
-
-                            <!-- Full Subject List -->
-                            <div class="pt-2">
-                                <h3 class="font-bold text-lg text-white tracking-tight mb-3 px-1">Semester Courses &amp; Grades</h3>
-                                <div id="gpa-table" class="space-y-2"></div>
-                            </div>
+                            <!-- Semester Breakdown Marks List -->
+                            <div id="results-sem-list" class="space-y-3"></div>
                         </div>
                     </div>
 
-                </div>
-                <!-- End of main-content -->
-
-                <!-- REDESIGNED FLOATING NAVIGATION (Inside dashboard-view so never visible on login) -->
-                <div class="nav-dock-container">
-                    <nav class="nav-dock relative">
-                        <!-- Dynamic Sliding Glow Indicator -->
-                        <div id="nav-dock-glow" class="absolute -z-10 w-14 h-14 rounded-full blur-2xl pointer-events-none" style="background: radial-gradient(circle, rgba(139,92,246,0.5), rgba(99,102,241,0.3)); left: 0; top: 0; transform: translate3d(0,0,0) scale(0); will-change: transform, opacity; transition: transform 0.32s cubic-bezier(0.25, 1, 0.5, 1), background-color 0.3s ease, opacity 0.3s ease;"></div>
-                        <div class="nav-item active" onclick="switchTab('home', 0)" id="nav-home">
-                            <i class="fas fa-th-large"></i>
-                            <span class="nav-label">Home</span>
-                        </div>
-                        <div class="nav-item" onclick="switchTab('calendar', 1)" id="nav-calendar">
-                            <i class="fas fa-calendar-alt"></i>
-                            <span class="nav-label">Calendar</span>
-                        </div>
-                        <div class="nav-item" onclick="switchTab('planner', 2)" id="nav-planner">
-                            <i class="fas fa-check-double"></i>
-                            <span class="nav-label">Tracker</span>
-                        </div>
-                        <div class="nav-item" onclick="switchTab('others', 3)" id="nav-others">
-                            <i class="fas fa-layer-group"></i>
-                            <span class="nav-label">Others</span>
-                        </div>
-                    </nav>
                 </div>
 
             </div>
-            <!-- End of dashboard-view -->
-        </div>
-        <!-- End of app -->
+            <!-- End of main-content -->
 
-    <!-- REDESIGNED SIMULATOR MODAL -->
-    <div id="sim-modal" class="fixed inset-0 z-[60] hidden flex items-center justify-center p-4 sm:p-6">
-        <div class="absolute inset-0 bg-black/95 opacity-0 transition-opacity duration-300" id="sim-backdrop"
-            onclick="closeSim()"></div>
-        <div class="w-full max-w-[340px] relative z-10 opacity-0 transition-all duration-300 transform scale-95"
-            id="sim-panel">
-            <div class="bg-[#111] rounded-[32px] sm:rounded-[40px] p-5 sm:p-6 pb-7 sm:pb-8 border border-white/10 shadow-2xl relative overflow-hidden">
-
-                <!-- Header -->
-                <div class="flex justify-between items-start mb-8 relative z-10">
-                    <div>
-                        <h3 class="text-xl font-bold text-white leading-tight w-48 truncate" id="sim-subject">
-                            Subject
-                        </h3>
-                        <p class="text-[9px] text-indigo-400 font-bold uppercase tracking-widest mt-1">Prediction
-                            Mode
-                        </p>
+            <!-- FLOATING NAVIGATION DOCK WITH SLIDING GLOW -->
+            <div class="nav-dock-container">
+                <nav class="nav-dock relative" id="nav-dock">
+                    <!-- Dynamic Sliding Glow Indicator -->
+                    <div id="nav-dock-glow" class="absolute -z-10 w-14 h-14 rounded-full blur-2xl pointer-events-none" style="background: radial-gradient(circle, rgba(139,92,246,0.5), rgba(99,102,241,0.3)); left: 0; top: 0; transform: translate3d(0,0,0) scale(0); will-change: transform, opacity; transition: transform 0.32s cubic-bezier(0.25, 1, 0.5, 1), background-color 0.3s ease, opacity 0.3s ease;"></div>
+                    <div class="nav-item active" onclick="switchTab('home', 0)" id="nav-home">
+                        <i class="fas fa-th-large"></i>
+                        <span class="nav-label">Home</span>
                     </div>
-                    <button onclick="closeSim()"
-                        class="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-white/50 hover:bg-white/10 transition"><i
-                            class="fas fa-times text-sm"></i></button>
-                </div>
-
-                <!-- Main Chart -->
-                <div class="flex justify-center mb-8 relative z-10">
-                    <div class="w-52 h-52 relative">
-                        <!-- BG Ring -->
-                        <svg class="w-full h-full transform -rotate-90">
-                            <defs>
-                                <linearGradient id="sim-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" stop-color="#5f5af6" />
-                                    <stop offset="100%" stop-color="#a04ef6" />
-                                </linearGradient>
-                            </defs>
-                            <circle cx="104" cy="104" r="90" stroke="#14141d" stroke-width="10" fill="none">
-                            </circle>
-                            <!-- FG Ring -->
-                            <circle id="sim-ring" cx="104" cy="104" r="90" stroke="url(#sim-grad)" stroke-width="12"
-                                fill="none" stroke-dasharray="565" stroke-dashoffset="0" stroke-linecap="round"
-                                class="transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] filter drop-shadow-[0_0_12px_rgba(99,102,241,0.5)]"></circle>
-                        </svg>
-                        <div class="absolute inset-0 flex flex-col items-center justify-center">
-                            <span id="sim-pct"
-                                class="text-6xl font-black text-white tracking-tighter transition-colors duration-300">0%</span>
-                            <span id="sim-diff"
-                                class="text-[10px] font-bold px-3 py-1 rounded-full bg-white/5 mt-2 uppercase tracking-wide border border-white/5">Current</span>
-                        </div>
+                    <div class="nav-item" onclick="switchTab('calendar', 1)" id="nav-calendar">
+                        <i class="fas fa-calendar-alt"></i>
+                        <span class="nav-label">Calendar</span>
                     </div>
-                </div>
-
-                <!-- Controls -->
-                <div class="space-y-4 relative z-10">
-                    <!-- Attend Control -->
-                    <div
-                        class="bg-white/5 rounded-3xl p-2 pr-3 flex items-center justify-between pl-5 border border-white/5">
-                        <div class="flex items-center gap-3">
-                            <div
-                                class="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-xs">
-                                <i class="fas fa-check"></i>
-                            </div>
-                            <span class="text-[11px] font-bold text-gray-300 uppercase tracking-wider">Attend</span>
-                        </div>
-                        <div class="flex items-center gap-1">
-                            <button onclick="updateBunkSim('attend', -1)"
-                                class="w-10 h-10 rounded-2xl bg-black/40 text-white/50 hover:text-white hover:bg-black/60 active:scale-90 transition flex items-center justify-center"><i
-                                    class="fas fa-minus text-[10px]"></i></button>
-                            <span id="val-attend" class="w-8 text-center font-black text-white text-lg">0</span>
-                            <button onclick="updateBunkSim('attend', 1)"
-                                class="w-10 h-10 rounded-2xl bg-emerald-500 text-black font-bold active:scale-90 transition flex items-center justify-center shadow-lg shadow-emerald-500/20"><i
-                                    class="fas fa-plus text-[10px]"></i></button>
-                        </div>
+                    <div class="nav-item" onclick="switchTab('planner', 2)" id="nav-planner">
+                        <i class="fas fa-check-double"></i>
+                        <span class="nav-label">Tracker</span>
                     </div>
-
-                    <!-- Bunk Control -->
-                    <div
-                        class="bg-white/5 rounded-3xl p-2 pr-3 flex items-center justify-between pl-5 border border-white/5">
-                        <div class="flex items-center gap-3">
-                            <div
-                                class="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 text-xs">
-                                <i class="fas fa-times"></i>
-                            </div>
-                            <span class="text-[11px] font-bold text-gray-300 uppercase tracking-wider">Bunk</span>
-                        </div>
-                        <div class="flex items-center gap-1">
-                            <button onclick="updateBunkSim('bunk', -1)"
-                                class="w-10 h-10 rounded-2xl bg-black/40 text-white/50 hover:text-white hover:bg-black/60 active:scale-90 transition flex items-center justify-center"><i
-                                    class="fas fa-minus text-[10px]"></i></button>
-                            <span id="val-bunk" class="w-8 text-center font-black text-white text-lg">0</span>
-                            <button onclick="updateBunkSim('bunk', 1)"
-                                class="w-10 h-10 rounded-2xl bg-rose-500 text-black font-bold active:scale-90 transition flex items-center justify-center shadow-lg shadow-rose-500/20"><i
-                                    class="fas fa-plus text-[10px]"></i></button>
-                        </div>
+                    <div class="nav-item" onclick="switchTab('others', 3)" id="nav-others">
+                        <i class="fas fa-layer-group"></i>
+                        <span class="nav-label">Others</span>
                     </div>
-                </div>
-
-                <div class="mt-6 text-center">
-                    <button type="button" onclick="resetPredictionSim()"
-                        class="text-[10px] text-gray-400 hover:text-white font-bold uppercase tracking-widest transition active:scale-95 px-4 py-2 rounded-xl hover:bg-white/5 inline-flex items-center gap-1.5">
-                        <i class="fas fa-rotate-left text-[9px]"></i>
-                        <span>Reset Simulation</span>
-                    </button>
-                </div>
-
+                </nav>
             </div>
+
         </div>
+        <!-- End of dashboard-view -->
     </div>
+    <!-- End of app -->
 
+    <!-- ULTRA-BEAUTIFUL SIMULATOR POP-UP MODAL -->
+    <div id="sim-modal" class="fixed inset-0 z-[60] hidden flex items-center justify-center p-4">
+        <div class="absolute inset-0 modal-backdrop-blur" id="sim-backdrop" onclick="closeSim()"></div>
+        <div class="w-full max-w-[355px] relative z-10 modal-spring-card p-6 overflow-hidden" id="sim-panel">
+            <div class="absolute -top-16 -right-16 w-36 h-36 rounded-full bg-indigo-500/25 blur-3xl pointer-events-none"></div>
+            <div class="absolute -bottom-16 -left-16 w-36 h-36 rounded-full bg-purple-500/20 blur-3xl pointer-events-none"></div>
 
-    <!-- FEEDBACK AUTOMATION MODAL -->
-    <div id="feedback-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-4 sm:p-6">
-        <div class="absolute inset-0 bg-black/85 backdrop-blur-md opacity-0 transition-opacity duration-300" id="feedback-backdrop" onclick="closeFeedbackModal()"></div>
-        <div class="w-full max-w-[440px] relative z-10 opacity-0 transition-all duration-300 transform scale-95 max-h-[90vh] flex flex-col rounded-[32px] p-6 sm:p-7 border border-purple-500/30 bg-[#0f1019] shadow-2xl overflow-y-auto no-scrollbar" id="feedback-panel">
-            <div class="flex items-center justify-between mb-5 shrink-0">
-                <div class="flex items-center gap-3.5">
-                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-pink-500 flex items-center justify-center text-white shadow-lg shadow-purple-500/30 text-lg shrink-0">
-                        <i class="fas fa-bolt"></i>
-                    </div>
-                    <div>
-                        <h3 class="text-lg font-black text-white tracking-tight">Feedback Automation</h3>
-                        <p class="text-[10px] text-purple-300/80 uppercase font-black tracking-widest">PSG Tech Studzone &bull; 5-Star</p>
-                    </div>
+            <!-- Modal Header -->
+            <div class="flex justify-between items-start mb-6 relative z-10">
+                <div class="min-w-0 pr-3">
+                    <h3 class="text-lg font-bold text-white leading-tight truncate" id="sim-subject">Subject</h3>
+                    <p class="text-[9px] text-indigo-400 font-bold uppercase tracking-widest mt-1">Prediction Mode</p>
                 </div>
-                <button type="button" onclick="closeFeedbackModal()" class="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition cursor-pointer">
+                <button onclick="closeSim()" class="w-9 h-9 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 flex items-center justify-center text-white/70 active:scale-90 transition shrink-0">
                     <i class="fas fa-times text-xs"></i>
                 </button>
             </div>
 
+            <!-- Glowing SVG Gauge Ring -->
+            <div class="flex justify-center mb-6 relative z-10">
+                <div class="w-48 h-48 relative flex items-center justify-center">
+                    <svg class="w-full h-full transform -rotate-90" viewBox="0 0 208 208">
+                        <circle cx="104" cy="104" r="86" stroke="rgba(255,255,255,0.06)" stroke-width="14" fill="none"></circle>
+                        <circle id="sim-ring" cx="104" cy="104" r="86" stroke="#22C55E" stroke-width="14"
+                            fill="none" stroke-dasharray="540" stroke-dashoffset="0" stroke-linecap="round"
+                            class="transition-all duration-500" style="filter: drop-shadow(0 0 12px rgba(34,197,94,0.45));"></circle>
+                    </svg>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center text-center">
+                        <span id="sim-pct" class="text-5xl font-black text-white tracking-tighter leading-none">0%</span>
+                        <span id="sim-fraction" class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1.5">0 / 0</span>
+                        <span id="sim-diff" class="text-[9px] font-black px-3 py-0.5 rounded-full bg-white/5 mt-1.5 uppercase border border-white/10 text-gray-300">Current</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live Safe Bunk Status Pill -->
+            <div id="sim-verdict-banner" class="mb-4 py-2.5 px-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center text-[10px] font-black text-emerald-300 uppercase tracking-wider relative z-10">
+                Safe to bunk
+            </div>
+
+            <!-- Tactile Controls -->
+            <div class="space-y-3 relative z-10">
+                <div class="bg-white/5 rounded-3xl p-2 pr-3 flex items-center justify-between pl-4 border border-white/10">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-xs">
+                            <i class="fas fa-check"></i>
+                        </div>
+                        <span class="text-[11px] font-bold text-gray-200 uppercase tracking-wider">Attend</span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <button onclick="updateBunkSim('attend', -1)" class="w-10 h-10 rounded-2xl bg-black/40 border border-white/10 text-white active:scale-90 transition"><i class="fas fa-minus text-[10px]"></i></button>
+                        <span id="val-attend" class="w-8 text-center font-black text-white text-lg">0</span>
+                        <button onclick="updateBunkSim('attend', 1)" class="w-10 h-10 rounded-2xl bg-emerald-500 text-black font-black shadow-lg shadow-emerald-500/25 active:scale-90 transition"><i class="fas fa-plus text-[10px]"></i></button>
+                    </div>
+                </div>
+
+                <div class="bg-white/5 rounded-3xl p-2 pr-3 flex items-center justify-between pl-4 border border-white/10">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 text-xs">
+                            <i class="fas fa-times"></i>
+                        </div>
+                        <span class="text-[11px] font-bold text-gray-200 uppercase tracking-wider">Bunk</span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <button onclick="updateBunkSim('bunk', -1)" class="w-10 h-10 rounded-2xl bg-black/40 border border-white/10 text-white active:scale-90 transition"><i class="fas fa-minus text-[10px]"></i></button>
+                        <span id="val-bunk" class="w-8 text-center font-black text-white text-lg">0</span>
+                        <button onclick="updateBunkSim('bunk', 1)" class="w-10 h-10 rounded-2xl bg-rose-500 text-black font-black shadow-lg shadow-rose-500/25 active:scale-90 transition"><i class="fas fa-plus text-[10px]"></i></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-5 text-center relative z-10">
+                <button type="button" onclick="resetSimModal()" class="text-[10px] font-bold uppercase tracking-widest text-gray-400 hover:text-white py-2 px-4 rounded-xl hover:bg-white/5 active:scale-95 transition inline-flex items-center gap-1.5">
+                    <i class="fas fa-rotate-left text-[9px]"></i>
+                    <span>Reset Simulation</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PASS TARGET PREDICTOR POP-UP MODAL (40:60 RULE) -->
+    <div id="pass-matrix-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-4">
+        <div class="absolute inset-0 modal-backdrop-blur" id="pass-matrix-backdrop" onclick="closePassMatrixModal()"></div>
+        <div class="w-full max-w-[410px] relative z-10 modal-spring-card p-5 space-y-4 max-h-[88vh] overflow-y-auto no-scrollbar" id="pass-matrix-panel">
+            <div class="absolute -top-16 -right-16 w-36 h-36 rounded-full bg-rose-500/25 blur-3xl pointer-events-none"></div>
+
+            <div class="flex items-center justify-between relative z-10">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white text-sm shadow-lg shadow-rose-500/30">
+                        <i class="fas fa-bullseye"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-sm font-black text-white tracking-tight">Sem Pass Target Predictor</h3>
+                        <p class="text-[9px] text-rose-300 font-black uppercase tracking-widest">Auto CA Summary • 40:60 Rule</p>
+                    </div>
+                </div>
+                <button onclick="closePassMatrixModal()" class="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
+            </div>
+
+            <!-- Subject Inspection Badge (When tapped from subject card) -->
+            <div id="pass-matrix-course-badge" class="hidden p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between relative z-10">
+                <div class="min-w-0 pr-2">
+                    <span class="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 mr-1.5" id="pass-matrix-active-code">CODE</span>
+                    <span class="text-xs font-bold text-white truncate" id="pass-matrix-active-name">Subject Name</span>
+                </div>
+            </div>
+
+            <!-- Auto Subject-Wise Short Summary Matrix -->
+            <div class="space-y-2 relative z-10">
+                <div class="flex items-center justify-between px-1">
+                    <span class="text-[8.5px] font-black uppercase tracking-widest text-gray-400">Your Subjects (Tap to inspect)</span>
+                    <span class="text-[8.5px] font-bold text-rose-300">Min Sem /100 &amp; Grades</span>
+                </div>
+                <div id="pm-auto-subjects-list" class="space-y-1.5 max-h-[220px] overflow-y-auto no-scrollbar pr-0.5"></div>
+            </div>
+
+            <!-- Quick Custom CA Slider -->
+            <div class="p-3.5 rounded-2xl bg-black/50 border border-white/10 space-y-2.5 relative z-10">
+                <div class="flex justify-between items-center">
+                    <span class="text-[9px] font-black uppercase tracking-wider text-gray-400" id="pm-selected-label">Custom CA Check</span>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs font-black text-indigo-300 bg-indigo-500/15 px-2 py-0.5 rounded-lg border border-indigo-500/25" id="pm-ca-display">CA: 22/40</span>
+                        <span class="text-xs font-black text-rose-300 bg-rose-500/15 px-2 py-0.5 rounded-lg border border-rose-500/25" id="pm-sem-needed">Pass: 46/100</span>
+                    </div>
+                </div>
+                <input type="range" id="pass-matrix-slider" min="0" max="40" step="0.5" value="22" oninput="updatePassMatrix(this.value)" class="w-full accent-rose-500 cursor-pointer acad-slider">
+                <div class="grid grid-cols-6 gap-1 text-center pt-0.5">
+                    <div class="p-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7px] font-black text-blue-400 block">C+ (6)</span>
+                        <span class="text-[10px] font-black text-white" id="pm-grade-cplus">56</span>
+                    </div>
+                    <div class="p-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7px] font-black text-teal-400 block">B (6.5)</span>
+                        <span class="text-[10px] font-black text-white" id="pm-grade-b">65</span>
+                    </div>
+                    <div class="p-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7px] font-black text-emerald-400 block">B+ (7)</span>
+                        <span class="text-[10px] font-black text-white" id="pm-grade-bplus">73</span>
+                    </div>
+                    <div class="p-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7px] font-black text-indigo-400 block">A (8)</span>
+                        <span class="text-[10px] font-black text-white" id="pm-grade-a">81</span>
+                    </div>
+                    <div class="p-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7px] font-black text-purple-400 block">A+ (9)</span>
+                        <span class="text-[10px] font-black text-white" id="pm-grade-aplus">98</span>
+                    </div>
+                    <div class="p-1.5 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7px] font-black text-amber-400 block">S (10)</span>
+                        <span class="text-[10px] font-black text-white" id="pm-grade-s">--</span>
+                    </div>
+                </div>
+                <p class="text-[9px] font-bold text-center text-gray-400" id="pm-formula-proof">46 × 0.6 = 27.6 ➔ 28 + 22 CA = 50 (PASS ✅)</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- FEEDBACK BOT POP-UP MODAL -->
+    <div id="feedback-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-4">
+        <div class="absolute inset-0 modal-backdrop-blur" id="feedback-backdrop" onclick="closeFeedbackModal()"></div>
+        <div class="w-full max-w-[410px] relative z-10 modal-spring-card p-6 space-y-4 max-h-[90vh] overflow-y-auto no-scrollbar" id="feedback-panel">
+            <div class="absolute -top-16 -right-16 w-36 h-36 rounded-full bg-purple-500/25 blur-3xl pointer-events-none"></div>
+
+            <div class="flex items-center justify-between relative z-10">
+                <div class="flex items-center gap-3">
+                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-pink-600 to-amber-500 flex items-center justify-center text-white text-base shadow-lg shadow-purple-500/30">
+                        <i class="fas fa-bolt"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-black text-white tracking-tight">Auto Feedback Bot</h3>
+                        <p class="text-[9.5px] text-purple-300 font-black uppercase tracking-widest">PSG Tech Studzone • 5-Star</p>
+                    </div>
+                </div>
+                <button onclick="closeFeedbackModal()" class="w-9 h-9 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
+            </div>
+
             <!-- VIEW 1: QUICK CONFIRM VIEW (For Currently Logged In Student) -->
-            <div id="feedback-confirm-view" class="space-y-4">
-                <div class="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
-                    <div class="flex items-center gap-3.5">
-                        <div class="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-300 text-base">
+            <div id="feedback-confirm-view" class="space-y-4 relative z-10">
+                <div class="p-3.5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-300 text-sm">
                             <i class="fas fa-user-check"></i>
                         </div>
                         <div>
-                            <div class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Logged In Student</div>
-                            <div class="text-sm font-black text-white tracking-wide uppercase" id="feedback-confirm-roll">--</div>
+                            <div class="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Active Account</div>
+                            <div class="text-xs font-black text-white tracking-wide uppercase" id="feedback-confirm-roll">--</div>
                         </div>
                     </div>
-                    <span class="px-2.5 py-1 rounded-full text-[9px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase tracking-widest">Active</span>
+                    <span class="px-2 py-0.5 rounded-full text-[8px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase tracking-widest">Verified</span>
                 </div>
 
-                <!-- Auto-Detected Pending Feedback Banner (Shown when auto-triggered) -->
-                <div id="feedback-auto-banner" class="hidden p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-200 space-y-1">
-                    <div class="flex items-center gap-2 font-black text-xs uppercase tracking-wider text-amber-300">
+                <!-- Auto-Detected Pending Feedback Banner -->
+                <div id="feedback-auto-banner" class="hidden p-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-200 space-y-1">
+                    <div class="flex items-center gap-2 font-black text-[11px] uppercase tracking-wider text-amber-300">
                         <i class="fas fa-bell animate-bounce text-xs"></i>
                         <span id="feedback-auto-banner-title">Pending Feedback Available</span>
                     </div>
-                    <p class="text-[11px] leading-relaxed text-amber-100/90 font-medium" id="feedback-auto-banner-text">
-                        Active surveys were detected on your Studzone portal. Click Confirm below to auto-complete them with 5-star ratings.
+                    <p class="text-[10px] leading-relaxed text-amber-100/90 font-medium" id="feedback-auto-banner-text">
+                        Active surveys detected on Studzone. Click Confirm to auto-complete them with 5-star ratings.
                     </p>
                 </div>
 
-                <div class="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/20 space-y-2">
-                    <div class="flex items-center gap-2 text-purple-300 text-xs font-black uppercase tracking-wider">
-                        <span>⭐ Auto 5-Star Evaluation</span>
+                <div class="p-3.5 rounded-2xl bg-purple-500/10 border border-purple-500/25 space-y-1.5">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] font-black uppercase tracking-wider text-purple-200">⚡ Parallel 5-Star Filler</span>
+                        <span class="text-[9px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Ready</span>
                     </div>
-                    <p class="text-[11px] text-purple-200/90 leading-relaxed font-medium">
-                        This will automatically submit highest <b>5-star ratings (Strongly Agree)</b> across all active Intermediate course surveys and End-Semester staff evaluations for your account in &lt; 1 second.
-                    </p>
+                    <p class="text-[11px] text-gray-300 leading-relaxed">Submits <b>5-Star (Strongly Agree)</b> ratings across all active faculty evaluations on Studzone in under 1 second.</p>
                 </div>
 
-                <!-- Confirm Submit Button -->
-                <button type="button" id="feedback-confirm-btn" onclick="executeCurrentFeedback()" class="w-full py-3.5 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-600 hover:brightness-110 active:scale-[0.98] text-white text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-purple-600/30 transition cursor-pointer">
+                <button type="button" id="feedback-confirm-btn" onclick="executeCurrentFeedback()" class="w-full py-3.5 rounded-2xl btn-liquid text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition">
                     <i class="fas fa-bolt"></i>
                     <span>Confirm &amp; Submit 5-Star Feedback</span>
                 </button>
 
-                <!-- For Other Person Button -->
-                <button type="button" onclick="switchFeedbackMode('other')" class="w-full py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-[0.98] text-gray-300 hover:text-white text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition cursor-pointer">
+                <button type="button" onclick="switchFeedbackMode('other')" class="w-full py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 text-gray-300 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition">
                     <i class="fas fa-user-plus text-xs text-indigo-400"></i>
-                    <span>Complete for Another Person</span>
+                    <span>Complete for Another Roll No</span>
                 </button>
             </div>
 
             <!-- VIEW 2: OTHER PERSON VIEW -->
-            <div id="feedback-other-view" class="hidden space-y-4">
+            <div id="feedback-other-view" class="hidden space-y-4 relative z-10">
                 <div class="flex items-center justify-between pb-1">
                     <span class="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
                         <i class="fas fa-user-friends text-purple-400 text-xs"></i>
-                        <span>For Another Person</span>
+                        <span>Another Student Feedback</span>
                     </span>
-                    <button type="button" onclick="switchFeedbackMode('self')" id="feedback-back-to-self-btn" class="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 transition flex items-center gap-1 cursor-pointer">
+                    <button type="button" onclick="switchFeedbackMode('self')" class="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 uppercase tracking-wider flex items-center gap-1">
                         <i class="fas fa-arrow-left text-[9px]"></i>
                         <span>Back to My Account</span>
                     </button>
                 </div>
 
-                <form id="bunker-other-feedback-form" onsubmit="executeOtherFeedback(event)" class="space-y-3.5">
+                <form id="bunker-other-feedback-form" onsubmit="executeOtherFeedback(event)" class="space-y-3">
                     <div>
-                        <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Roll Number</label>
-                        <input type="text" id="feedback-other-roll" required placeholder="e.g. 25U201" class="w-full h-11 bg-white/5 border border-white/10 rounded-xl px-4 text-white text-sm font-bold uppercase focus:border-purple-500 focus:outline-none transition">
+                        <label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Roll Number</label>
+                        <input type="text" id="feedback-other-roll" required placeholder="e.g. 25U201" class="w-full h-11 bg-white/5 border border-white/10 rounded-2xl px-4 text-xs font-bold text-white uppercase tracking-wider placeholder:text-gray-600 focus:outline-none focus:border-purple-500/50">
                     </div>
 
                     <div>
-                        <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Studzone Password</label>
+                        <label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Studzone Password</label>
                         <div class="relative">
-                            <input type="password" id="feedback-other-password" required placeholder="••••••••" class="w-full h-11 bg-white/5 border border-white/10 rounded-xl px-4 pr-11 text-white text-sm focus:border-purple-500 focus:outline-none transition">
-                            <button type="button" onclick="toggleOtherFeedbackPw()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-xs p-1">
-                                <i id="feedback-other-pw-icon" class="fas fa-eye"></i>
+                            <input type="password" id="feedback-other-password" required placeholder="••••••••" class="w-full h-11 bg-white/5 border border-white/10 rounded-2xl px-4 pr-11 text-xs font-bold text-white tracking-wider placeholder:text-gray-600 focus:outline-none focus:border-purple-500/50">
+                            <button type="button" onclick="toggleOtherFeedbackPassword()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white transition p-1">
+                                <i id="feedback-other-pw-icon" class="fas fa-eye text-xs"></i>
                             </button>
                         </div>
                     </div>
 
                     <div>
-                        <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Target Evaluation Mode</label>
-                        <select id="feedback-other-mode" class="w-full h-11 bg-white/5 border border-white/10 rounded-xl px-3 text-white text-xs font-semibold focus:border-purple-500 focus:outline-none transition">
-                            <option value="auto" class="bg-gray-900 text-white">⚡ Auto-Detect (Intermediate &amp; EndSem)</option>
-                            <option value="intermediate" class="bg-gray-900 text-white">Intermediate Feedback (Course Surveys)</option>
-                            <option value="endsem" class="bg-gray-900 text-white">End Semester Feedback (Staff Evaluations)</option>
+                        <label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Rating Mode</label>
+                        <select id="feedback-other-mode" class="w-full h-11 bg-white/5 border border-white/10 rounded-2xl px-3 text-xs font-bold text-white focus:outline-none focus:border-purple-500/50">
+                            <option value="5" class="bg-[#0f1019] text-white" selected>⭐⭐⭐⭐⭐ 5 Stars (Strongly Agree)</option>
+                            <option value="4" class="bg-[#0f1019] text-white">⭐⭐⭐⭐ 4 Stars (Agree)</option>
                         </select>
                     </div>
 
-                    <div class="p-3 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-purple-300 text-[11px] leading-relaxed font-medium flex items-center gap-2.5">
-                        <span class="text-base">⭐</span>
-                        <span>Submits <b>100% highest 5-star ratings</b> in parallel via portal endpoints.</span>
-                    </div>
-
-                    <button type="submit" id="feedback-other-submit-btn" class="w-full py-3.5 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-600 hover:brightness-110 active:scale-[0.98] text-white text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-purple-600/30 transition cursor-pointer">
-                        <i class="fas fa-rocket"></i>
+                    <button type="submit" id="feedback-other-submit-btn" class="w-full py-3.5 rounded-2xl btn-liquid text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition mt-2">
+                        <i class="fas fa-bolt"></i>
                         <span>Submit 5-Star Feedback</span>
                     </button>
                 </form>
             </div>
 
             <!-- Status Box -->
-            <div id="feedback-status-box" class="hidden mt-4 p-4 rounded-2xl border text-xs leading-relaxed">
+            <div id="feedback-status-box" class="hidden p-3.5 rounded-2xl border text-xs font-medium space-y-1 relative z-10">
                 <div id="feedback-status-text"></div>
-            </div>
-
-            <!-- Standalone Tool Link -->
-            <div class="mt-5 pt-4 border-t border-white/10 text-center">
-                <a href="/feedback" target="_blank" class="text-[10px] text-gray-400 hover:text-purple-300 font-bold uppercase tracking-wider transition inline-flex items-center gap-1.5">
-                    <span>Open Standalone Web Interface</span>
-                    <i class="fas fa-arrow-up-right-from-square text-[9px]"></i>
-                </a>
             </div>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- ATTENDANCE COMPARISON MODAL -->
-    <!-- ================================================================ -->
-    <div id="attendance-comparison-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-4 sm:p-6">
-        <div class="absolute inset-0 bg-black/85 backdrop-blur-md opacity-0 transition-opacity duration-300" id="att-compare-backdrop" onclick="closeAttendanceComparisonModal()"></div>
-        <div class="w-full max-w-[500px] relative z-10 opacity-0 transition-all duration-300 transform scale-95 max-h-[90vh] flex flex-col rounded-[32px] p-6 sm:p-7 border border-indigo-500/30 bg-[#0f1019] shadow-2xl overflow-y-auto no-scrollbar" id="att-compare-panel">
-            <!-- Modal Header -->
-            <div class="flex items-center justify-between mb-5 shrink-0">
-                <div class="flex items-center gap-3.5">
-                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30 text-lg shrink-0">
-                        <i class="fas fa-history"></i>
+    <!-- COMPARE ATTENDANCE POP-UP MODAL -->
+    <div id="attendance-comparison-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-4">
+        <div class="absolute inset-0 modal-backdrop-blur" id="att-compare-backdrop" onclick="closeAttendanceComparisonModal()"></div>
+        <div class="w-full max-w-[420px] relative z-10 modal-spring-card p-5 space-y-3.5 max-h-[85vh] overflow-y-auto no-scrollbar" id="att-compare-panel">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center text-white text-base shadow-lg shadow-cyan-500/25">
+                        <i class="fas fa-code-compare"></i>
                     </div>
                     <div>
-                        <h3 class="text-lg font-black text-white tracking-tight">Attendance Comparison</h3>
-                        <p class="text-[10px] text-indigo-300 font-bold uppercase tracking-wider">Compare your previous attendance and current attendance here</p>
+                        <h3 class="text-base font-black text-white tracking-tight">Attendance Comparison</h3>
+                        <p class="text-[9.5px] text-cyan-300 font-black uppercase tracking-widest">Before vs Latest eCampus Sync</p>
                     </div>
                 </div>
-                <button type="button" onclick="closeAttendanceComparisonModal()" class="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition cursor-pointer">
-                    <i class="fas fa-times text-xs"></i>
-                </button>
+                <button onclick="closeAttendanceComparisonModal()" class="w-9 h-9 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
             </div>
 
-            <!-- Helpful Guidance Banner -->
-            <div class="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 mb-3.5 flex items-center gap-3 text-indigo-200">
-                <div class="w-8 h-8 rounded-xl bg-indigo-500/20 text-indigo-300 flex items-center justify-center shrink-0">
-                    <i class="fas fa-code-compare text-xs"></i>
-                </div>
-                <p class="text-[11px] font-medium leading-relaxed text-indigo-200/90">
-                    Compare your previous attendance and current attendance here. Track changes in attended hours and percentages as eCampus updates.
-                </p>
-            </div>
-
-            <!-- Current Only Notice (When same date or no previous stored) -->
-            <div id="compare-current-only-banner" class="hidden p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 mb-3.5 flex items-center gap-3 text-amber-200">
-                <div class="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center shrink-0">
+            <!-- Current Only Notice -->
+            <div id="compare-current-only-banner" class="hidden p-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center gap-3 text-amber-200">
+                <div class="w-7 h-7 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center shrink-0">
                     <i class="fas fa-info-circle text-xs"></i>
                 </div>
                 <div class="min-w-0">
-                    <div class="text-[11px] font-black text-amber-300 uppercase tracking-wider">Only current attendance available</div>
-                    <p class="text-[10.5px] text-amber-100/85 font-medium leading-snug mt-0.5">
-                        No old attendance of yours stored yet. Showing your current attendance baseline below.
+                    <div class="text-[10px] font-black text-amber-300 uppercase tracking-wider">Baseline Attendance Recorded</div>
+                    <p class="text-[10px] text-amber-100/85 font-medium leading-snug mt-0.5">
+                        No prior attendance record stored yet. Showing your current attendance baseline below.
                     </p>
                 </div>
             </div>
 
-            <!-- Dates Card: Old Update Date vs Current Update Date -->
-            <div class="p-4 rounded-2xl bg-white/5 border border-white/10 mb-4 space-y-2.5">
-                <div class="text-[9px] font-black uppercase tracking-widest text-gray-400">eCampus Update Timestamps</div>
-                <div class="grid grid-cols-2 gap-3">
-                    <div class="p-3 rounded-xl bg-black/30 border border-white/5">
-                        <div class="flex items-center gap-1.5 text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1">
-                            <i class="fas fa-clock-rotate-left text-[9px]"></i>
+            <!-- Timestamps Card -->
+            <div class="p-3.5 rounded-2xl bg-white/5 border border-white/10 space-y-2">
+                <div class="text-[8.5px] font-black uppercase tracking-widest text-gray-400">Sync Timestamps</div>
+                <div class="grid grid-cols-2 gap-2.5">
+                    <div class="p-2.5 rounded-xl bg-black/30 border border-white/5">
+                        <div class="flex items-center gap-1.5 text-[9px] font-bold text-amber-400 uppercase tracking-wider mb-0.5">
+                            <i class="fas fa-clock-rotate-left text-[8px]"></i>
                             <span>Old Attendance</span>
                         </div>
                         <div class="text-xs font-black text-white truncate" id="compare-old-date">--</div>
                     </div>
-                    <div class="p-3 rounded-xl bg-black/30 border border-white/5">
-                        <div class="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1">
-                            <i class="fas fa-check-circle text-[9px]"></i>
+                    <div class="p-2.5 rounded-xl bg-black/30 border border-white/5">
+                        <div class="flex items-center gap-1.5 text-[9px] font-bold text-emerald-400 uppercase tracking-wider mb-0.5">
+                            <i class="fas fa-check-circle text-[8px]"></i>
                             <span>Current Updated</span>
                         </div>
                         <div class="text-xs font-black text-white truncate" id="compare-current-date">--</div>
@@ -1684,209 +1545,75 @@
                 </div>
             </div>
 
-            <!-- Overall Aggregate Delta Banner -->
-            <div id="compare-overall-banner" class="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 mb-4 flex items-center justify-between">
+            <!-- Overall Delta Banner -->
+            <div id="compare-overall-banner" class="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between">
                 <div>
-                    <div class="text-[10px] font-bold uppercase tracking-wider text-indigo-300">Overall Attendance Change</div>
-                    <div class="text-sm font-black text-white mt-0.5" id="compare-overall-text">--</div>
+                    <div class="text-[9px] font-bold uppercase tracking-wider text-indigo-300">Overall Attendance Change</div>
+                    <div class="text-xs font-black text-white mt-0.5" id="compare-overall-text">--</div>
                 </div>
-                <div id="compare-overall-chip" class="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-white/10 text-white">--</div>
+                <div id="compare-overall-chip" class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-white/10 text-white">--</div>
             </div>
 
-            <!-- Subjects Comparison List -->
-            <div class="space-y-3" id="compare-subjects-list">
-                <!-- Subject comparison items will be dynamically injected here -->
-            </div>
+            <!-- Comparison List -->
+            <div class="space-y-2.5" id="compare-subjects-list"></div>
+            <div id="compare-modal-list" class="space-y-2.5 hidden"></div>
 
-            <!-- Standalone or empty note -->
+            <!-- Empty Note -->
             <div id="compare-empty-note" class="hidden text-center py-6">
                 <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-xl mx-auto mb-3">
                     <i class="fas fa-database"></i>
                 </div>
-                <h4 class="text-sm font-black text-white">Initial Baseline Recorded</h4>
-                <p class="text-xs text-gray-400 mt-1 max-w-xs mx-auto leading-relaxed">
-                    Bunker has saved your current attendance baseline. Once attendance updates on eCampus, your before vs now stats will automatically appear here!
+                <h4 class="text-xs font-black text-white">Initial Baseline Stored</h4>
+                <p class="text-[11px] text-gray-400 mt-1 max-w-xs mx-auto leading-relaxed">
+                    Your current attendance is recorded. Once eCampus updates, full diff breakdown will appear here.
                 </p>
             </div>
         </div>
     </div>
 
-    <!-- HISTORY MODAL -->
-    <div id="history-modal" class="fixed inset-0 z-[60] hidden">
-        <div class="absolute inset-0 bg-black/90 opacity-0 transition-opacity duration-300" id="history-backdrop"
-            onclick="closeHistory()"></div>
-        <div class="absolute bottom-0 left-0 right-0 glass-panel rounded-t-[40px] p-8 pb-16 translate-y-full transition-transform duration-300 h-[80vh] flex flex-col"
-            id="history-panel">
-            <div class="w-12 h-1.5 bg-white/10 rounded-full mx-auto mb-8"></div>
-            <div class="flex items-center justify-between mb-6">
-                <div class="flex items-center gap-4">
-                    <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-xl">📜
+    <!-- UNIVERSAL INFO / REGULATIONS / INSTALL POP-UP MODAL -->
+    <div id="info-popup-modal" class="fixed inset-0 z-[75] hidden flex items-center justify-center p-4">
+        <div class="absolute inset-0 modal-backdrop-blur" onclick="closeInfoPopup()"></div>
+        <div class="w-full max-w-[380px] relative z-10 modal-spring-card p-6 space-y-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div id="info-popup-icon" class="w-11 h-11 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 text-lg">
+                        <i class="fas fa-shield-halved"></i>
                     </div>
                     <div>
-                        <h3 class="text-xl font-bold text-white">Full History</h3>
-                        <p class="text-[10px] text-gray-400 mt-0.5" id="history-count">0 Entries</p>
+                        <h3 id="info-popup-title" class="text-base font-black text-white tracking-tight">Information</h3>
+                        <p id="info-popup-subtitle" class="text-[9.5px] text-indigo-300 font-black uppercase tracking-widest">PSG Bunker Official</p>
                     </div>
                 </div>
-                <button onclick="closeHistory()"
-                    class="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-gray-400 hover:text-white transition">
-                    <i class="fas fa-times"></i>
-                </button>
+                <button onclick="closeInfoPopup()" class="w-9 h-9 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
             </div>
-
-            <div id="full-history-content" class="flex-1 overflow-y-auto no-scrollbar space-y-4 pb-10">
-                <!-- History entries will be injected here -->
-            </div>
+            <div id="info-popup-body" class="text-xs text-gray-300 space-y-2.5 leading-relaxed"></div>
+            <button onclick="closeInfoPopup()" class="w-full py-3.5 rounded-2xl btn-liquid text-white font-black text-xs uppercase tracking-widest active:scale-95 transition">Got It</button>
         </div>
     </div>
 
-    <!-- PSG SEMESTER PASS TARGET PREDICTOR MODAL (MOBILE-FIRST) -->
-    <div id="pass-matrix-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-6">
-        <div class="absolute inset-0 bg-black/85 backdrop-blur-md opacity-0 transition-opacity duration-300" id="pass-matrix-backdrop" onclick="closePassMatrixModal()"></div>
-        <div class="w-full max-w-[480px] relative z-10 opacity-0 transition-all duration-300 transform scale-95 max-h-[92vh] flex flex-col rounded-[32px] p-5 sm:p-6 border border-rose-500/30 bg-[#0f1019] shadow-2xl overflow-y-auto no-scrollbar" id="pass-matrix-panel">
-            
-            <!-- Header -->
+    <!-- HISTORY MODAL -->
+    <div id="history-modal" class="fixed inset-0 z-[60] hidden flex items-center justify-center p-3 sm:p-4">
+        <div class="absolute inset-0 modal-backdrop-blur" id="history-backdrop" onclick="closeHistory()"></div>
+        <div class="w-full max-w-[420px] relative z-10 modal-spring-card p-6 flex flex-col max-h-[85vh] overflow-hidden" id="history-panel">
             <div class="flex items-center justify-between mb-4 shrink-0">
                 <div class="flex items-center gap-3">
-                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 text-lg shrink-0">
-                        <i class="fas fa-bullseye"></i>
+                    <div class="w-11 h-11 rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center text-xl text-indigo-300">
+                        <i class="fas fa-history"></i>
                     </div>
                     <div>
-                        <div class="flex items-center gap-2">
-                            <h3 class="text-base sm:text-lg font-black text-white tracking-tight">Sem Pass Target Predictor</h3>
-                            <span class="text-[8px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">40 : 60 Rule</span>
-                        </div>
-                        <p class="text-[10px] text-gray-400 font-medium">PSG Tech Continuous Assessment &amp; Semester Pass Math</p>
+                        <h3 class="text-base font-black text-white">Full Tracked History</h3>
+                        <p class="text-[10px] text-gray-400 mt-0.5" id="history-count">0 Entries</p>
                     </div>
                 </div>
-                <button type="button" onclick="closePassMatrixModal()" class="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0">
+                <button onclick="closeHistory()" class="w-9 h-9 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition">
                     <i class="fas fa-times text-xs"></i>
                 </button>
             </div>
 
-            <div id="pass-matrix-view-calc" class="space-y-4">
-                <!-- Subject Badge if opened for specific course -->
-                <div id="pass-matrix-course-badge" class="hidden p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between">
-                    <div class="flex items-center gap-2 min-w-0">
-                        <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0" id="pass-matrix-active-code">COURSE</span>
-                        <span class="text-xs font-bold text-white truncate" id="pass-matrix-active-name">Subject Name</span>
-                    </div>
-                    <button type="button" onclick="applyPassMatrixToActiveSubject()" id="pass-matrix-apply-active-btn" class="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] font-black uppercase tracking-wider shrink-0 transition active:scale-95 shadow">
-                        Apply to Sim
-                    </button>
-                </div>
-
-                <!-- Internal Mark Input & Slider Card -->
-                <div class="p-4 sm:p-5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3.5">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <span class="text-[10px] font-black uppercase tracking-widest text-gray-400 block">Internal Mark (CA)</span>
-                            <span class="text-[9px] text-gray-500">Continuous Assessment out of 40</span>
-                        </div>
-                        <div class="flex items-baseline gap-1 bg-black/60 px-3 py-1.5 rounded-xl border border-rose-500/30 shadow-inner">
-                            <span id="pass-matrix-input-val" class="text-2xl font-black text-white">18</span>
-                            <span class="text-[10px] font-bold text-gray-400">/ 40</span>
-                        </div>
-                    </div>
-
-                    <!-- Slider -->
-                    <div class="pt-1">
-                        <input type="range" id="pass-matrix-slider" min="0" max="40" step="1" value="18"
-                            oninput="updatePassMatrixFromSlider(this.value)"
-                            class="w-full bg-black/50 rounded-lg appearance-none cursor-pointer accent-rose-500 acad-slider" style="height: 8px;" />
-                    </div>
-
-                    <!-- Fast Tap Preset Chips (12 to 24 from PSG Tech table) -->
-                    <div>
-                        <span class="text-[8px] font-black uppercase tracking-widest text-gray-500 block mb-1.5">Common PSG Tech CA Scores (Tap to choose):</span>
-                        <div class="flex flex-wrap gap-1.5" id="pm-pills-container">
-                            <button type="button" onclick="setPassMatrixCA(12)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">12</button>
-                            <button type="button" onclick="setPassMatrixCA(14)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">14</button>
-                            <button type="button" onclick="setPassMatrixCA(16)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">16</button>
-                            <button type="button" onclick="setPassMatrixCA(18)" class="pm-pill px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-xs font-black text-rose-300 transition active:scale-95">18</button>
-                            <button type="button" onclick="setPassMatrixCA(20)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">20</button>
-                            <button type="button" onclick="setPassMatrixCA(22)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">22</button>
-                            <button type="button" onclick="setPassMatrixCA(24)" class="pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95">24</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- HERO RESULT DISPLAY -->
-                <div class="p-5 rounded-3xl bg-gradient-to-br from-rose-950/40 via-purple-950/20 to-black/60 border border-rose-500/30 shadow-2xl relative overflow-hidden">
-                    <div class="flex items-start justify-between mb-3">
-                        <div>
-                            <span class="text-[9px] font-black uppercase tracking-[0.2em] text-rose-400 block mb-1">Required in Semester Exam</span>
-                            <div class="flex items-baseline gap-2">
-                                <span id="pm-res-sem100" class="text-4xl sm:text-5xl font-black text-white tracking-tight">52</span>
-                                <span class="text-sm font-bold text-gray-400">/ 100</span>
-                            </div>
-                        </div>
-                        <span id="pm-res-badge" class="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                            Minimum Pass
-                        </span>
-                    </div>
-
-                    <!-- 4-Step Mathematical Proof -->
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3 border-t border-white/10">
-                        <div class="bg-black/40 p-2 rounded-xl border border-white/5 text-center">
-                            <span class="text-[8px] font-black uppercase text-gray-400 block">For 40</span>
-                            <span id="pm-step-ca40" class="text-base font-black text-indigo-300">18.0</span>
-                            <span class="text-[7.5px] text-gray-500 block">Internal CA</span>
-                        </div>
-                        <div class="bg-rose-500/15 p-2 rounded-xl border border-rose-500/30 text-center">
-                            <span class="text-[8px] font-black uppercase text-rose-300 block">For 100</span>
-                            <span id="pm-step-sem100" class="text-base font-black text-white">52</span>
-                            <span class="text-[7.5px] text-rose-300 block">Sem Written</span>
-                        </div>
-                        <div class="bg-black/40 p-2 rounded-xl border border-white/5 text-center">
-                            <span class="text-[8px] font-black uppercase text-gray-400 block">For 60 ➔ Round</span>
-                            <span id="pm-step-sem60" class="text-base font-black text-purple-300">31.2 ➔ 32</span>
-                            <span class="text-[7.5px] text-gray-500 block">Scale &amp; Ceil</span>
-                        </div>
-                        <div class="bg-emerald-500/15 p-2 rounded-xl border border-emerald-500/30 text-center">
-                            <span class="text-[8px] font-black uppercase text-emerald-400 block">Final Mark</span>
-                            <span id="pm-step-final" class="text-base font-black text-emerald-300">50</span>
-                            <span class="text-[7.5px] text-emerald-400 font-bold block" id="pm-step-calc-text">18 + 32 = 50 ✅</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- TARGET GRADES PREVIEW (MOBILE CARDS) -->
-                <div>
-                    <span class="text-[9px] font-black uppercase tracking-widest text-gray-400 block mb-2">Marks Needed in Sem Exam for Higher Grades:</span>
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2" id="pm-grade-targets-grid">
-                        <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-center">
-                            <span class="text-[8px] font-bold text-rose-400 uppercase block">Pass (50%)</span>
-                            <span class="text-sm font-black text-white block mt-0.5" id="pm-tgt-pass">52 / 100</span>
-                        </div>
-                        <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-center">
-                            <span class="text-[8px] font-bold text-teal-400 uppercase block">Grade B (60%)</span>
-                            <span class="text-sm font-black text-white block mt-0.5" id="pm-tgt-b">70 / 100</span>
-                        </div>
-                        <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-center">
-                            <span class="text-[8px] font-bold text-indigo-400 uppercase block">Grade A (70%)</span>
-                            <span class="text-sm font-black text-white block mt-0.5" id="pm-tgt-a">87 / 100</span>
-                        </div>
-                        <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-center">
-                            <span class="text-[8px] font-bold text-purple-400 uppercase block">Grade A+ (80%)</span>
-                            <span class="text-sm font-black text-white block mt-0.5" id="pm-tgt-aplus">--</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Explanation & Share Action -->
-                <div class="flex items-center gap-2 pt-1">
-                    <button type="button" onclick="copyPassMatrixSummary()" class="w-full py-3 px-3 rounded-2xl bg-gradient-to-r from-rose-600/30 to-indigo-600/30 hover:from-rose-600/40 hover:to-indigo-600/40 border border-rose-500/30 text-xs font-bold text-white transition active:scale-95 flex items-center justify-center gap-2 shadow-lg">
-                        <i class="fas fa-copy text-xs text-rose-400"></i>
-                        <span>Copy Pass Target Summary</span>
-                    </button>
-                </div>
-
-                <div class="p-3.5 rounded-2xl bg-black/40 border border-white/5 text-[10px] text-gray-400 leading-relaxed">
-                    <span class="font-bold text-gray-300"><i class="fas fa-circle-info text-rose-400 mr-1"></i> PSG Tech Evaluation Rule:</span>
-                    Semester Theory Exam is out of 100 and converted to 60%. Any fraction is rounded <b>UP (ceiled)</b> to the next integer, then added to CA (out of 40). An aggregate of <b>50 marks (50%)</b> is mandatory to pass.
-                </div>
+            <div id="full-history-content" class="flex-1 overflow-y-auto no-scrollbar space-y-3 pt-2">
+                <!-- History entries will be injected here -->
             </div>
-
         </div>
     </div>
 

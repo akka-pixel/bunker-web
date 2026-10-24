@@ -2293,5 +2293,166 @@ img[src*="icon-192.png"] {
     }
 }
 
+/* ==========================================================================
+   BENTO GLASSMORPHIC DESIGN SYSTEM & SPRING MODALS
+   ========================================================================== */
+
+.bento-card,
+.bento-tile,
+.bento-group {
+    border-radius: 28px !important;
+    overflow: hidden !important;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.065) 0%, rgba(255, 255, 255, 0.015) 100%), rgba(14, 13, 28, 0.72) !important;
+    border: 1px solid rgba(255, 255, 255, 0.11) !important;
+    box-shadow: 
+        0 20px 50px -12px rgba(0, 0, 0, 0.7),
+        0 1px 1px 0 rgba(255, 255, 255, 0.16) inset,
+        0 0 0 1px rgba(255, 255, 255, 0.03) inset !important;
+    backdrop-filter: blur(24px) saturate(180%) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.25s ease, box-shadow 0.25s ease !important;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    transform: translateZ(0);
+}
+
+.bento-hero {
+    border-radius: 32px !important;
+    background: 
+        radial-gradient(circle at 100% 0%, rgba(99, 102, 241, 0.36) 0%, transparent 58%),
+        radial-gradient(circle at 0% 100%, rgba(168, 85, 247, 0.28) 0%, transparent 58%),
+        linear-gradient(155deg, rgba(26, 24, 54, 0.88) 0%, rgba(11, 10, 24, 0.94) 100%) !important;
+    border: 1px solid rgba(129, 140, 248, 0.34) !important;
+    box-shadow: 
+        0 22px 50px -12px rgba(0, 0, 0, 0.85),
+        0 0 30px rgba(99, 102, 241, 0.18),
+        inset 0 1.5px 1px 0 rgba(255, 255, 255, 0.25) !important;
+    backdrop-filter: blur(28px) saturate(190%) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
+}
+
+.bento-purple {
+    background: 
+        radial-gradient(circle at 100% 0%, rgba(168, 85, 247, 0.32) 0%, transparent 65%),
+        linear-gradient(155deg, rgba(32, 20, 56, 0.84) 0%, rgba(14, 12, 28, 0.92) 100%) !important;
+    border-color: rgba(168, 85, 247, 0.34) !important;
+}
+
+.bento-rose {
+    background: 
+        radial-gradient(circle at 100% 0%, rgba(244, 63, 94, 0.30) 0%, transparent 65%),
+        linear-gradient(155deg, rgba(44, 18, 36, 0.84) 0%, rgba(16, 11, 24, 0.92) 100%) !important;
+    border-color: rgba(244, 63, 94, 0.34) !important;
+}
+
+.bento-emerald {
+    background: 
+        radial-gradient(circle at 100% 0%, rgba(16, 185, 129, 0.28) 0%, transparent 65%),
+        linear-gradient(155deg, rgba(16, 40, 36, 0.84) 0%, rgba(11, 20, 20, 0.92) 100%) !important;
+    border-color: rgba(16, 185, 129, 0.32) !important;
+}
+
+.bento-cyan {
+    background: 
+        radial-gradient(circle at 100% 0%, rgba(6, 182, 212, 0.26) 0%, transparent 65%),
+        linear-gradient(155deg, rgba(14, 34, 48, 0.84) 0%, rgba(11, 18, 28, 0.92) 100%) !important;
+    border-color: rgba(6, 182, 212, 0.30) !important;
+}
+
+.bento-amber {
+    background: 
+        radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.26) 0%, transparent 65%),
+        linear-gradient(155deg, rgba(42, 28, 16, 0.84) 0%, rgba(18, 14, 12, 0.92) 100%) !important;
+    border-color: rgba(245, 158, 11, 0.30) !important;
+}
+
+.bento-tile:active,
+.bento-card:active {
+    transform: scale(0.968) translateZ(0) !important;
+}
+
+/* Modal Physics & Spring Animations */
+.modal-backdrop-blur {
+    background: rgba(3, 2, 10, 0.78) !important;
+    backdrop-filter: blur(22px) saturate(180%) !important;
+    -webkit-backdrop-filter: blur(22px) saturate(180%) !important;
+    animation: backdropFadeIn 0.25s ease-out forwards;
+}
+
+.modal-spring-card {
+    background: 
+        radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.22) 0%, transparent 60%),
+        linear-gradient(165deg, rgba(22, 20, 42, 0.96) 0%, rgba(9, 8, 20, 0.99) 100%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.16) !important;
+    border-top: 1.5px solid rgba(255, 255, 255, 0.32) !important;
+    box-shadow: 
+        0 30px 70px -10px rgba(0, 0, 0, 0.92),
+        0 0 40px rgba(99, 102, 241, 0.22),
+        inset 0 1px 1px rgba(255, 255, 255, 0.22) !important;
+    border-radius: 34px !important;
+    animation: modalPopSpring 0.38s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    will-change: transform, opacity;
+}
+
+@keyframes backdropFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes modalPopSpring {
+    0% { opacity: 0; transform: scale(0.88) translateY(24px); }
+    100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Segmented Pill Switcher Glow */
+.mode-pill-active {
+    background: linear-gradient(135deg, #6366f1 0%, #9333ea 100%) !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 15px rgba(99, 102, 241, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Stagger Animation Framework */
+.stagger-item {
+    opacity: 0;
+    animation: staggerFadeSlideUp 0.34s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes staggerFadeSlideUp {
+    0% {
+        opacity: 0;
+        transform: translateY(12px) scale(0.98);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.stagger-1 { animation-delay: 0.03s; }
+.stagger-2 { animation-delay: 0.07s; }
+.stagger-3 { animation-delay: 0.11s; }
+.stagger-4 { animation-delay: 0.15s; }
+.stagger-5 { animation-delay: 0.19s; }
+
+/* Android 60fps Low-Perf Overrides for Bento & Spring Modals */
+html[data-perf="low"] .bento-card,
+html[data-perf="low"] .bento-tile,
+html[data-perf="low"] .bento-group,
+html[data-perf="low"] .bento-hero,
+html[data-perf="low"] .modal-spring-card {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: #11101d !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+    transform: none !important;
+}
+
+html[data-perf="low"] .modal-backdrop-blur {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: rgba(3, 2, 10, 0.92) !important;
+}
+
 
 

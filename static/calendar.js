@@ -7,36 +7,36 @@
 (function () {
     'use strict';
 
-    // --- Branch metadata for client-side resolution & display ---
+    // --- Branch metadata for client-side resolution & display (Aligned with PSGTECH_BRANCH_MAP) ---
     const PSGTECH_BRANCHES = {
         'A': { degree: 'B.E.', name: 'Automobile Engineering', sandwich: false },
-        'D': { degree: 'B.E.', name: 'Civil Engineering', sandwich: false },
-        'C': { degree: 'B.E.', name: 'Computer Science & Engineering', sandwich: false },
+        'C': { degree: 'B.E.', name: 'Civil Engineering', sandwich: false },
+        'D': { degree: 'B.E.', name: 'Biomedical Engineering', sandwich: false },
+        'E': { degree: 'B.E.', name: 'Electrical & Electronics Engineering', sandwich: false },
+        'L': { degree: 'B.E.', name: 'Electronics & Communication Engineering', sandwich: false },
+        'M': { degree: 'B.E.', name: 'Mechanical Engineering', sandwich: false },
+        'N': { degree: 'B.E.', name: 'Computer Science (AI & ML)', sandwich: false },
+        'P': { degree: 'B.E.', name: 'Production Engineering', sandwich: false },
+        'R': { degree: 'B.E.', name: 'Robotics & Automation', sandwich: false },
+        'U': { degree: 'B.E.', name: 'Instrumentation & Control Engineering', sandwich: false },
+        'Y': { degree: 'B.E.', name: 'Metallurgical Engineering', sandwich: false },
+        'Z': { degree: 'B.E.', name: 'Computer Science & Engineering', sandwich: false },
         'CS': { degree: 'B.E.', name: 'Computer Science & Engineering', sandwich: false },
-        'Z': { degree: 'B.E.', name: 'Electronics & Communication Engineering', sandwich: false },
-        'N': { degree: 'B.E.', name: 'Electrical & Electronics Engineering', sandwich: false },
-        'E': { degree: 'B.E.', name: 'Electronics & Instrumentation Engineering', sandwich: false },
-        'L': { degree: 'B.E.', name: 'Mechanical Engineering', sandwich: false },
-        'M': { degree: 'B.E.', name: 'Metallurgical Engineering', sandwich: false },
-        'Y': { degree: 'B.E.', name: 'Production Engineering', sandwich: false },
-        'P': { degree: 'B.E. (Sandwich)', name: 'Production Engineering (Sandwich)', sandwich: true },
         'K': { degree: 'B.E. (Sandwich)', name: 'Mechanical Engineering (Sandwich)', sandwich: true },
         'ES': { degree: 'B.E. (Sandwich)', name: 'Electrical & Electronics (Sandwich)', sandwich: true },
         'SW': { degree: 'B.E. (Sandwich)', name: 'Sandwich Engineering Program', sandwich: true },
-        'R': { degree: 'B.E.', name: 'Robotics & Automation', sandwich: false },
-        'U': { degree: 'B.E.', name: 'Biomedical Engineering', sandwich: false },
         'B': { degree: 'B.Tech', name: 'Biotechnology', sandwich: false },
         'H': { degree: 'B.Tech', name: 'Fashion Technology', sandwich: false },
         'I': { degree: 'B.Tech', name: 'Information Technology', sandwich: false },
         'T': { degree: 'B.Tech', name: 'Textile Technology', sandwich: false },
-        'S': { degree: 'B.Sc', name: 'Applied Science / Computer Systems', sandwich: false },
-        'X': { degree: 'B.Sc', name: 'Mathematics & Computing', sandwich: false },
-        'SA': { degree: 'M.Sc (Integrated)', name: 'Software Systems', sandwich: false },
-        'FD': { degree: 'M.Sc (Integrated)', name: 'Data Science', sandwich: false },
+        'S': { degree: 'B.Sc', name: 'Applied Science', sandwich: false },
+        'X': { degree: 'B.Sc', name: 'Computer Systems & Design / Other B.Sc.', sandwich: false },
+        'SA': { degree: 'M.Sc (Integrated)', name: 'Software Systems / Applied Science', sandwich: false },
+        'FD': { degree: 'M.Sc (Integrated)', name: 'Data Science / Fashion Design', sandwich: false },
         'XW': { degree: 'M.Sc (Integrated)', name: 'Cyber Security', sandwich: false },
-        'XT': { degree: 'M.Sc (Integrated)', name: 'Theoretical Computer Science', sandwich: false },
-        'XD': { degree: 'M.Sc (Integrated)', name: 'Decision & Computing Sciences', sandwich: false },
-        'XC': { degree: 'M.Sc (Integrated)', name: 'Theoretical Computer Science', sandwich: false },
+        'XT': { degree: 'M.Sc (Integrated)', name: 'Theoretical Computer Science / Textile Science', sandwich: false },
+        'XD': { degree: 'M.Sc (Integrated)', name: 'Decision & Computing Sciences / Data Science', sandwich: false },
+        'XC': { degree: 'M.Sc (Integrated)', name: 'Theoretical Computer Science / Chemistry', sandwich: false },
         'MX': { degree: 'M.C.A.', name: 'Master of Computer Applications', sandwich: false },
         'AE': { degree: 'M.E.', name: 'Automotive Engineering', sandwich: false },
         'NB': { degree: 'M.E.', name: 'Energy Engineering', sandwich: false },
@@ -49,10 +49,15 @@
         'ED': { degree: 'M.E.', name: 'Industrial Engineering', sandwich: false },
         'CS': { degree: 'M.E.', name: 'Computer Science & Engineering', sandwich: false },
         'LV': { degree: 'M.E.', name: 'VLSI Design', sandwich: false },
-        'BT': { degree: 'M.Tech', name: 'Biotechnology', sandwich: false },
-        'LN': { degree: 'M.Tech', name: 'Nano Science & Technology', sandwich: false },
-        'TT': { degree: 'M.Tech', name: 'Textile Technology', sandwich: false },
         'SE': { degree: 'M.E.', name: 'Structural Engineering', sandwich: false },
+        'IS': { degree: 'M.E.', name: 'Infrastructure Engineering', sandwich: false },
+        'CN': { degree: 'M.E.', name: 'Control Systems / Instrumentation', sandwich: false },
+        'BI': { degree: 'M.Tech', name: 'Biotechnology', sandwich: false },
+        'BT': { degree: 'M.Tech', name: 'Biotechnology', sandwich: false },
+        'NT': { degree: 'M.Tech', name: 'Nano Science & Technology', sandwich: false },
+        'LN': { degree: 'M.Tech', name: 'Nano Science & Technology', sandwich: false },
+        'TX': { degree: 'M.Tech', name: 'Textile Technology', sandwich: false },
+        'TT': { degree: 'M.Tech', name: 'Textile Technology', sandwich: false },
         'CE': { degree: 'M.Tech', name: 'Chemical Engineering', sandwich: false },
         'EC': { degree: 'M.Tech', name: 'Electronics & Communication', sandwich: false },
         'IT': { degree: 'M.Tech', name: 'Information Technology', sandwich: false },
@@ -281,10 +286,27 @@
         }
 
         if (s.isMCA) {
-            if (!c.includes('mca')) return 0;
-            if (y === 1 && (c.includes('first') || c.includes('1st') || c.includes('i year') || c.includes('i '))) return 100;
-            if (y >= 2 && (c.includes('second') || c.includes('2nd') || c.includes('ii year') || c.includes('ii '))) return 100;
-            return 80;
+            if (y === 1) {
+                if (c.includes('i year mca') || c.includes('first year mca') || c.includes('1st year mca')) {
+                    return 110;
+                }
+                if (c.includes('first') || c.includes('1st') || c.includes('i year') || c.includes('i ')) {
+                    return c.includes('mca') ? 90 : 0;
+                }
+                return c.includes('mca') ? 80 : 0;
+            }
+            if (y >= 2) {
+                if (c.includes('first year mca') || c.includes('first  year mca') || c.includes('1st year mca') || c.includes('i year mca')) {
+                    return 0;
+                }
+                if (c.includes('mca') && (c.includes('second') || c.includes('2nd') || c.includes('ii year') || c.includes('ii '))) {
+                    return 100;
+                }
+                if (c.includes('third and fourth') || c.includes('all bsc & msc') || c.includes('me/mtech')) {
+                    return 90;
+                }
+                return c.includes('mca') ? 80 : 0;
+            }
         }
 
         if (s.isPG) {
@@ -296,6 +318,9 @@
 
         if (courseNorm === 'BE' || courseNorm === 'BTECH') {
             if ((c.includes('mca') && !c.includes('be') && !c.includes('btech')) || (c.includes('all_bsc_msc') && !c.includes('be') && !c.includes('btech'))) {
+                return 0;
+            }
+            if ((c.includes('me') || c.includes('mtech') || c.includes('m.tech')) && !c.includes('be') && !c.includes('btech')) {
                 return 0;
             }
             if (y === 1 && (c.includes('first year') || c.includes('1st year') || c.includes('i year') || c.includes('first  year'))) return 100;
@@ -310,12 +335,10 @@
         if (!planners || !planners.length) return null;
         semester = (semester || 'odd').toLowerCase();
         const active = planners.filter(p => {
-            const nl = (p.name || '').toLowerCase();
-            if (semester === 'odd') {
-                return p.isPublished || (nl.includes('odd') && !nl.includes('even'));
-            } else {
-                return !p.isPublished || nl.includes('even');
-            }
+            const pid = parseInt(p.id, 10);
+            const start = String(p.startDate || '');
+            const isOdd = [32, 33, 34, 35, 39].includes(pid) || (start.includes('2026-0') && !start.includes('2026-12'));
+            return (semester === 'odd') ? isOdd : !isOdd;
         });
 
         const list = active.length ? active : planners;
@@ -432,7 +455,12 @@
                 const cachedRaw = localStorage.getItem(storageKey);
                 if (cachedRaw) {
                     const parsed = JSON.parse(cachedRaw);
-                    if (parsed.timestamp && (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) && parsed.data && (parsed.data.activities || parsed.data.name)) {
+                    const pid = parsed.data ? (parsed.data.id || (parsed.data.matchedPlanner && parsed.data.matchedPlanner.id)) : null;
+                    const st = parseStudentRoll(roll, 2026, semester);
+                    // Stale cache guard: If student is 2nd year but cache holds 3rd/4th year (ID 32/40), purge stale cache immediately!
+                    if (st && st.yearOfStudy === 2 && (pid === 32 || pid === 40 || String(pid) === '32' || String(pid) === '40')) {
+                        localStorage.removeItem(storageKey);
+                    } else if (parsed.timestamp && (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) && parsed.data && (parsed.data.activities || parsed.data.name)) {
                         data = parsed.data;
                     }
                 }
@@ -444,9 +472,10 @@
             try {
                 let allCalendars = STATE.allYearsIndex;
                 if (!allCalendars) {
-                    const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar');
+                    const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026');
                     if (idxRes.ok) {
-                        allCalendars = await idxRes.json();
+                        const rawCal = await idxRes.json();
+                        allCalendars = Array.isArray(rawCal) ? rawCal : [rawCal];
                         STATE.allYearsIndex = allCalendars;
                     }
                 }
@@ -489,7 +518,12 @@
             try {
                 const querySem = (semester !== undefined && semester !== null) ? semester : (STATE.currentSemesterNo || STATE.currentSemester || '');
                 const semParam = querySem ? `?sem=${encodeURIComponent(querySem)}` : '';
-                const res = await fetch(`/api/calendar/${encodeURIComponent(roll)}${semParam}`);
+                const headers = {};
+                try {
+                    const sessionToken = localStorage.getItem('bunker_session_token');
+                    if (sessionToken) headers['X-Session-Token'] = sessionToken;
+                } catch (e) {}
+                const res = await fetch(`/api/calendar/${encodeURIComponent(roll)}${semParam}`, { headers });
                 if (res.ok) {
                     data = await res.json();
                 } else {
@@ -571,8 +605,23 @@
                 // Fallback to proxy
                 if (!data) {
                     try {
-                        const resProxy = await fetch(`/api/calendar/${plannerId}?year=${year}`);
+                        const token = localStorage.getItem('bunker_session_token');
+                        const headers = token ? { 'X-Session-Token': token } : {};
+                        const resProxy = await fetch(`/api/calendar/${plannerId}?year=${year}`, { headers });
                         if (resProxy.ok) data = await resProxy.json();
+                    } catch (e) {}
+                }
+
+                // Fallback to local static JSON bundle
+                if (!data) {
+                    try {
+                        const cacheRes = await fetch('/static/all_calendars_cache.json');
+                        if (cacheRes.ok) {
+                            const cdata = await cacheRes.json();
+                            if (cdata && cdata[String(plannerId)]) {
+                                data = cdata[String(plannerId)];
+                            }
+                        }
                     } catch (e) {}
                 }
 
@@ -1023,18 +1072,26 @@
     }
 
     function populatePlannerDropdown() {
-        const select = document.getElementById('direct-planner-select');
+        const select = document.getElementById('cal-dept-select') || document.getElementById('direct-planner-select');
         if (!select) return;
 
         const planners = STATE.availablePlanners || [];
         if (!planners.length) return;
 
-        let html = '<option value="">-- Or Choose Any College Calendar --</option>';
+        let html = '<option value="">-- Choose Calendar --</option>';
         planners.forEach(p => {
-            const isSelected = STATE.plannerData && (STATE.plannerData.id === p.id);
+            const isSelected = STATE.plannerData && (STATE.plannerData.id === p.id || (STATE.plannerData.matchedPlanner && STATE.plannerData.matchedPlanner.id === p.id));
             html += `<option value="${p.id}" ${isSelected ? 'selected' : ''}>${escapeHtml(p.name)}</option>`;
         });
         select.innerHTML = html;
+
+        const userBadge = document.getElementById('user-dept-badge');
+        if (userBadge) {
+            userBadge.classList.remove('hidden');
+            if (STATE.student) {
+                userBadge.textContent = `${STATE.student.yearOfStudy || 2}${getOrdinal(STATE.student.yearOfStudy || 2)} Year ${STATE.student.branchCode || 'BE'}`;
+            }
+        }
     }
 
     // --- Day Modal / Drawer ---
@@ -1232,6 +1289,9 @@
 
     // --- Initialization ---
     function init() {
+        const isCalendarPage = document.getElementById('roll-input') || document.getElementById('calendar-result-container') || document.getElementById('cal-dept-select') || (window.location && window.location.pathname && window.location.pathname.includes('calendar'));
+        if (!isCalendarPage) return;
+
         // Check URL params e.g. ?roll=25L101 or ?sem=odd
         const urlParams = new URLSearchParams(window.location.search);
         let roll = urlParams.get('roll');
@@ -1240,7 +1300,16 @@
         if (!roll) {
             // Check localStorage
             try {
-                roll = localStorage.getItem('bunker_calendar_roll') || localStorage.getItem('bunker_roll_number');
+                roll = localStorage.getItem('bunker_roll') || 
+                       localStorage.getItem('bunker_calendar_roll') || 
+                       localStorage.getItem('bunker_roll_number');
+                if (!roll) {
+                    const credsStr = localStorage.getItem('bunker_credentials');
+                    if (credsStr) {
+                        const parsed = JSON.parse(credsStr);
+                        if (parsed && parsed.roll) roll = parsed.roll;
+                    }
+                }
             } catch (e) {}
         }
 
@@ -1280,7 +1349,7 @@
             });
         }
 
-        const directSelect = document.getElementById('direct-planner-select');
+        const directSelect = document.getElementById('cal-dept-select') || document.getElementById('direct-planner-select');
         if (directSelect) {
             directSelect.addEventListener('change', function () {
                 if (this.value) loadByPlannerId(this.value);
@@ -1301,6 +1370,7 @@
     window.calendarApp = {
         loadCalendar: loadCalendar,
         loadByPlannerId: loadByPlannerId,
+        changeDepartment: loadByPlannerId,
         switchSemester: switchSemester,
         selectSemester: selectSemester,
         setView: setView,

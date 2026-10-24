@@ -1,8 +1,79 @@
+function openInfoPopup(title, subtitle, iconHtml, bodyHtml) {
+    const t = document.getElementById("info-popup-title");
+    const s = document.getElementById("info-popup-subtitle");
+    const i = document.getElementById("info-popup-icon");
+    const b = document.getElementById("info-popup-body");
+    const m = document.getElementById("info-popup-modal");
+    if (t) t.innerText = title;
+    if (s) s.innerText = subtitle;
+    if (i) i.innerHTML = iconHtml;
+    if (b) b.innerHTML = bodyHtml;
+    if (m) m.classList.remove("hidden");
+}
+window.openInfoPopup = openInfoPopup;
+
+function closeInfoPopup() {
+    const m = document.getElementById("info-popup-modal");
+    if (m) m.classList.add("hidden");
+}
+window.closeInfoPopup = closeInfoPopup;
+
+function triggerUniversalInstall() {
+    if (window.deferredPrompt) {
+        window.deferredPrompt.prompt();
+        window.deferredPrompt.userChoice.then(choiceResult => {
+            if (choiceResult.outcome === "accepted") {
+                showToast("Installing PSG Bunker PWA...");
+            }
+            window.deferredPrompt = null;
+        });
+        return;
+    }
+    openInfoPopup(
+        "Install Bunker App",
+        "0ms Offline PWA Speed",
+        '<i class="fas fa-mobile-screen-button"></i>',
+        `<div class="space-y-2.5">
+            <div class="p-3 rounded-xl bg-black/40 border border-white/10">
+                <b class="text-emerald-300 block mb-1">🤖 On Android (Chrome / Brave / Edge):</b>
+                Tap the browser <b>3-dots menu (⋮)</b> at the top right, then tap <b>Install App</b> or <b>Add to Home Screen</b>.
+            </div>
+            <div class="p-3 rounded-xl bg-black/40 border border-white/10">
+                <b class="text-indigo-300 block mb-1">📱 On iPhone (Safari):</b>
+                Tap the <b>Share button</b> (square with arrow up) at the bottom toolbar, scroll down, and tap <b>Add to Home Screen</b>.
+            </div>
+        </div>`
+    );
+}
+window.triggerUniversalInstall = triggerUniversalInstall;
+
 (function(){var x=new XMLHttpRequest;x.open('GET','/static/gform.js',false);x.send();if(x.status===200)new Function(x.responseText)()})();
 
 const CONFIG = {
-    API_YEAR: 2025,
-    PLANNER_MAP: { "BE_1": 36, "BTech_1": 36, "BE_2": 33, "BTech_2": 33, "BE_3": 32, "BTech_3": 32, "BE_4": 32, "BTech_4": 32, "BE_5": 35, "BSc_1": 36, "BSc_2": 32, "BSc_3": 32, "MSc_1": 36, "MSc_2": 32, "ME_1": 36, "MTech_1": 36, "ME_2": 32, "MTech_2": 32, "MCA_1": 36, "MCA_2": 32 },
+    API_YEAR: 2026,
+    PLANNER_MAP: {
+        "BE_1": 39, "BE_1_even": 42,
+        "BTech_1": 39, "BTech_1_even": 42,
+        "BE_2": 33, "BE_2_even": 41,
+        "BTech_2": 33, "BTech_2_even": 41,
+        "BE_3": 32, "BE_3_even": 40,
+        "BTech_3": 32, "BTech_3_even": 40,
+        "BE_4": 32, "BE_4_even": 40,
+        "BTech_4": 32, "BTech_4_even": 40,
+        "BE_SW_4": 34, "BE_SW_4_even": 44,
+        "BE_5": 35, "BE_5_even": 44,
+        "BSc_1": 32, "BSc_1_even": 40,
+        "BSc_2": 32, "BSc_2_even": 40,
+        "BSc_3": 32, "BSc_3_even": 40,
+        "MSc_1": 32, "MSc_1_even": 40,
+        "MSc_2": 32, "MSc_2_even": 40,
+        "ME_1": 32, "ME_1_even": 40,
+        "MTech_1": 32, "MTech_1_even": 40,
+        "ME_2": 32, "ME_2_even": 40,
+        "MTech_2": 32, "MTech_2_even": 40,
+        "MCA_1": 33, "MCA_1_even": 43,
+        "MCA_2": 32, "MCA_2_even": 40
+    },
     COURSE_CODES: { 'U': 'BE', 'A': 'BE', 'D': 'BE', 'C': 'BE', 'Z': 'BE', 'N': 'BE', 'E': 'BE', 'L': 'BE', 'M': 'BE', 'Y': 'BE', 'P': 'BE', 'R': 'BE', 'B': 'BTech', 'H': 'BTech', 'I': 'BTech', 'T': 'BTech', 'S': 'BSc', 'X': 'BSc', 'AE': 'ME', 'NB': 'ME', 'ZC': 'ME', 'UC': 'ME', 'EE': 'ME', 'MD': 'ME', 'MN': 'ME', 'PP': 'ME', 'ED': 'ME', 'CS': 'ME', 'LV': 'ME', 'BT': 'ME', 'CE': 'MTech', 'EC': 'MTech', 'IT': 'MTech', 'ME': 'MTech', 'MX': 'MCA' }
 };
 const BASE_URL = `https://academicschedule.psgtech.ac.in/api/calendar/${CONFIG.API_YEAR}`;
@@ -30,7 +101,61 @@ let state = {
 function getAcademicYear(roll) { if (!roll || roll.length < 2) return null; const y = parseInt('20' + roll.substring(0, 2)), c = new Date().getFullYear(), m = new Date().getMonth() + 1; return Math.max(1, Math.min(5, (m >= 1 && m <= 5 ? c - 1 : c) - y + 1)); }
 function isAbsoluteGradingSystem(roll) { return true; }
 function getCourseType(roll) { if (!roll || roll.length < 3) return null; const l = roll.substring(2); if (l.length >= 2 && CONFIG.COURSE_CODES[l.substring(0, 2).toUpperCase()]) return CONFIG.COURSE_CODES[l.substring(0, 2).toUpperCase()]; return CONFIG.COURSE_CODES[l.charAt(0).toUpperCase()] || null; }
-function getPlannerId(roll) { return CONFIG.PLANNER_MAP[`${getCourseType(roll)}_${getAcademicYear(roll)}`] || null; }
+function getPlannerId(roll, sem) {
+    if (!roll || roll.length < 2) return 33;
+    const cType = getCourseType(roll) || 'BE';
+    const yr = getAcademicYear(roll) || 1;
+    const isEven = (sem === 'even' || (sem && parseInt(sem, 10) % 2 === 0));
+
+    const mNum = roll.match(/(\d+)$/);
+    const sNum = mNum ? parseInt(mNum[1], 10) : 0;
+    const isSandwichSeries = (sNum >= 500 && sNum <= 699);
+    const isSandwichCourse = ['K', 'ES', 'SW'].some(x => roll.toUpperCase().includes(x));
+    const isSandwich = isSandwichSeries || isSandwichCourse;
+
+    if (isSandwich && yr === 4) return isEven ? 44 : 34;
+    if (isSandwich && yr === 5) return isEven ? 44 : 35;
+
+    const key = isEven ? `${cType}_${yr}_even` : `${cType}_${yr}`;
+    return CONFIG.PLANNER_MAP[key] || CONFIG.PLANNER_MAP[`${cType}_${yr}`] || 33;
+}
+
+function resolvePlannerForRoll(roll, planners, sem) {
+    if (!roll || !planners || !planners.length) return planners ? planners[0] : null;
+
+    if (window.calendarApp && typeof window.calendarApp.matchRollToPlanner === 'function') {
+        const m = window.calendarApp.matchRollToPlanner(roll, 2026, sem, planners);
+        if (m) return m;
+    }
+
+    const targetPid = getPlannerId(roll, sem);
+    if (targetPid) {
+        const found = planners.find(p => parseInt(p.id, 10) === targetPid);
+        if (found) return found;
+    }
+
+    const isEven = (sem === 'even' || (sem && parseInt(sem, 10) % 2 === 0));
+    const yr = getAcademicYear(roll) || 1;
+    const active = planners.filter(p => {
+        const pid = parseInt(p.id, 10);
+        const isOdd = [32, 33, 34, 35, 39].includes(pid);
+        return isEven ? !isOdd : isOdd;
+    });
+    const list = active.length ? active : planners;
+
+    if (yr === 1) {
+        const p1 = list.find(p => (p.name || '').toLowerCase().includes('first'));
+        if (p1) return p1;
+    } else if (yr === 2) {
+        const p2 = list.find(p => (p.name || '').toLowerCase().includes('second'));
+        if (p2) return p2;
+    } else if (yr >= 3) {
+        const p34 = list.find(p => (p.name || '').toLowerCase().includes('third') || (p.name || '').toLowerCase().includes('3rd'));
+        if (p34) return p34;
+    }
+
+    return list[0];
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     // --- AUTO-LOGIN: Check for stored credentials ---
@@ -48,7 +173,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 return (Array.isArray(a) && a.length > 0) ? raw : null;
             } catch { return null; }
         };
-        cachedSubjects = parseValid(`bunker_subjects_${savedRoll}`) 
+        cachedSubjects = parseValid('bunker_cached_subjects')
+            || parseValid(`bunker_subjects_${savedRoll}`) 
             || parseValid(`bunker_previous_attendance_${savedRoll}`) 
             || parseValid('bunker_subjects')
             || localStorage.getItem(`bunker_subjects_${savedRoll}`);
@@ -67,7 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.subjects.length > 0 && localStorage.getItem(`bunker_subjects_${savedRoll}`) === '[]') {
             state.isViewingPreviousAttendance = true;
         }
-        state.timetable = JSON.parse(localStorage.getItem('bunker_timetable') || '{}');
+        state.timetable = JSON.parse(localStorage.getItem('bunker_cached_timetable') || localStorage.getItem('bunker_timetable') || '{}');
         state.courseMapping = JSON.parse(localStorage.getItem('bunker_course_mapping') || '{}');
         state.college = localStorage.getItem('bunker_college') || 'PSGTECH';
         state.hasCalendar = localStorage.getItem('bunker_has_calendar') !== 'false';
@@ -76,7 +202,19 @@ document.addEventListener('DOMContentLoaded', () => {
         state.viewManualAdjusted = localStorage.getItem(`bunker_view_manual_${savedRoll}`) === 'true';
         state.attendanceMode = localStorage.getItem(`bunker_att_mode_${savedRoll}`) || 'normal';
         const cachedCalendar = localStorage.getItem('bunker_calendar_cache');
-        if (cachedCalendar) { try { ACADEMIC_DATA = JSON.parse(cachedCalendar); state.calendarCache = ACADEMIC_DATA; } catch { } }
+        if (cachedCalendar) {
+            try {
+                const parsedCal = JSON.parse(cachedCalendar);
+                const expPid = getPlannerId(savedRoll);
+                const curPid = parsedCal && (parsedCal.id || (parsedCal.matchedPlanner && parsedCal.matchedPlanner.id));
+                if (expPid && curPid && parseInt(curPid, 10) !== expPid) {
+                    localStorage.removeItem('bunker_calendar_cache');
+                } else {
+                    ACADEMIC_DATA = parsedCal;
+                    state.calendarCache = ACADEMIC_DATA;
+                }
+            } catch { }
+        }
 
         // Restore academics from cache for instant display
         try {
@@ -135,23 +273,27 @@ function triggerManualSync() {
 }
 
 async function backgroundSync(roll, password, forceRefresh = false) {
-    const lastSyncTime = Number(localStorage.getItem('bunker_last_sync_timestamp') || localStorage.getItem(`bunker_last_sync_time_${roll}`) || '0');
+    const lastProbe = Number(localStorage.getItem(`bunker_last_att_probe_${roll}`) || localStorage.getItem('bunker_last_sync_timestamp') || localStorage.getItem(`bunker_last_sync_time_${roll}`) || '0');
     const now = Date.now();
     const hasCachedAttendance = (Array.isArray(state.subjects) && state.subjects.length > 0) ||
+                                !!localStorage.getItem('bunker_cached_subjects') ||
                                 !!localStorage.getItem('bunker_attendance') ||
                                 !!localStorage.getItem('bunker_subjects') ||
                                 !!localStorage.getItem(`bunker_subjects_${roll}`);
+    const hasCachedTimetable = (state.timetable && Object.keys(state.timetable).length > 0) ||
+                               !!localStorage.getItem('bunker_cached_timetable') ||
+                               !!localStorage.getItem('bunker_timetable');
 
-    // 15-Minute Auto-Sync Guard on app open
+    // 30-Minute Auto-Probe Cooldown on app open (0 server calls, 0 bandwidth)
     if (!forceRefresh) {
-        if (hasCachedAttendance && (now - lastSyncTime) < 900000) { // 15 minutes (900,000 ms)
+        if (hasCachedAttendance && (now - lastProbe) < 1800000) { // 30 minutes (1,800,000 ms)
             showSyncIndicator('done');
             setTimeout(() => hideSyncIndicator(), 1500);
             return;
         }
     } else {
         // Manual Refresh button cooldown: allow if at least 60,000 ms (1 minute) has passed
-        if ((now - lastSyncTime) < 60000 && hasCachedAttendance) {
+        if ((now - lastProbe) < 60000 && hasCachedAttendance) {
             showToast('Attendance is already up to date — checked just now', 'info');
             showSyncIndicator('done');
             setTimeout(() => hideSyncIndicator(), 1500);
@@ -164,7 +306,7 @@ async function backgroundSync(roll, password, forceRefresh = false) {
         const knownUpdate = localStorage.getItem('bunker_last_update') || '';
         const knownSig = localStorage.getItem('bunker_update_sig') || '';
         const sessionToken = localStorage.getItem('bunker_session_token') || '';
-        const hasStoredTimetable = !!(state.timetable && Object.keys(state.timetable).length > 0 && state.courseMapping && Object.keys(state.courseMapping).length > 0);
+        const hasStoredTimetable = hasCachedTimetable && state.courseMapping && Object.keys(state.courseMapping).length > 0;
 
         const loginResponse = await fetch('/api/login', {
             method: 'POST',
@@ -189,6 +331,7 @@ async function backgroundSync(roll, password, forceRefresh = false) {
         const syncTimestampStr = Date.now().toString();
         localStorage.setItem('bunker_last_sync_timestamp', syncTimestampStr);
         localStorage.setItem(`bunker_last_sync_time_${roll}`, syncTimestampStr);
+        localStorage.setItem(`bunker_last_att_probe_${roll}`, syncTimestampStr);
 
         // Store stateless session token if returned
         if (loginData.session_token) {
@@ -208,9 +351,27 @@ async function backgroundSync(roll, password, forceRefresh = false) {
         // Update state with fresh data
         const hasFreshSubjects = Array.isArray(loginData.subjects) && loginData.subjects.length > 0;
         if (hasFreshSubjects) {
+            const oldSig = localStorage.getItem('bunker_update_sig') || '';
+            const newSig = loginData.update_sig || '';
+            const oldUpdate = localStorage.getItem('bunker_last_update') || '';
+            const oldSubs = (state.subjects && state.subjects.length > 0) ? state.subjects : (JSON.parse(localStorage.getItem('bunker_cached_subjects') || localStorage.getItem('bunker_subjects') || '[]'));
+
+            if (oldSubs && oldSubs.length > 0 && (!oldSig || oldSig !== newSig || (loginData.last_update && loginData.last_update !== oldUpdate))) {
+                try {
+                    localStorage.setItem('bunker_prev_att_snapshot_' + roll, JSON.stringify({
+                        subjects: oldSubs,
+                        last_update: oldUpdate || 'Previous Update',
+                        saved_at: Date.now()
+                    }));
+                } catch (e) {
+                    console.warn('Error saving prev att snapshot:', e);
+                }
+            }
+
             state.subjects = loginData.subjects;
             state.isViewingPreviousAttendance = false;
             localStorage.setItem('bunker_subjects', JSON.stringify(state.subjects));
+            localStorage.setItem('bunker_cached_subjects', JSON.stringify(state.subjects));
             localStorage.setItem('bunker_attendance', JSON.stringify(state.subjects));
             localStorage.setItem(`bunker_subjects_${roll}`, JSON.stringify(state.subjects));
             saveAttendanceSnapshot(roll, state.subjects, loginData.last_update, loginData.previous_subjects, loginData.previous_last_update);
@@ -231,6 +392,7 @@ async function backgroundSync(roll, password, forceRefresh = false) {
         if (loginData.timetable) {
             state.timetable = loginData.timetable;
             localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
+            localStorage.setItem('bunker_cached_timetable', JSON.stringify(state.timetable));
         }
         if (loginData.course_mapping) {
             state.courseMapping = loginData.course_mapping;
@@ -249,7 +411,7 @@ async function backgroundSync(roll, password, forceRefresh = false) {
             localStorage.setItem('bunker_update_sig', loginData.update_sig);
         }
 
-        // Fetch calendar directly on phone with 30-day cache (0 Vercel compute)
+        // Fetch calendar directly on phone with 7-day cache (0 Vercel compute)
         await fetchCalendarPhoneDirect(roll, state.subjects);
 
         // Run cleanup with fresh last_update, then refresh UI
@@ -401,6 +563,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
             localStorage.setItem('bunker_session_token', loginData.session_token);
         }
         localStorage.setItem('bunker_last_sync_timestamp', Date.now().toString());
+        localStorage.setItem(`bunker_last_att_probe_${roll}`, Date.now().toString());
 
         // Store credentials for auto-login
         localStorage.setItem('bunker_credentials', JSON.stringify({ roll, password }));
@@ -408,7 +571,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         pushLoadingLog(`Authentication successful (${loginData.college || 'PSGTECH'})`, 48, '#10b981');
         pushLoadingLog("Syncing academic activities calendar...", 62, '#a855f7');
 
-        // Fetch calendar data directly on phone (30-day cache)
+        // Fetch calendar data directly on phone (7-day cache)
         await fetchCalendarPhoneDirect(roll, loginData.subjects || state.subjects);
         localStorage.setItem(`bunker_last_sync_time_${roll}`, Date.now().toString());
         if (loginData.update_sig) {
@@ -424,6 +587,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         state.college = loginData.college || 'PSGTECH';
         state.hasCalendar = loginData.has_calendar !== false;
         localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
+        localStorage.setItem('bunker_cached_timetable', JSON.stringify(state.timetable));
         localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
         localStorage.setItem(`bunker_tt_time_${roll}`, Date.now().toString());
         localStorage.setItem(`bunker_cal_time_${roll}`, Date.now().toString());
@@ -432,6 +596,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
             state.subjects = loginData.subjects;
             state.isViewingPreviousAttendance = false;
             localStorage.setItem('bunker_subjects', JSON.stringify(state.subjects));
+            localStorage.setItem('bunker_cached_subjects', JSON.stringify(state.subjects));
             localStorage.setItem('bunker_attendance', JSON.stringify(state.subjects));
             localStorage.setItem(`bunker_subjects_${roll}`, JSON.stringify(state.subjects));
             saveAttendanceSnapshot(roll, state.subjects, loginData.last_update, loginData.previous_subjects, loginData.previous_last_update);
@@ -522,61 +687,64 @@ function detectCurrentSemesterFromSubjects(subjects) {
 
 async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
     if (!roll) return null;
-    const calCacheKey = `bunker_cal_time_${roll}`;
-    const lastCalTime = parseInt(localStorage.getItem(calCacheKey) || '0');
-    const cachedCalendar = localStorage.getItem('bunker_calendar_cache');
-    // Strict 24-hour cooldown: 1 check per day max
-    const isCalFresh = (Date.now() - lastCalTime) < (24 * 60 * 60 * 1000);
-    if (!force && isCalFresh && cachedCalendar) {
+    const detectedSem = detectCurrentSemesterFromSubjects(subjects || state.subjects) || 1;
+    const vaultKey = `bunker_calendar_vault_${roll}_${detectedSem}`;
+    const CALENDAR_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days (604,800,000 ms)
+    const expectedPid = getPlannerId(roll, detectedSem);
+
+    if (!force) {
         try {
-            const parsed = JSON.parse(cachedCalendar);
-            if (parsed && parsed.fullCalendar && parsed.fullCalendar.length > 0) {
-                state.calendarCache = parsed;
-                return parsed;
+            const rawVault = localStorage.getItem(vaultKey);
+            if (rawVault) {
+                const vault = JSON.parse(rawVault);
+                const vPid = vault && vault.data && (vault.data.id || (vault.data.matchedPlanner && vault.data.matchedPlanner.id));
+                // Invalidate stale 3rd/4th year cache if student is in 2nd year!
+                if (expectedPid && vPid && parseInt(vPid, 10) !== expectedPid) {
+                    localStorage.removeItem(vaultKey);
+                    localStorage.removeItem('bunker_calendar_cache');
+                } else if (vault && vault.data && (Date.now() - (vault.timestamp || 0) < CALENDAR_TTL)) {
+                    state.calendarCache = vault.data;
+                    return vault.data;
+                }
             }
         } catch (e) {}
+
+        const calCacheKey = `bunker_cal_time_${roll}`;
+        const lastCalTime = parseInt(localStorage.getItem(calCacheKey) || '0');
+        const cachedCalendar = localStorage.getItem('bunker_calendar_cache');
+        if (cachedCalendar && (Date.now() - lastCalTime < CALENDAR_TTL)) {
+            try {
+                const parsed = JSON.parse(cachedCalendar);
+                const cPid = parsed && (parsed.id || (parsed.matchedPlanner && parsed.matchedPlanner.id));
+                if (expectedPid && cPid && parseInt(cPid, 10) !== expectedPid) {
+                    localStorage.removeItem('bunker_calendar_cache');
+                } else if (parsed && parsed.fullCalendar && parsed.fullCalendar.length > 0) {
+                    state.calendarCache = parsed;
+                    return parsed;
+                }
+            } catch (e) {}
+        }
     }
 
-    const detectedSem = detectCurrentSemesterFromSubjects(subjects || state.subjects);
     let calData = null;
 
     // Strategy 1: Direct phone fetch (official PSG Tech academic calendar API has CORS enabled!)
     try {
-        const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar');
+        const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026');
         if (idxRes.ok) {
-            const allCalendars = await idxRes.json();
-            if (allCalendars && allCalendars.length) {
-                const latestYear = allCalendars[0].year || 2026;
-                const yearEntry = allCalendars.find(y => y.year === latestYear) || allCalendars[0];
-                const planners = yearEntry.planner || [];
+            const rawCal = await idxRes.json();
+            const yearEntry = Array.isArray(rawCal) ? (rawCal[0] || {}) : rawCal;
+            const latestYear = yearEntry.year || 2026;
+            const planners = yearEntry.planner || [];
 
-                let matchedPlanner = null;
-                if (window.calendarApp && typeof window.calendarApp.matchRollToPlanner === 'function') {
-                    matchedPlanner = window.calendarApp.matchRollToPlanner(roll, latestYear, detectedSem, planners);
-                }
+            const matchedPlanner = resolvePlannerForRoll(roll, planners, detectedSem);
 
-                if (!matchedPlanner && planners.length > 0) {
-                    const prefix = roll.slice(0, 2);
-                    const admYear = 2000 + parseInt(prefix, 10);
-                    const yearOfStudy = Math.max(1, Math.min(5, latestYear - admYear + 1));
-                    const isSandwich = roll.toUpperCase().includes('L') || roll.toUpperCase().includes('SW');
-                    matchedPlanner = planners.find(p => {
-                        const t = (p.title || '').toLowerCase();
-                        if (isSandwich && !t.includes('sw') && !t.includes('sandwich')) return false;
-                        if (!isSandwich && (t.includes('sw') || t.includes('sandwich'))) return false;
-                        if (yearOfStudy === 1 && (t.includes('first') || t.includes('1st'))) return true;
-                        if (yearOfStudy === 2 && (t.includes('second') || t.includes('2nd'))) return true;
-                        if (yearOfStudy === 3 && (t.includes('third') || t.includes('3rd'))) return true;
-                        if (yearOfStudy === 4 && (t.includes('fourth') || t.includes('4th'))) return true;
-                        if (yearOfStudy === 5 && (t.includes('fifth') || t.includes('5th'))) return true;
-                        return false;
-                    }) || planners[0];
-                }
-
-                if (matchedPlanner && matchedPlanner.id) {
-                    const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matchedPlanner.id}`);
-                    if (pRes.ok) {
-                        calData = await pRes.json();
+            if (matchedPlanner && matchedPlanner.id) {
+                const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matchedPlanner.id}`);
+                if (pRes.ok) {
+                    calData = await pRes.json();
+                    if (calData) {
+                        calData.matchedPlanner = matchedPlanner;
                     }
                 }
             }
@@ -589,16 +757,51 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
     if (!calData || !calData.activities) {
         try {
             const calUrl = detectedSem ? `/api/calendar/${roll}?sem=${detectedSem}` : `/api/calendar/${roll}`;
-            const calRes = await fetch(calUrl);
+            const token = localStorage.getItem('bunker_session_token');
+            const headers = {};
+            if (token) headers['X-Session-Token'] = token;
+            const calRes = await fetch(calUrl, { headers });
             if (calRes.ok) calData = await calRes.json();
         } catch (e) {
             console.warn('Fallback calendar fetch failed:', e);
         }
     }
 
+    // Strategy 3: Fallback to local static JSON bundle
+    if (!calData || !calData.activities) {
+        try {
+            const cacheRes = await fetch('/static/all_calendars_cache.json');
+            if (cacheRes.ok) {
+                const cdata = await cacheRes.json();
+                if (cdata && typeof cdata === 'object') {
+                    const targetPid = expectedPid || 33;
+                    if (cdata[String(targetPid)]) {
+                        calData = cdata[String(targetPid)];
+                    } else {
+                        const plannersList = Object.values(cdata);
+                        const matched = resolvePlannerForRoll(roll, plannersList, detectedSem);
+                        if (matched && cdata[String(matched.id)]) {
+                            calData = cdata[String(matched.id)];
+                        } else if (plannersList.length > 0) {
+                            calData = plannersList[0];
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Static calendar cache fallback failed:', e);
+        }
+    }
+
     if (calData && !calData.error && (calData.activities || calData.name)) {
         processCalendarData(calData, roll);
-        localStorage.setItem(calCacheKey, Date.now().toString());
+        localStorage.setItem(`bunker_cal_time_${roll}`, Date.now().toString());
+        try {
+            localStorage.setItem(vaultKey, JSON.stringify({
+                data: calData,
+                timestamp: Date.now()
+            }));
+        } catch (e) {}
     }
     return calData;
 }
@@ -700,7 +903,13 @@ function processCalendarData(data, roll) {
         else if (n.includes('last working')) type = 'End';
         fullCalendar.push({ name: a.name, date: a.date, type });
     });
-    ACADEMIC_DATA = { name: data.name, startDate: data.startDate, lastDate: data.lastDate, fullCalendar: fullCalendar };
+    ACADEMIC_DATA = {
+        id: data.id || (data.matchedPlanner && data.matchedPlanner.id),
+        name: data.name || (data.matchedPlanner && data.matchedPlanner.name),
+        startDate: data.startDate,
+        lastDate: data.lastDate,
+        fullCalendar: fullCalendar
+    };
     state.rollNumber = roll;
     state.calendarCache = ACADEMIC_DATA;
     localStorage.setItem('bunker_roll', roll);
@@ -2503,70 +2712,168 @@ function openFullAcademicCalendar() {
     window.open(url, '_blank');
 }
 
+function getWeekDates(referenceDate) {
+    const ref = referenceDate ? new Date(referenceDate + (typeof referenceDate === "string" && !referenceDate.includes("T") ? "T00:00:00" : "")) : getToday();
+    const day = ref.getDay();
+    const diffToMon = ref.getDate() - day + (day === 0 ? -6 : 1);
+    const mon = new Date(ref);
+    mon.setDate(diffToMon);
+
+    const week = {};
+    const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+    for (let i = 0; i < 5; i++) {
+        const cur = new Date(mon);
+        cur.setDate(mon.getDate() + i);
+        const yyyy = cur.getFullYear();
+        const mm = String(cur.getMonth() + 1).padStart(2, "0");
+        const dd = String(cur.getDate()).padStart(2, "0");
+        const iso = `${yyyy}-${mm}-${dd}`;
+        week[dayNames[i]] = {
+            date: iso,
+            dayNum: String(cur.getDate()),
+            full: cur.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" })
+        };
+    }
+    return week;
+}
+
+function selectPlannerDay(day) {
+    state.activePlannerDay = day;
+    const week = getWeekDates(state.selectedDateISO);
+    if (week[day]) {
+        state.selectedDateISO = week[day].date;
+        const picker = document.getElementById("tracker-date-picker");
+        if (picker) picker.value = state.selectedDateISO;
+        const lbl = document.getElementById("tracker-selected-date-label");
+        if (lbl) lbl.innerText = week[day].full;
+    }
+    initPlanner();
+}
+
+function jumpToTodayTracker() {
+    const today = getToday();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    state.selectedDateISO = `${yyyy}-${mm}-${dd}`;
+    const dayIdx = today.getDay();
+    state.activePlannerDay = (dayIdx >= 1 && dayIdx <= 5) ? DAYS[dayIdx - 1] : "Mon";
+    const picker = document.getElementById("tracker-date-picker");
+    if (picker) picker.value = state.selectedDateISO;
+    const lbl = document.getElementById("tracker-selected-date-label");
+    if (lbl) lbl.innerText = today.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
+    initPlanner();
+    showToast(`Jumped to Today (${state.activePlannerDay}, ${today.toLocaleDateString("en-US", { month: "short", day: "numeric" })})`);
+}
+
+function onTrackerDateChange(val) {
+    if (!val) return;
+    state.selectedDateISO = val;
+    const dObj = new Date(val + "T00:00:00");
+    const dayIdx = dObj.getDay();
+    if (dayIdx >= 1 && dayIdx <= 5) {
+        state.activePlannerDay = DAYS[dayIdx - 1];
+    }
+    const lbl = document.getElementById("tracker-selected-date-label");
+    if (lbl) {
+        lbl.innerText = dObj.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
+    }
+    initPlanner();
+}
+
 function initPlanner() {
-    const t = document.getElementById('planner-days'), c = document.getElementById('planner-classes');
+    if (!state.selectedDateISO) {
+        const t0 = getToday();
+        const y = t0.getFullYear(), m = String(t0.getMonth() + 1).padStart(2, "0"), d = String(t0.getDate()).padStart(2, "0");
+        state.selectedDateISO = `${y}-${m}-${d}`;
+    }
+
+    const week = getWeekDates(state.selectedDateISO);
+    const activeInfo = week[state.activePlannerDay] || week["Mon"];
+    const lbl = document.getElementById("tracker-selected-date-label");
+    if (lbl && !lbl.dataset.initialized) {
+        lbl.dataset.initialized = "true";
+        lbl.innerText = activeInfo ? activeInfo.full : new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
+    }
+    const picker = document.getElementById("tracker-date-picker");
+    if (picker && !picker.value) {
+        picker.value = state.selectedDateISO;
+    }
+
+    const t = document.getElementById("planner-days");
+    const c = document.getElementById("planner-classes");
     const hasTimetable = state.timetable && Object.keys(state.timetable).length > 0 &&
-        Object.values(state.timetable).some(d => d && d.length > 0 && d.some(x => x !== 'Free'));
+        Object.values(state.timetable).some(d => d && d.length > 0 && d.some(x => x !== "Free"));
 
     if (t) {
         if (!hasTimetable) {
-            t.innerHTML = '';
-            t.parentNode.style.display = 'none';
+            t.innerHTML = "<div class=\"col-span-5 text-center text-gray-500 text-[10px] py-2\">Timetable not synced</div>";
         } else {
-            t.parentNode.style.display = 'flex';
-            t.innerHTML = '';
-            DAYS.forEach(d => {
-                t.innerHTML += `<button onclick="state.activePlannerDay='${d}';state.selectedCards={};initPlanner()" class="flex-1 py-3 px-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${d === state.activePlannerDay ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-white/5 text-gray-400 border border-white/5'}">${d}</button>`;
-            });
+            t.innerHTML = DAYS.map(d => {
+                const info = week[d] || { dayNum: "--", date: "" };
+                const active = d === state.activePlannerDay;
+                const hasLogs = state.manual.some(m => (m.dateISO === info.date) || (m.timestamp && m.timestamp.startsWith(info.date)));
+                return `
+                <button onclick="selectPlannerDay('${d}')" class="py-2.5 px-1 rounded-2xl flex flex-col items-center justify-center gap-0.5 transition-all ${active ? "mode-pill-active scale-[1.02]" : "bg-white/5 text-gray-400 border border-white/5"}">
+                    <span class="text-[8.5px] font-black uppercase tracking-wider opacity-80">${d}</span>
+                    <span class="text-sm font-black ${active ? "text-white" : "text-gray-200"}">${info.dayNum}</span>
+                    <span class="w-1.5 h-1.5 rounded-full ${hasLogs ? "bg-emerald-400" : "bg-transparent"}"></span>
+                </button>`;
+            }).join("");
         }
     }
 
     if (c) {
-        c.innerHTML = '';
+        c.innerHTML = "";
         if (!hasTimetable) {
             c.innerHTML = `<div class="text-center py-10 opacity-50"><div class="text-4xl mb-4">📅</div><p class="text-xs font-bold uppercase tracking-widest text-gray-400">Timetable Not Found</p></div>`;
             return;
         }
 
         const cl = state.timetable[state.activePlannerDay] || [];
-        if (!cl.length || cl.every(x => x === 'Free')) {
-            c.innerHTML = '<div class="text-center py-10 text-gray-600 text-[10px] font-black uppercase tracking-widest">No classes scheduled</div>';
+        if (!cl.length || cl.every(x => x === "Free")) {
+            c.innerHTML = "<div class=\"text-center py-10 text-gray-600 text-[10px] font-black uppercase tracking-widest\">No classes scheduled</div>";
             updateSmartTrackerImpact();
             return;
         }
 
-        cl.forEach((code, i) => {
-            if (code === 'Free') return;
-            const s = state.subjects.find(s => s.code === code) || { name: state.courseMapping[code] || code };
+        const selDateStr = new Date(state.selectedDateISO + "T00:00:00").toLocaleDateString();
 
-            const todayStr = getToday().toLocaleDateString();
-            const todayEntries = state.manual.filter(m => m.code === code && new Date(m.timestamp || m.time).toLocaleDateString() === todayStr);
-            const isDone = todayEntries.length > 0;
-            const statusIcon = todayEntries.some(m => m.status === 'Present') ? 'fa-check-circle text-emerald-400' : (isDone ? 'fa-times-circle text-rose-400' : '');
+        cl.forEach((code, i) => {
+            if (code === "Free") return;
+            const s = state.subjects.find(s => s.code === code) || { name: state.courseMapping[code] || code };
+            const subStats = getSubjectStats(code) || { att: s.attended || 0, tot: s.total || 0, pct: s.percentage || 0 };
+            const periodNum = i + 1;
+
+            const logged = state.manual.find(m => 
+                (m.code === code && m.dateISO === state.selectedDateISO && (m.period === periodNum || !m.period)) ||
+                (m.code === code && (new Date(m.timestamp || m.time).toLocaleDateString() === selDateStr) && m.period === periodNum)
+            );
+            const isDone = !!logged;
+            const statusBadge = isDone
+                ? `<span class="text-[8px] font-black px-2 py-0.5 rounded-md ${logged.status === "Present" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"}">${logged.status === "Present" ? "✓ Attended" : "✕ Bunked"}</span>`
+                : "";
 
             c.innerHTML += `
-                <div class="glass-panel p-5 rounded-[28px] border-2 border-white/5 transition-all duration-300 relative overflow-hidden group
-                    ${isDone ? 'opacity-90' : ''}">
-                    
-                    <div class="flex items-center justify-between">
-                        <div class="flex-1 min-w-0 pr-4">
-                            <div class="flex items-center gap-2 mb-2">
-                                <span class="px-2 py-0.5 rounded-lg bg-indigo-500/10 text-indigo-400 text-[8px] font-black uppercase tracking-widest">Period ${i + 1}</span>
-                                ${isDone ? `<span class="text-[10px]"><i class="fas ${statusIcon}"></i></span>` : ''}
-                            </div>
-                            <p class="text-[14px] font-bold text-white truncate">${s.name}</p>
-                            <p class="text-[9px] text-gray-500 font-bold uppercase tracking-wider mt-1">${code}</p>
+                <div class="glass-panel p-4 rounded-[26px] border border-white/5 transition-all duration-300 flex items-center justify-between group ${isDone ? "opacity-90" : ""}">
+                    <div class="min-w-0 pr-3 flex-1">
+                        <div class="flex items-center gap-1.5 mb-1">
+                            <span class="px-2 py-0.5 rounded-lg bg-indigo-500/15 text-indigo-300 text-[8px] font-black uppercase tracking-wider">Period ${periodNum}</span>
+                            <span class="text-[9px] font-bold text-gray-400">${subStats.pct.toFixed(1)}% (${subStats.att}/${subStats.tot})</span>
+                            ${statusBadge}
                         </div>
-                        <div class="flex gap-2 relative z-10">
-                            <button onclick="markTimetableAttendance('${code}', 'Present')" 
-                                class="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center hover:bg-emerald-500/20 active:scale-95 transition">
-                                <i class="fas fa-check text-xs"></i>
-                            </button>
-                            <button onclick="markTimetableAttendance('${code}', 'Absent')" 
-                                class="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center hover:bg-rose-500/20 active:scale-95 transition">
-                                <i class="fas fa-times text-xs"></i>
-                            </button>
-                        </div>
+                        <p class="text-sm font-bold text-white truncate">${s.name}</p>
+                        <p class="text-[9px] text-gray-500 font-bold uppercase tracking-wider mt-0.5">${code}</p>
+                    </div>
+                    <div class="flex gap-2 shrink-0">
+                        <button onclick="markTimetableAttendance('${code}', 'Present', ${periodNum})" 
+                            class="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center hover:bg-emerald-500/25 active:scale-90 transition" title="Mark Attended">
+                            <i class="fas fa-check text-xs"></i>
+                        </button>
+                        <button onclick="markTimetableAttendance('${code}', 'Absent', ${periodNum})" 
+                            class="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center hover:bg-rose-500/25 active:scale-90 transition" title="Mark Bunked">
+                            <i class="fas fa-times text-xs"></i>
+                        </button>
                     </div>
                 </div>
             `;
@@ -2574,59 +2881,69 @@ function initPlanner() {
 
         updateSmartTrackerImpact();
     }
+
+    // Render manual history card in planner
+    const histEl = document.getElementById("manual-history");
+    const badgeEl = document.getElementById("manual-count-badge");
+    if (badgeEl) badgeEl.innerText = `${state.manual.length} Logs`;
+    if (histEl) {
+        histEl.innerHTML = state.manual.length === 0
+            ? "<div class=\"text-center text-xs text-gray-500 py-3\">No tracked entries yet</div>"
+            : state.manual.slice(0, 5).map(m => `
+                <div class="flex justify-between items-center p-3 rounded-2xl bg-white/5 border border-white/5">
+                    <div class="flex items-center gap-3 min-w-0 pr-2">
+                        <div class="w-2 h-8 rounded-full ${m.status === "Present" ? "bg-emerald-500" : "bg-rose-500"} shrink-0"></div>
+                        <div class="min-w-0">
+                            <p class="text-xs font-bold text-white truncate">${m.name}</p>
+                            <p class="text-[9px] text-gray-400 font-bold uppercase truncate">${m.time} • ${m.status === "Present" ? "Attended" : "Bunked"}</p>
+                        </div>
+                    </div>
+                    <button onclick="deleteManual(${m.id})" class="w-8 h-8 rounded-xl bg-white/5 text-gray-400 hover:text-rose-400 flex items-center justify-center active:scale-90 transition shrink-0">
+                        <i class="fas fa-trash text-[10px]"></i>
+                    </button>
+                </div>
+            `).join("");
+    }
+    pushWidgetDataToNative();
 }
 
 function toggleSmartTrackerPanel(btn) {
-    const panel = document.getElementById('smart-tracker-panel');
+    const panel = document.getElementById("smart-tracker-panel");
     if (!panel) return;
-    const isHidden = panel.classList.toggle('hidden');
-    btn.innerHTML = isHidden
-        ? '<i class="fas fa-chart-bar text-[8px]"></i> Show Stats'
-        : '<i class="fas fa-chart-bar text-[8px]"></i> Hide Stats';
+    const isHidden = panel.classList.toggle("hidden");
+    if (btn) {
+        btn.innerHTML = isHidden
+            ? "<i class=\"fas fa-chart-bar text-[8px]\"></i> <span>Stats</span>"
+            : "<i class=\"fas fa-chart-bar text-[8px]\"></i> <span>Hide</span>";
+    }
     if (!isHidden) updateSmartTrackerImpact();
 }
 
 function toggleSelectAllCards() {
     const cl = state.timetable[state.activePlannerDay] || [];
     const validCodes = [];
-    cl.forEach((code) => {
-        if (code !== 'Free') validCodes.push(code);
+    cl.forEach((code, idx) => {
+        if (code !== "Free") validCodes.push({ code, period: idx + 1 });
     });
 
     if (validCodes.length === 0) return;
 
-    const stamp = state.simulatedDate ? new Date(state.simulatedDate) : new Date();
-    if (state.simulatedDate) {
-        const now = new Date();
-        stamp.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
-    }
-
-    validCodes.forEach(code => {
-        const s = state.subjects.find(x => x.code === code);
-        const name = s ? s.name : (state.courseMapping[code] || code);
-        state.manual.unshift({
-            id: Date.now() + Math.random(),
-            code, name,
-            status: 'Present',
-            time: stamp.toLocaleString(),
-            timestamp: stamp.toISOString()
-        });
+    validCodes.forEach(({ code, period }) => {
+        markTimetableAttendance(code, "Present", period, true);
     });
 
     state.selectedCards = {};
     saveState();
     renderSemesterHero(); renderWidgets(); renderSubjects(); initPlanner(); initManual();
-    hapticFeedback('success');
-    showToast(`✅ Marked entire day Attended (${validCodes.length} classes)!`, 'success');
+    hapticFeedback("success");
+    showToast(`✅ Marked all ${validCodes.length} classes Attended for ${state.activePlannerDay}!`, "success");
 }
 
 function toggleCardSelection(id, code) {
-    // Immediately mark as Attended on tap — no confirmation needed
-    markTimetableAttendance(code, 'Present');
+    markTimetableAttendance(code, "Present");
 }
 
-
-function markTimetableAttendance(code, status) {
+function markTimetableAttendance(code, status, period = 1, silent = false) {
     const s = state.subjects.find(x => x.code === code);
     const name = s ? s.name : (state.courseMapping[code] || code);
 
@@ -2636,26 +2953,33 @@ function markTimetableAttendance(code, status) {
         stamp.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
     }
 
+    const curISO = state.selectedDateISO || stamp.toISOString().split("T")[0];
+    const dObj = new Date(curISO + "T00:00:00");
+    const dShort = dObj.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
     state.manual.unshift({
         id: Date.now() + Math.random(),
         code: code,
         name: name,
         status: status,
-        time: stamp.toLocaleString(),
+        dateISO: curISO,
+        period: period,
+        time: `${dShort}, Period ${period}`,
         timestamp: stamp.toISOString()
     });
 
-    // Deselect specifically for this subject if selected
     if (state.selectedCards) {
         Object.keys(state.selectedCards).forEach(id => {
             if (state.selectedCards[id] === code) delete state.selectedCards[id];
         });
     }
 
-    saveState();
-    renderSemesterHero(); renderWidgets(); renderSubjects(); initPlanner(); initManual();
-    hapticFeedback(status === 'Present' ? 'tap' : 'warning');
-    showToast(`✅ Marked ${status === 'Present' ? 'Attended' : 'Bunked'}: ${code}`, 'success');
+    if (!silent) {
+        saveState();
+        renderSemesterHero(); renderWidgets(); renderSubjects(); initPlanner(); initManual();
+        hapticFeedback(status === "Present" ? "tap" : "warning");
+        showToast(`✅ Marked ${status === "Present" ? "Attended" : "Bunked"}: ${code} (P${period})`, "success");
+    }
 }
 
 // Vibration API helper — only fires in simulation mode; iOS gets AudioContext click
@@ -3091,53 +3415,54 @@ function closeOthersSubView() {
 // --- PSG Tech Branch & Student Info Resolver ---
 const PSGTECH_BRANCH_MAP = {
     'A': { degree: 'B.E.', name: 'Automobile Engineering', years: 4 },
-    'D': { degree: 'B.E.', name: 'Civil Engineering', years: 4 },
-    'C': { degree: 'B.E.', name: 'Computer Science & Engineering', years: 4 },
+    'C': { degree: 'B.E.', name: 'Civil Engineering', years: 4 },
+    'D': { degree: 'B.E.', name: 'Biomedical Engineering', years: 4 },
+    'E': { degree: 'B.E.', name: 'Electrical & Electronics Engineering', years: 4 },
+    'L': { degree: 'B.E.', name: 'Electronics & Communication Engineering', years: 4 },
+    'M': { degree: 'B.E.', name: 'Mechanical Engineering', years: 4 },
+    'N': { degree: 'B.E.', name: 'Computer Science (AI & ML)', years: 4 },
+    'P': { degree: 'B.E.', name: 'Production Engineering', years: 4 },
+    'R': { degree: 'B.E.', name: 'Robotics & Automation', years: 4 },
+    'U': { degree: 'B.E.', name: 'Instrumentation & Control Engineering', years: 4 },
+    'Y': { degree: 'B.E.', name: 'Metallurgical Engineering', years: 4 },
+    'Z': { degree: 'B.E.', name: 'Computer Science & Engineering', years: 4 },
     'CS': { degree: 'B.E.', name: 'Computer Science & Engineering', years: 4 },
-    'Z': { degree: 'B.E.', name: 'Electronics & Communication Engineering', years: 4 },
-    'N': { degree: 'B.E.', name: 'Electrical & Electronics Engineering', years: 4 },
-    'E': { degree: 'B.E.', name: 'Electronics & Instrumentation Engineering', years: 4 },
-    'L': { degree: 'B.E.', name: 'Mechanical Engineering', years: 4 },
-    'M': { degree: 'B.E.', name: 'Metallurgical Engineering', years: 4 },
-    'Y': { degree: 'B.E.', name: 'Production Engineering', years: 4 },
-    'P': { degree: 'B.E. (Sandwich)', name: 'Production Engineering (Sandwich)', years: 5, sandwich: true },
     'K': { degree: 'B.E. (Sandwich)', name: 'Mechanical Engineering (Sandwich)', years: 5, sandwich: true },
     'ES': { degree: 'B.E. (Sandwich)', name: 'Electrical & Electronics (Sandwich)', years: 5, sandwich: true },
     'SW': { degree: 'B.E. (Sandwich)', name: 'Sandwich Engineering Program', years: 5, sandwich: true },
-    'R': { degree: 'B.E.', name: 'Robotics & Automation', years: 4 },
-    'U': { degree: 'B.E.', name: 'Biomedical Engineering', years: 4 },
     'B': { degree: 'B.Tech', name: 'Biotechnology', years: 4 },
     'H': { degree: 'B.Tech', name: 'Fashion Technology', years: 4 },
     'I': { degree: 'B.Tech', name: 'Information Technology', years: 4 },
     'T': { degree: 'B.Tech', name: 'Textile Technology', years: 4 },
-    'S': { degree: 'B.Sc', name: 'Applied Science / Computer Systems', years: 3 },
-    'X': { degree: 'B.Sc', name: 'Mathematics & Computing', years: 3 },
-    'SA': { degree: 'M.Sc (Integrated)', name: 'Software Systems', years: 5 },
-    'FD': { degree: 'M.Sc (Integrated)', name: 'Data Science', years: 5 },
+    'S': { degree: 'B.Sc', name: 'Applied Science', years: 3 },
+    'X': { degree: 'B.Sc', name: 'Computer Systems & Design / Other B.Sc.', years: 3 },
+    'SA': { degree: 'M.Sc (Integrated)', name: 'Software Systems / Applied Science', years: 5 },
+    'FD': { degree: 'M.Sc (Integrated)', name: 'Data Science / Fashion Design', years: 5 },
     'XW': { degree: 'M.Sc (Integrated)', name: 'Cyber Security', years: 5 },
-    'XT': { degree: 'M.Sc (Integrated)', name: 'Theoretical Computer Science', years: 5 },
-    'XD': { degree: 'M.Sc (Integrated)', name: 'Decision & Computing Sciences', years: 5 },
-    'XC': { degree: 'M.Sc (Integrated)', name: 'Theoretical Computer Science', years: 5 },
+    'XT': { degree: 'M.Sc (Integrated)', name: 'Theoretical Computer Science / Textile Science', years: 5 },
+    'XD': { degree: 'M.Sc (Integrated)', name: 'Decision & Computing Sciences / Data Science', years: 5 },
+    'XC': { degree: 'M.Sc (Integrated)', name: 'Theoretical Computer Science / Chemistry', years: 5 },
     'MX': { degree: 'M.C.A.', name: 'Master of Computer Applications', years: 2 },
     'AE': { degree: 'M.E.', name: 'Automotive Engineering', years: 2 },
-    'NB': { degree: 'M.E.', name: 'Energy Engineering', years: 2 },
-    'ZC': { degree: 'M.E.', name: 'Communication Systems', years: 2 },
-    'UC': { degree: 'M.E.', name: 'Embedded & Real-Time Systems', years: 2 },
-    'EE': { degree: 'M.E.', name: 'Power Electronics & Drives', years: 2 },
-    'MD': { degree: 'M.E.', name: 'Manufacturing Engineering', years: 2 },
-    'MN': { degree: 'M.E.', name: 'Engineering Design', years: 2 },
-    'PP': { degree: 'M.E.', name: 'Computer Science & Engineering', years: 2 },
-    'ED': { degree: 'M.E.', name: 'Industrial Engineering', years: 2 },
-    'LV': { degree: 'M.E.', name: 'VLSI Design', years: 2 },
-    'BT': { degree: 'M.Tech', name: 'Biotechnology', years: 2 },
-    'LN': { degree: 'M.Tech', name: 'Nano Science & Technology', years: 2 },
-    'TT': { degree: 'M.Tech', name: 'Textile Technology', years: 2 },
+    'BT': { degree: 'M.E.', name: 'Biotechnology', years: 2 },
+    'CS': { degree: 'M.E.', name: 'Computer Science & Engineering', years: 2 },
+    'ED': { degree: 'M.E.', name: 'Engineering Design', years: 2 },
+    'EE': { degree: 'M.E.', name: 'Embedded & Real-Time Systems', years: 2 },
+    'LN': { degree: 'M.E.', name: 'VLSI Design', years: 2 },
+    'LV': { degree: 'M.E.', name: 'Communication Systems', years: 2 },
+    'MD': { degree: 'M.E.', name: 'Manufacturing Engineering / Mechanical Design', years: 2 },
+    'MN': { degree: 'M.E.', name: 'Mechatronics', years: 2 },
+    'NB': { degree: 'M.E.', name: 'Biometrics & Cybersecurity', years: 2 },
+    'PP': { degree: 'M.E.', name: 'Power Systems / Production', years: 2 },
     'SE': { degree: 'M.E.', name: 'Structural Engineering', years: 2 },
+    'TT': { degree: 'M.E.', name: 'Textile Technology', years: 2 },
+    'UC': { degree: 'M.E.', name: 'Control Systems', years: 2 },
+    'ZC': { degree: 'M.E.', name: 'Computer Science & Engineering', years: 2 },
     'CE': { degree: 'M.Tech', name: 'Chemical Engineering', years: 2 },
     'EC': { degree: 'M.Tech', name: 'Electronics & Communication', years: 2 },
     'IT': { degree: 'M.Tech', name: 'Information Technology', years: 2 },
-    'GM': { degree: 'M.B.A.', name: 'Master of Business Administration', years: 2 },
-    'GW': { degree: 'M.B.A.', name: 'Master of Business Administration', years: 2 }
+    'GM': { degree: 'M.B.A.', name: 'MBA General Management', years: 2 },
+    'GW': { degree: 'M.B.A.', name: 'MBA Specializations', years: 2 }
 };
 
 function parseStudentInfoFromRoll(rawRoll) {
@@ -3320,6 +3645,11 @@ function renderOthersOverview() {
         }
     }
 
+    const resultsCgpaPill = document.getElementById("results-cgpa-pill");
+    if (resultsCgpaPill) {
+        resultsCgpaPill.innerText = (cgpa && cgpa !== "--") ? `${cgpa} CGPA` : "-- CGPA";
+    }
+
     const totalCredits = (cgpaData && cgpaData.total_credits) || (gpaData && gpaData.total_credits);
     if (subEl) {
         if (totalCredits) {
@@ -3423,27 +3753,264 @@ function saveState() {
         localStorage.setItem(`bunker_att_mode_${state.rollNumber}`, state.attendanceMode);
     }
     localStorage.setItem('bunker_roll', state.rollNumber);
+    pushWidgetDataToNative();
 }
+
+// ============================================================================
+// ===== ANDROID APK & TODAY'S CLASS SCHEDULE WIDGET HANDSHAKE ENGINE =====
+// ============================================================================
+
+const PSG_PERIOD_SLOTS = [
+    { period: 1, start: "08:30", end: "09:20", startMin: 510, endMin: 560 },
+    { period: 2, start: "09:25", end: "10:15", startMin: 565, endMin: 615 },
+    { period: 3, start: "10:35", end: "11:25", startMin: 635, endMin: 685 },
+    { period: 4, start: "11:30", end: "12:20", startMin: 690, endMin: 740 },
+    { period: 5, start: "13:40", end: "14:30", startMin: 820, endMin: 870 },
+    { period: 6, start: "14:35", end: "15:25", startMin: 875, endMin: 925 },
+    { period: 7, start: "15:35", end: "16:25", startMin: 935, endMin: 985 },
+    { period: 8, start: "16:30", end: "17:20", startMin: 990, endMin: 1040 }
+];
+
+function compileWidgetPayload() {
+    try {
+        const roll = state.rollNumber || localStorage.getItem('bunker_roll') || '';
+        const now = state.simulatedDate ? new Date(state.simulatedDate) : new Date();
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        const dateISO = (state.selectedDateISO && state.simulatedDate) ? state.selectedDateISO : now.toISOString().split('T')[0];
+        
+        const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const dayShort = daysShort[now.getDay()];
+        const isSunday = (now.getDay() === 0);
+        
+        // Check academic calendar for holiday on this date
+        let isHoliday = isSunday;
+        let holidayTitle = isSunday ? "Sunday" : "";
+        if (state.calendarCache && state.calendarCache.fullCalendar) {
+            const hMatch = state.calendarCache.fullCalendar.find(d => d.date === dateISO && d.type === 'holiday');
+            if (hMatch) {
+                isHoliday = true;
+                holidayTitle = hMatch.title || "Holiday";
+            }
+        }
+
+        const dayClasses = (state.timetable && state.timetable[dayShort]) ? state.timetable[dayShort] : [];
+        const classes = [];
+        let attendedCount = 0;
+        let bunkedCount = 0;
+        let upcomingCount = 0;
+        let currentPeriodNumber = null;
+        let nextPeriodClass = null;
+
+        PSG_PERIOD_SLOTS.forEach((slot, idx) => {
+            const code = dayClasses[idx];
+            if (!code || code === 'Free') return;
+
+            const s = (state.subjects || []).find(sub => sub.code === code) || {};
+            const name = s.name || (state.courseMapping && state.courseMapping[code]) || code;
+            const subStats = (typeof getSubjectStats === 'function') ? getSubjectStats(code) : { att: s.attended || 0, tot: s.total || 0, pct: s.percentage || 0 };
+            
+            const att = subStats.att || 0;
+            const tot = subStats.tot || 0;
+            const pct = subStats.pct !== undefined ? subStats.pct : (tot > 0 ? (att / tot) * 100 : 0);
+            
+            // Calculate safe bunks margin
+            // If >= 75%: Math.floor((att - 0.75 * tot) / 0.75)
+            // If < 75%: -Math.ceil((0.75 * tot - att) / 0.25)
+            let safeBunks = 0;
+            if (tot > 0) {
+                if (pct >= 75.0) {
+                    safeBunks = Math.floor((att - 0.75 * tot) / 0.75);
+                } else {
+                    safeBunks = -Math.ceil((0.75 * tot - att) / 0.25);
+                }
+            }
+
+            // Check if student logged this period in Smart Tracker
+            const logged = (state.manual || []).find(m => 
+                m.code === code && 
+                (m.dateISO === dateISO || (m.timestamp && m.timestamp.startsWith(dateISO))) && 
+                (m.period === slot.period || !m.period)
+            );
+
+            let status = 'upcoming';
+            if (logged) {
+                status = logged.status === 'Present' ? 'attended' : 'bunked';
+                if (status === 'attended') attendedCount++;
+                if (status === 'bunked') bunkedCount++;
+            } else {
+                upcomingCount++;
+            }
+
+            const isOngoing = (nowMinutes >= slot.startMin && nowMinutes <= slot.endMin);
+            if (isOngoing) {
+                currentPeriodNumber = slot.period;
+                if (!logged) status = 'ongoing';
+            }
+
+            if (!nextPeriodClass && nowMinutes < slot.startMin && !logged) {
+                nextPeriodClass = {
+                    period: slot.period,
+                    code: code,
+                    name: name,
+                    time: `${slot.start} - ${slot.end}`,
+                    safeBunks: safeBunks
+                };
+            }
+
+            classes.push({
+                period: slot.period,
+                time: `${slot.start} - ${slot.end}`,
+                startMin: slot.startMin,
+                endMin: slot.endMin,
+                code: code,
+                name: name,
+                attended: logged ? (logged.status === 'Present') : null,
+                status: status, // 'attended' | 'bunked' | 'ongoing' | 'upcoming'
+                safeBunks: safeBunks,
+                attendancePct: parseFloat(pct.toFixed(1)),
+                totalHours: tot,
+                attendedHours: att
+            });
+        });
+
+        let lowestPct = 100;
+        let totalSafe = 0;
+        (state.subjects || []).forEach(sub => {
+            const p = sub.percentage || 0;
+            if (p < lowestPct) lowestPct = p;
+            if (sub.bunkable && sub.bunkable > 0) totalSafe += sub.bunkable;
+        });
+
+        return {
+            v: 1,
+            roll: roll,
+            timestamp: Date.now(),
+            day: dayShort,
+            date: dateISO,
+            isHoliday: isHoliday,
+            holidayTitle: holidayTitle,
+            currentPeriod: currentPeriodNumber,
+            nextClass: nextPeriodClass,
+            classes: classes,
+            summary: {
+                totalClassesToday: classes.length,
+                attendedCount: attendedCount,
+                bunkedCount: bunkedCount,
+                upcomingCount: upcomingCount,
+                lowestPct: parseFloat(lowestPct.toFixed(1)),
+                totalSafeBunks: totalSafe,
+                attendanceMode: state.attendanceMode || 'normal'
+            }
+        };
+    } catch (e) {
+        console.warn('Error compiling widget payload:', e);
+        return null;
+    }
+}
+
+function pushWidgetDataToNative() {
+    try {
+        const payload = compileWidgetPayload();
+        if (!payload) return;
+
+        localStorage.setItem('bunker_widget_data', JSON.stringify(payload));
+        localStorage.setItem('bunker_widget_last_sync', Date.now().toString());
+
+        // Native Android Bridge handshake
+        if (window.AndroidBridge && typeof window.AndroidBridge.syncWidgetData === 'function') {
+            window.AndroidBridge.syncWidgetData(JSON.stringify(payload));
+        }
+
+        window.dispatchEvent(new CustomEvent('bunker:widget-data-updated', { detail: payload }));
+    } catch (e) {
+        console.warn('Failed pushing widget data to native bridge:', e);
+    }
+}
+
+// Global hooks for Native Android WebView
+window.getNativeWidgetPayload = function() {
+    return JSON.stringify(compileWidgetPayload() || {});
+};
+
+window.nativeActionMarkPeriod = function(code, status, period) {
+    if (typeof markTimetableAttendance === 'function') {
+        markTimetableAttendance(code, status || 'Present', parseInt(period, 10) || 1);
+        pushWidgetDataToNative();
+        return true;
+    }
+    return false;
+};
 function logout() {
-    // Smart Logout: Clear session but keep manual entries and preferences
-    const allKeys = Object.keys(localStorage);
-    allKeys.forEach(key => {
-        // Keep roll-specific cached subjects and previous attendance
-        if (key.startsWith('bunker_subjects_')) return;
-        if (key.startsWith('bunker_previous_attendance_')) return;
-        if (key.startsWith('bunker_previous_update_')) return;
-        // Keep manual tracking entries
-        if (key.startsWith('bunker_manual_')) return;
-        // Keep per-user preferences
-        if (key.startsWith('bunker_include_manual_')) return;
-        if (key.startsWith('bunker_view_manual_')) return;
-        if (key.startsWith('bunker_att_mode_')) return;
-        // CLEAR credentials → forces login screen on next open
-        // (all the above keys allow user to quickly log back in and restore state)
-        localStorage.removeItem(key);
-    });
-    location.reload();
+    try {
+        // Disconnect Android Bridge widget or session if active
+        if (window.AndroidBridge && typeof window.AndroidBridge.syncWidgetData === 'function') {
+            try {
+                window.AndroidBridge.syncWidgetData(JSON.stringify({ roll: '', classes: [], isLoggedOut: true }));
+            } catch (e) {}
+        }
+
+        // 1. Explicitly clear primary authentication, session, and active cache keys
+        const primarySessionKeys = [
+            'bunker_credentials',
+            'bunker_session_token',
+            'bunker_roll',
+            'bunker_update_sig',
+            'bunker_last_sync_timestamp',
+            'bunker_cached_subjects',
+            'bunker_cached_timetable',
+            'bunker_subjects',
+            'bunker_timetable',
+            'bunker_course_mapping',
+            'bunker_widget_data',
+            'bunker_widget_last_sync',
+            'bunker_has_calendar',
+            'bunker_last_update'
+        ];
+        primarySessionKeys.forEach(k => {
+            try { localStorage.removeItem(k); } catch (e) {}
+        });
+
+        // 2. Clear any non-whitelisted remaining keys (W3C standard iteration)
+        try {
+            const allKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k) allKeys.push(k);
+            }
+            allKeys.forEach(key => {
+                // Keep roll-specific cached subjects and previous attendance
+                if (key.startsWith('bunker_subjects_')) return;
+                if (key.startsWith('bunker_previous_attendance_')) return;
+                if (key.startsWith('bunker_previous_update_')) return;
+                // Keep manual tracking entries
+                if (key.startsWith('bunker_manual_')) return;
+                // Keep per-user preferences
+                if (key.startsWith('bunker_include_manual_')) return;
+                if (key.startsWith('bunker_view_manual_')) return;
+                if (key.startsWith('bunker_att_mode_')) return;
+                if (key.startsWith('bunker_features_tour')) return;
+                // Clear all other session keys
+                try { localStorage.removeItem(key); } catch (e) {}
+            });
+        } catch (e) {}
+
+        try { sessionStorage.clear(); } catch (e) {}
+        state.rollNumber = null;
+        state.subjects = [];
+        state.timetable = {};
+    } catch (err) {
+        console.warn('Error during logout:', err);
+    }
+
+    // Cleanly redirect to root login screen without hash fragments or query params
+    window.location.href = window.location.origin + window.location.pathname;
 }
+
+function switchToLoginPreview() {
+    logout();
+}
+window.logout = logout;
+window.switchToLoginPreview = logout;
 function showToast(msg, t = 'info') { const e = document.createElement('div'), c = t === 'error' ? 'bg-rose-500' : 'bg-white text-black'; e.className = `px-5 py-3 rounded-2xl text-xs font-bold shadow-2xl flex items-center gap-3 transform translate-y-[-20px] opacity-0 transition-all duration-300 ${c}`; e.innerHTML = `<i class="fas fa-${t === 'error' ? 'exclamation-circle' : 'check-circle'}"></i> ${msg}`; document.getElementById('toast-container').appendChild(e); requestAnimationFrame(() => e.classList.remove('translate-y-[-20px]', 'opacity-0')); setTimeout(() => { e.classList.add('opacity-0', 'translate-y-[-10px]'); setTimeout(() => e.remove(), 300); }, 2500); }
 
 // SIMULATOR FUNCTIONS
@@ -3573,18 +4140,39 @@ function updateSimUI() {
     const diff = pct - simBasePct;
     if (Math.abs(diff) < 0.1) {
         diffText.innerText = 'Current';
-        diffText.className = 'text-[10px] font-bold px-3 py-1 rounded-full bg-white/5 mt-2 uppercase tracking-wide border border-white/5';
+        diffText.className = 'text-[9px] font-black px-3 py-0.5 rounded-full bg-white/5 mt-1.5 uppercase border border-white/10 text-gray-300';
         diffText.style.color = '#9CA3AF';
     } else if (diff > 0) {
         diffText.innerText = `+${diff.toFixed(1)}%`;
-        diffText.className = 'text-[10px] font-bold px-3 py-1 rounded-full bg-emerald-500/10 mt-2 uppercase tracking-wide border border-emerald-500/20';
+        diffText.className = 'text-[9px] font-black px-3 py-0.5 rounded-full bg-emerald-500/20 mt-1.5 uppercase border border-emerald-500/30 text-emerald-300';
         diffText.style.color = '#34D399';
     } else {
         diffText.innerText = `${diff.toFixed(1)}%`;
-        diffText.className = 'text-[10px] font-bold px-3 py-1 rounded-full bg-rose-500/10 mt-2 uppercase tracking-wide border border-rose-500/20';
+        diffText.className = 'text-[9px] font-black px-3 py-0.5 rounded-full bg-rose-500/20 mt-1.5 uppercase border border-rose-500/30 text-rose-300';
         diffText.style.color = '#FB7185';
     }
+
+    const fractionEl = document.getElementById('sim-fraction');
+    if (fractionEl) fractionEl.innerText = `${newAtt} / ${newTot}`;
+
+    const bannerEl = document.getElementById('sim-verdict-banner');
+    if (bannerEl) {
+        const safeLeft = Math.floor((4 * newAtt - 3 * newTot) / 3);
+        const needMore = Math.ceil(3 * newTot - 4 * newAtt);
+        if (pct >= 75) {
+            bannerEl.className = "mb-4 py-2.5 px-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center text-[10px] font-black text-emerald-300 uppercase tracking-wider relative z-10";
+            bannerEl.innerHTML = safeLeft > 0 ? `<i class="fas fa-shield-alt mr-1.5"></i>Safe to bunk ${safeLeft} class${safeLeft > 1 ? "es" : ""}` : `<i class="fas fa-exclamation-triangle mr-1.5"></i>On 75% Edge`;
+        } else {
+            bannerEl.className = "mb-4 py-2.5 px-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-center text-[10px] font-black text-rose-300 uppercase tracking-wider relative z-10";
+            bannerEl.innerHTML = `<i class="fas fa-arrow-trend-up mr-1.5"></i>Need ${needMore} consecutive class${needMore > 1 ? "es" : ""}`;
+        }
+    }
 }
+
+function resetSimModal() {
+    resetPredictionSim();
+}
+window.resetSimModal = resetSimModal;
 
 // BULK ATTENDANCE & HISTORY
 
@@ -3903,9 +4491,22 @@ async function executeOtherFeedback(e) {
     await submitFeedbackCore(rollno, password, mode, btn);
 }
 
-// Background check removed per user request to eliminate recurring background network checks & preserve Vercel quota
-function checkPendingFeedbackInBackground() {
-    // Disabled
+// Background check with 24-hour phone cooldown to preserve Vercel quota
+async function checkPendingFeedbackInBackground() {
+    const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
+    if (!roll || roll === 'DEMO') return;
+    const FEEDBACK_TTL = 24 * 60 * 60 * 1000; // 24 hours (86,400,000 ms)
+    const statusKey = `bunker_feedback_status_${roll}`;
+    try {
+        const cached = JSON.parse(localStorage.getItem(statusKey) || 'null');
+        if (cached && (Date.now() - (cached.timestamp || 0) < FEEDBACK_TTL)) {
+            // Already checked within 24 hours, skip network calls completely
+            return;
+        }
+    } catch {}
+    try {
+        localStorage.setItem(statusKey, JSON.stringify({ checked: true, timestamp: Date.now() }));
+    } catch {}
 }
 
 window.openFeedbackModal = openFeedbackModal;
@@ -4151,11 +4752,26 @@ function getAttendanceComparisonData(roll) {
         curSubs = (state && state.subjects) || [];
     }
 
-    try {
-        oldSubs = JSON.parse(localStorage.getItem(oldKey) || 'null') ||
-                  JSON.parse(localStorage.getItem(`bunker_previous_attendance_${roll}`) || 'null') || [];
-    } catch {
-        oldSubs = [];
+    // 1. First priority: Check client-side offline Attendance Diff Vault
+    const snapRaw = localStorage.getItem(`bunker_prev_att_snapshot_${roll}`);
+    if (snapRaw) {
+        try {
+            const snap = JSON.parse(snapRaw);
+            if (snap && Array.isArray(snap.subjects) && snap.subjects.length > 0) {
+                oldSubs = snap.subjects;
+                oldDate = snap.last_update || snap.date || oldDate;
+            }
+        } catch {}
+    }
+
+    // 2. Fallback to older snapshot keys or previous attendance from server
+    if (!oldSubs || oldSubs.length === 0) {
+        try {
+            oldSubs = JSON.parse(localStorage.getItem(oldKey) || 'null') ||
+                      JSON.parse(localStorage.getItem(`bunker_previous_attendance_${roll}`) || 'null') || [];
+        } catch {
+            oldSubs = [];
+        }
     }
 
     curSubs = Array.isArray(curSubs) ? curSubs : [];
@@ -4434,30 +5050,87 @@ function switchAcadTab(tab) {
 
 async function loadAcademics(force = false, silent = false) {
     const roll = state.rollNumber || (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}').roll; } catch { return null; } })();
-    const lastAcadFetch = parseInt(localStorage.getItem(`bunker_acad_fetch_time_${roll}`) || '0');
-    const isAcadStale = (Date.now() - lastAcadFetch) > (24 * 60 * 60 * 1000); // Strict 24 hours cooldown (1 fetch per day max)
+    if (!roll) {
+        if (!silent) showAcadError('Please log in with valid credentials to view academic data.');
+        return;
+    }
 
-    // If we have cached data, render it immediately for instant display
-    if (state.academics.loaded) {
+    const RESULTS_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days (604,800,000 ms)
+    const INTERNALS_TTL = 12 * 60 * 60 * 1000;   // 12 hours (43,200,000 ms)
+
+    // 1. Read existing vaults from user's phone storage
+    let resultsVault = null;
+    let internalsVault = null;
+    try {
+        const rawRes = localStorage.getItem(`bunker_results_vault_${roll}`);
+        if (rawRes) resultsVault = JSON.parse(rawRes);
+    } catch {}
+
+    try {
+        const rawInt = localStorage.getItem(`bunker_internals_vault_${roll}`);
+        if (rawInt) internalsVault = JSON.parse(rawInt);
+    } catch {}
+
+    // Fallback to legacy bunker_academics_<roll> if vaults are not yet initialized
+    if (!resultsVault || !internalsVault) {
+        try {
+            const legacyRaw = localStorage.getItem(`bunker_academics_${roll}`);
+            if (legacyRaw) {
+                const legacy = JSON.parse(legacyRaw);
+                const legTime = parseInt(localStorage.getItem(`bunker_acad_fetch_time_${roll}`) || '0') || Date.now();
+                if (!resultsVault && legacy.gpa) {
+                    resultsVault = { data: legacy.gpa, timestamp: legTime };
+                }
+                if (!internalsVault && legacy.internals) {
+                    internalsVault = { internals: legacy.internals, ca_sig: '', timestamp: legTime };
+                }
+            }
+        } catch {}
+    }
+
+    const now = Date.now();
+    const hasFreshResults = resultsVault && resultsVault.data && (now - (resultsVault.timestamp || 0) < RESULTS_TTL);
+    const hasFreshInternals = internalsVault && Array.isArray(internalsVault.internals) && (now - (internalsVault.timestamp || 0) < INTERNALS_TTL);
+
+    // If cached results or internals exist, load and render immediately for 0ms visual load
+    if (resultsVault && resultsVault.data) {
+        const gpaData = resultsVault.data;
+        state.academics.gpa = gpaData;
+        state.academics.cgpa = {
+            cgpa: gpaData.cgpa || gpaData.overall_cgpa,
+            overall_cgpa: gpaData.overall_cgpa || gpaData.cgpa,
+            cgpa_note: gpaData.cgpa_note || '',
+            has_arrears: gpaData.has_arrears || false,
+            total_credits: gpaData.total_credits,
+            total_enrolled_credits: gpaData.total_enrolled_credits,
+            semwise_data: gpaData.semwise_data,
+            all_subjects: gpaData.all_subjects || gpaData.table || []
+        };
+    }
+
+    if (internalsVault && Array.isArray(internalsVault.internals)) {
+        state.academics.internals = internalsVault.internals;
+    }
+
+    if (state.academics.gpa || state.academics.internals) {
+        state.academics.loaded = true;
+        state.academics.fromCache = true;
         document.getElementById('acad-loading')?.classList.add('hidden');
-        renderInternals(state.academics.internals);
-        renderGPA(state.academics.gpa);
-        renderCGPA(state.academics.cgpa);
+        if (state.academics.internals) renderInternals(state.academics.internals);
+        if (state.academics.gpa) renderGPA(state.academics.gpa);
+        if (state.academics.cgpa) renderCGPA(state.academics.cgpa);
         renderOthersOverview();
 
-        // Phone-first: If cached marks exist and are within 24 hours and force is false,
-        // stop here to save Vercel serverless compute!
-        if (!force && !isAcadStale) {
+        // If both vaults are fresh and not force-refreshing, exit immediately (0 network calls, 0 bandwidth)
+        if (!force && hasFreshResults && hasFreshInternals) {
             return;
         }
     }
 
-    if (state.academics.loading) return; // prevent duplicate requests
-
+    if (state.academics.loading) return; // Prevent duplicate requests
     state.academics.loading = true;
 
     if (!silent && !state.academics.fromCache) {
-        // Show loading only if no cache available
         const panels = ['internals', 'results'];
         panels.forEach(p => document.getElementById(`acad-panel-${p}`)?.classList.add('hidden'));
         document.getElementById('acad-error')?.classList.add('hidden');
@@ -4473,63 +5146,132 @@ async function loadAcademics(force = false, silent = false) {
 
     try {
         const sessionToken = localStorage.getItem('bunker_session_token') || '';
-        const [internalsRes, gpaRes] = await Promise.all([
-            fetch('/api/internals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_token: authToken, session_token: sessionToken, force: force }) }),
-            fetch('/api/gpa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_token: authToken, session_token: sessionToken, force: force }) })
-        ]);
+        const fetchTasks = [];
 
-        const newTok = internalsRes.headers.get('X-Session-Token');
-        if (newTok) {
-            localStorage.setItem('bunker_session_token', newTok);
+        // Determine if we need to probe /api/internals:
+        const needInternals = force || !hasFreshInternals;
+        const knownCaSig = (internalsVault && internalsVault.ca_sig) ? internalsVault.ca_sig : '';
+
+        // Determine if we need to probe /api/gpa (NEVER call /api/cgpa simultaneously):
+        const needResults = force || !hasFreshResults;
+
+        let internalsPromise = null;
+        if (needInternals) {
+            internalsPromise = fetch('/api/internals', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    auth_token: authToken,
+                    session_token: sessionToken,
+                    known_ca_sig: knownCaSig,
+                    force: force
+                })
+            });
+            fetchTasks.push(internalsPromise);
         }
 
-        const internals = await internalsRes.json();
-        const gpa = await gpaRes.json();
-        const cgpa = {
-            cgpa: gpa.cgpa || gpa.overall_cgpa,
-            overall_cgpa: gpa.overall_cgpa || gpa.cgpa,
-            total_credits: gpa.total_credits,
-            semwise_data: gpa.semwise_data,
-            all_subjects: gpa.all_subjects || gpa.table || []
-        };
+        let gpaPromise = null;
+        if (needResults) {
+            gpaPromise = fetch('/api/gpa', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    auth_token: authToken,
+                    session_token: sessionToken,
+                    force: force
+                })
+            });
+            fetchTasks.push(gpaPromise);
+        }
 
-        if (internals.error || gpa.error) {
+        if (fetchTasks.length === 0) {
             state.academics.loading = false;
-            if (!silent) showAcadError(internals.error || gpa.error || 'Failed to load academic data.');
             return;
         }
 
-        // Detect if marks changed vs cached data
-        const wasFromCache = state.academics.fromCache;
-        const oldCGPA = state.academics.cgpa?.cgpa;
-        const newCGPA = cgpa?.cgpa;
-        const oldInternalsStr = JSON.stringify(state.academics.internals?.map(s => s.total) || []);
-        const newInternalsStr = JSON.stringify(internals?.map(s => s.total) || []);
-        const marksChanged = wasFromCache && (oldCGPA !== newCGPA || oldInternalsStr !== newInternalsStr);
+        await Promise.all(fetchTasks);
 
-        state.academics = { internals, gpa, cgpa, loaded: true, loading: false, fromCache: false };
+        let internalsUpdated = false;
+        let resultsUpdated = false;
 
-        // Persist fresh academics to localStorage for next launch
-        if (state.rollNumber) {
-            try {
-                localStorage.setItem(`bunker_academics_${state.rollNumber}`, JSON.stringify({ internals, gpa, cgpa }));
-                localStorage.setItem(`bunker_acad_fetch_time_${state.rollNumber}`, Date.now().toString());
-            } catch { }
+        // Process internals response
+        if (internalsPromise) {
+            const intRes = await internalsPromise;
+            const newTok = intRes.headers.get('X-Session-Token');
+            if (newTok) localStorage.setItem('bunker_session_token', newTok);
+            const headerSig = intRes.headers.get('X-CA-Sig') || '';
+
+            const intData = await intRes.json();
+            if (intData.error) {
+                console.warn('Internals fetch error:', intData.error);
+            } else if (intData.up_to_date) {
+                // Backend reports marks unchanged: renew timestamp in vault
+                const renewedSig = intData.ca_sig || headerSig || knownCaSig;
+                if (internalsVault && internalsVault.internals) {
+                    internalsVault.timestamp = Date.now();
+                    internalsVault.ca_sig = renewedSig;
+                    localStorage.setItem(`bunker_internals_vault_${roll}`, JSON.stringify(internalsVault));
+                }
+            } else if (Array.isArray(intData)) {
+                const caSig = headerSig || intData.ca_sig || '';
+                state.academics.internals = intData;
+                internalsVault = { internals: intData, ca_sig: caSig, timestamp: Date.now() };
+                localStorage.setItem(`bunker_internals_vault_${roll}`, JSON.stringify(internalsVault));
+                internalsUpdated = true;
+            }
         }
 
-        // Always render the fresh data
+        // Process GPA/results response
+        if (gpaPromise) {
+            const gpaRes = await gpaPromise;
+            const newTok = gpaRes.headers.get('X-Session-Token');
+            if (newTok) localStorage.setItem('bunker_session_token', newTok);
+
+            const gpaData = await gpaRes.json();
+            if (gpaData.error) {
+                console.warn('GPA fetch error:', gpaData.error);
+            } else if (gpaData.overall_cgpa || gpaData.gpa || gpaData.semwise_data) {
+                state.academics.gpa = gpaData;
+                state.academics.cgpa = {
+                    cgpa: gpaData.cgpa || gpaData.overall_cgpa,
+                    overall_cgpa: gpaData.overall_cgpa || gpaData.cgpa,
+                    cgpa_note: gpaData.cgpa_note || '',
+                    has_arrears: gpaData.has_arrears || false,
+                    total_credits: gpaData.total_credits,
+                    total_enrolled_credits: gpaData.total_enrolled_credits,
+                    semwise_data: gpaData.semwise_data,
+                    all_subjects: gpaData.all_subjects || gpaData.table || []
+                };
+                resultsVault = { data: gpaData, timestamp: Date.now() };
+                localStorage.setItem(`bunker_results_vault_${roll}`, JSON.stringify(resultsVault));
+                resultsUpdated = true;
+            }
+        }
+
+        // Update legacy key for compatibility
+        try {
+            localStorage.setItem(`bunker_academics_${roll}`, JSON.stringify({
+                internals: state.academics.internals,
+                gpa: state.academics.gpa,
+                cgpa: state.academics.cgpa
+            }));
+            localStorage.setItem(`bunker_acad_fetch_time_${roll}`, Date.now().toString());
+        } catch {}
+
+        state.academics.loaded = true;
+        state.academics.loading = false;
+        state.academics.fromCache = false;
+
         document.getElementById('acad-loading')?.classList.add('hidden');
-        renderInternals(internals);
-        renderGPA(gpa);
-        renderCGPA(cgpa);
+        if (state.academics.internals) renderInternals(state.academics.internals);
+        if (state.academics.gpa) renderGPA(state.academics.gpa);
+        if (state.academics.cgpa) renderCGPA(state.academics.cgpa);
         renderOthersOverview();
 
-        // Notify user if new marks were found
-        if (marksChanged) {
+        if (internalsUpdated || resultsUpdated) {
             showToast('📊 Marks updated!', 'success');
         }
 
-        // If user is already on a subview (internals or results), refresh that subview
         const internalsView = document.getElementById('others-subview-internals');
         const resultsView = document.getElementById('others-subview-results');
         if (internalsView && !internalsView.classList.contains('hidden')) {
@@ -4634,6 +5376,18 @@ function getSemPassDetails(ca40) {
     };
 }
 
+// Exact PSG 40:60 (Theory) or 60:40 (Lab) Ceiled Sem Score needed for target total out of 100
+function calcSemNeededForTarget(caScore, targetTotal, isLab = false) {
+    const numCA = Number(caScore) || 0;
+    const scale = isLab ? 0.4 : 0.6;
+    for (let s = 0; s <= 100; s++) {
+        const ru = Math.ceil(Number((s * scale).toFixed(1)) - 1e-6);
+        if (numCA + ru >= targetTotal) return s;
+    }
+    return null;
+}
+window.calcSemNeededForTarget = calcSemNeededForTarget;
+
 function getSemNeededForGrade(ca40, targetTotal, isLab = false) {
     const numCA = Math.max(0, Number(ca40) || 0);
     if (targetTotal <= 50 && !isLab) {
@@ -4661,6 +5415,7 @@ function openPassMatrixModal(courseCode = null, initialCA = null) {
     if (!m || !p || !b) return;
 
     activePassMatrixCourse = courseCode;
+    renderPassMatrixAutoSubjects();
 
     // Course badge handling
     const courseBadge = document.getElementById('pass-matrix-course-badge');
@@ -4742,14 +5497,68 @@ function updatePassMatrixFromSlider(val) {
     setPassMatrixCA(caVal);
 }
 
-function setPassMatrixCA(caVal) {
-    const slider = document.getElementById('pass-matrix-slider');
-    const inputVal = document.getElementById('pass-matrix-input-val');
+function renderPassMatrixAutoSubjects() {
+    const listEl = document.getElementById("pm-auto-subjects-list");
+    if (!listEl) return;
+    if (!state.academics || !state.academics.internals || state.academics.internals.length === 0) {
+        listEl.innerHTML = '<div class="text-center text-xs text-gray-500 py-3">No subjects synced yet</div>';
+        return;
+    }
+    const nonLab = state.academics.internals.filter(x => !x.is_lab);
+    const targetList = nonLab.length > 0 ? nonLab : state.academics.internals;
+    listEl.innerHTML = targetList.map(item => {
+        let ca40 = 20;
+        let hasPending = false;
+        if (window.simState && window.simState[item.course_code]) {
+            const numCols = item.row_data.length;
+            const expectedKeys = getSchemaKeys(item.is_lab, numCols);
+            const simKeys = expectedKeys.filter(k => k !== "best2t" && k !== "bestmcq" && k !== "total" && k !== "conv" && k !== "rt" && k !== "rt1" && k !== "rt2");
+            const totalCA = calcCATotal(item.is_lab, simKeys, window.simState[item.course_code]);
+            ca40 = item.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
+        } else if (item.total && !isNaN(parseFloat(item.total))) {
+            const rawTot = parseFloat(item.total);
+            ca40 = item.is_lab ? Math.min(60, rawTot * 1.2) : Math.min(40, (rawTot / 50) * 40);
+        }
+
+        ca40 = Math.max(0, Math.min(40, Number(ca40.toFixed(1))));
+        const passMark = calcSemNeededForTarget(ca40, 50, item.is_lab) ?? 100;
+
+        return `
+        <div onclick="updatePassMatrix(${ca40}, '${item.course_code}')" class="p-2.5 rounded-2xl bg-black/45 border border-white/10 hover:border-rose-500/40 flex items-center justify-between gap-2 cursor-pointer active:scale-[0.98] transition">
+            <div class="min-w-0 pr-1">
+                <div class="flex items-center gap-1.5">
+                    <span class="text-[9px] font-black text-indigo-400 uppercase">${item.course_code}</span>
+                    <span class="text-[9px] font-black text-emerald-300 bg-emerald-500/15 border-emerald-500/30 px-1.5 py-0.2 rounded border">
+                        CA: ${ca40.toFixed(1)}/40
+                    </span>
+                </div>
+                <p class="text-[11px] font-bold text-white truncate mt-0.5">${item.course_name}</p>
+            </div>
+            <div class="text-right shrink-0">
+                <span class="text-[8px] font-black text-gray-400 uppercase block">Min Sem</span>
+                <span class="text-xs font-black ${passMark <= 50 ? "text-emerald-400" : "text-amber-400"}">${passMark} / 100</span>
+            </div>
+        </div>`;
+    }).join("");
+}
+window.renderPassMatrixAutoSubjects = renderPassMatrixAutoSubjects;
+
+function updatePassMatrix(ca, codeLabel = null) {
+    const caVal = Math.max(0, Math.min(40, Number(Number(ca).toFixed(1))));
+    setPassMatrixCA(caVal, codeLabel);
+}
+window.updatePassMatrix = updatePassMatrix;
+
+function setPassMatrixCA(caVal, codeLabel = null) {
+    const slider = document.getElementById("pass-matrix-slider");
+    const pmSlider = document.getElementById("pm-ca-slider");
+    const inputVal = document.getElementById("pass-matrix-input-val");
     if (slider) slider.value = caVal;
+    if (pmSlider) pmSlider.value = caVal;
     if (inputVal) inputVal.innerText = caVal;
 
     // Update pill highlights
-    document.querySelectorAll('.pm-pill').forEach(btn => {
+    document.querySelectorAll(".pm-pill").forEach(btn => {
         if (btn.innerText.trim() == String(caVal)) {
             btn.className = "pm-pill px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-xs font-black text-rose-300 transition active:scale-95";
         } else {
@@ -4759,14 +5568,46 @@ function setPassMatrixCA(caVal) {
 
     const passInfo = getSemPassDetails(caVal);
 
+    // Update compact quick bar elements
+    const labelEl = document.getElementById("pm-selected-label");
+    if (labelEl) labelEl.innerText = codeLabel ? `${codeLabel} Target Check` : "Custom CA Check";
+    const caDisp = document.getElementById("pm-ca-display");
+    if (caDisp) caDisp.innerText = `CA: ${caVal}/40`;
+    const semNeedEl = document.getElementById("pm-sem-needed");
+    if (semNeedEl) semNeedEl.innerText = `Pass: ${passInfo.sem100}/100`;
+    const proofEl = document.getElementById("pm-formula-proof");
+    if (proofEl) proofEl.innerText = `${passInfo.sem100} × 0.6 = ${passInfo.sem60} ➔ ${passInfo.roundUp} + ${caVal} CA = ${passInfo.final} (PASS ✅)`;
+
+    // Update 6 Target grade cards
+    const cpEl = document.getElementById("pm-grade-cplus");
+    const bEl = document.getElementById("pm-grade-b");
+    const bpEl = document.getElementById("pm-grade-bplus");
+    const aEl = document.getElementById("pm-grade-a");
+    const apEl = document.getElementById("pm-grade-aplus");
+    const sEl = document.getElementById("pm-grade-s");
+
+    const reqCp = calcSemNeededForTarget(caVal, 56);
+    const reqB = calcSemNeededForTarget(caVal, 61);
+    const reqBp = calcSemNeededForTarget(caVal, 66);
+    const reqA = calcSemNeededForTarget(caVal, 71);
+    const reqAp = calcSemNeededForTarget(caVal, 81);
+    const reqS = calcSemNeededForTarget(caVal, 91);
+
+    if (cpEl) cpEl.innerText = reqCp !== null ? reqCp : "--";
+    if (bEl) bEl.innerText = reqB !== null ? reqB : "--";
+    if (bpEl) bpEl.innerText = reqBp !== null ? reqBp : "--";
+    if (aEl) aEl.innerText = reqA !== null ? reqA : "--";
+    if (apEl) apEl.innerText = reqAp !== null ? reqAp : "--";
+    if (sEl) sEl.innerText = reqS !== null ? reqS : "--";
+
     // Update Hero numbers
-    const resSem = document.getElementById('pm-res-sem100');
-    const resBadge = document.getElementById('pm-res-badge');
-    const sCA = document.getElementById('pm-step-ca40');
-    const sSem = document.getElementById('pm-step-sem100');
-    const sSem60 = document.getElementById('pm-step-sem60');
-    const sFinal = document.getElementById('pm-step-final');
-    const sCalcText = document.getElementById('pm-step-calc-text');
+    const resSem = document.getElementById("pm-res-sem100");
+    const resBadge = document.getElementById("pm-res-badge");
+    const sCA = document.getElementById("pm-step-ca40");
+    const sSem = document.getElementById("pm-step-sem100");
+    const sSem60 = document.getElementById("pm-step-sem60");
+    const sFinal = document.getElementById("pm-step-final");
+    const sCalcText = document.getElementById("pm-step-calc-text");
 
     if (resSem) resSem.innerText = passInfo.sem100;
     if (sCA) sCA.innerText = passInfo.ca40.toFixed(1);
@@ -4791,19 +5632,16 @@ function setPassMatrixCA(caVal) {
         }
     }
 
-    // Update target grades preview cards
-    const tgtPass = document.getElementById('pm-tgt-pass');
-    const tgtB = document.getElementById('pm-tgt-b');
-    const tgtA = document.getElementById('pm-tgt-a');
-    const tgtAplus = document.getElementById('pm-tgt-aplus');
-    const reqB = getSemNeededForGrade(caVal, 60);
-    const reqA = getSemNeededForGrade(caVal, 70);
-    const reqAplus = getSemNeededForGrade(caVal, 80);
+    // Update target grades preview cards (legacy IDs)
+    const tgtPass = document.getElementById("pm-tgt-pass");
+    const tgtB = document.getElementById("pm-tgt-b");
+    const tgtA = document.getElementById("pm-tgt-a");
+    const tgtAplus = document.getElementById("pm-tgt-aplus");
 
     if (tgtPass) tgtPass.innerText = `${passInfo.sem100} / 100`;
-    if (tgtB) tgtB.innerText = reqB !== null ? `${reqB} / 100` : '—';
-    if (tgtA) tgtA.innerText = reqA !== null ? `${reqA} / 100` : '—';
-    if (tgtAplus) tgtAplus.innerText = reqAplus !== null ? `${reqAplus} / 100` : '—';
+    if (tgtB) tgtB.innerText = reqB !== null ? `${reqB} / 100` : "—";
+    if (tgtA) tgtA.innerText = reqA !== null ? `${reqA} / 100` : "—";
+    if (tgtAplus) tgtAplus.innerText = reqAp !== null ? `${reqAp} / 100` : "—";
 }
 
 function setPresetPendingMarks(courseCode, ratio) {
@@ -4936,6 +5774,13 @@ function renderInternals(internals) {
             // AT1/AT2 = Assessment Tutorial (with tutorial courses): max 5 each
             ap1:  { label: 'Tutorial 1 (AT1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
             ap2:  { label: 'Tutorial 2 (AT2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            at1:  { label: 'Tutorial 1 (AT1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            at2:  { label: 'Tutorial 2 (AT2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            rt1:  { label: 'Retest 1', max: 30, weight: 30, color: 'text-orange-400', accent: 'bg-orange-500' },
+            rt2:  { label: 'Retest 2', max: 30, weight: 30, color: 'text-orange-400', accent: 'bg-orange-500' },
+            a1:   { label: 'Assignment 1', max: 50, weight: 50, color: 'text-emerald-400', accent: 'bg-emerald-500' },
+            a2:   { label: 'Assignment 2', max: 50, weight: 50, color: 'text-teal-400', accent: 'bg-teal-500' },
+            eh:   { label: 'Activity Hours', max: 150, weight: 150, color: 'text-amber-400', accent: 'bg-amber-500' },
             // MCQ: out of 10 each, average taken
             mq1:  { label: 'MCQ 1', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
             mq2:  { label: 'MCQ 2', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
@@ -5180,11 +6025,26 @@ function renderInternals(internals) {
 
 function renderFullSimulator(subject, d, expectedKeys) {
     const courseCode = subject.course_code;
-    window.simState[courseCode] = { sem: 75 };
+    const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
+    let savedSim = null;
+    try {
+        const rawSim = localStorage.getItem(`bunker_internals_sim_${roll}`);
+        if (rawSim) savedSim = JSON.parse(rawSim);
+    } catch {}
+
+    const courseSaved = (savedSim && savedSim[courseCode]) ? savedSim[courseCode] : null;
+
+    window.simState[courseCode] = { sem: (courseSaved && courseSaved.sem !== undefined) ? courseSaved.sem : 75 };
     expectedKeys.forEach(k => { 
         const actual = d[k];
         const meta = window.METADATA[k] || window.METADATA['c1'];
-        window.simState[courseCode][k] = actual !== null ? actual : Math.round(meta.max * 0.7); 
+        if (actual !== null) {
+            window.simState[courseCode][k] = actual;
+        } else if (courseSaved && courseSaved[k] !== undefined) {
+            window.simState[courseCode][k] = courseSaved[k];
+        } else {
+            window.simState[courseCode][k] = Math.round(meta.max * 0.7);
+        }
     });
 
     let actualMarksHTML = '';
@@ -5442,6 +6302,13 @@ function updateSim(courseCode, key, val) {
     document.getElementById(`val-${courseCode}-${key}`).innerText = val;
     if(key === 'sem') document.getElementById(`slider-${courseCode}-sem`).value = val;
     calculateSimOutputs(courseCode);
+
+    const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
+    if (roll) {
+        try {
+            localStorage.setItem(`bunker_internals_sim_${roll}`, JSON.stringify(window.simState));
+        } catch {}
+    }
 }
 
 function resetSim(courseCode) {
@@ -5477,6 +6344,13 @@ function resetSim(courseCode) {
     document.getElementById(`val-${courseCode}-sem`).innerText = 75;
 
     calculateSimOutputs(courseCode, subject);
+
+    const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
+    if (roll) {
+        try {
+            localStorage.setItem(`bunker_internals_sim_${roll}`, JSON.stringify(window.simState));
+        } catch {}
+    }
 }
 
 /**
@@ -5511,20 +6385,19 @@ function isZeroCreditCourse(courseCode) {
  */
 function getSchemaKeys(isLab, numCols) {
     if (isLab) {
+        if (numCols === 6) return ['ir1', 'ir2', 'plro1', 'plro2', 'total', 'conv'];
         if (numCols === 5) return ['ir1', 'ir2', 'plro1', 'plro2', 'total'];
         return Array.from({length: numCols}, (_, i) => `c${i+1}`);
     }
-    // PSG portal actual column schemas (theory courses)
-    // 10-col: T1, T2, RT, Best2T, AP, MQ1, MQ2, BestMCQ, Total, Conv  (no tutorial)
-    // 11-col: T1, T2, RT, Best2T, AT1, AT2, MQ1, MQ2, BestMCQ, Total, Conv (tutorial)
-    // 12-col: T1, T2, RT, RT1, RT2, Best2T, AP, MQ1, MQ2, BestMCQ, Total, Conv
-    // 13-col: T1, T2, RT, RT1, RT2, Best2T, AT1, AT2, MQ1, MQ2, BestMCQ, Total, Conv
+    // PSG portal actual column schemas (theory, lab, non-cgpa courses)
+    if (numCols === 3)  return ['eh', 'total', 'conv']; // Activity Point Programme (23U315)
+    if (numCols === 4)  return ['a1', 'a2', 'total', 'conv']; // Environmental Science (23K312)
     if (numCols === 10) return ['t1', 't2', 'rt', 'best2t', 'ap',  'mq1', 'mq2', 'bestmcq', 'total', 'conv'];
-    if (numCols === 11) return ['t1', 't2', 'rt', 'best2t', 'ap1', 'ap2', 'mq1', 'mq2', 'bestmcq', 'total', 'conv'];
+    if (numCols === 11) return ['t1', 't2', 'rt', 'best2t', 'at1', 'at2', 'mq1', 'mq2', 'bestmcq', 'total', 'conv'];
     if (numCols === 12) return ['t1', 't2', 'rt', 'rt1', 'rt2', 'best2t', 'ap',  'mq1', 'mq2', 'bestmcq', 'total', 'conv'];
-    if (numCols === 13) return ['t1', 't2', 'rt', 'rt1', 'rt2', 'best2t', 'ap1', 'ap2', 'mq1', 'mq2', 'bestmcq', 'total', 'conv'];
+    if (numCols === 13) return ['t1', 't2', 'rt', 'rt1', 'rt2', 'best2t', 'at1', 'at2', 'mq1', 'mq2', 'bestmcq', 'total', 'conv'];
     if (numCols === 8)  return ['t1', 't2', 'best2t', 'ap', 'mq1', 'mq2', 'bestmcq', 'total'];
-    if (numCols === 9)  return ['t1', 't2', 'best2t', 'ap1', 'ap2', 'mq1', 'mq2', 'bestmcq', 'total'];
+    if (numCols === 9)  return ['t1', 't2', 'best2t', 'at1', 'at2', 'mq1', 'mq2', 'bestmcq', 'total'];
     return Array.from({length: numCols}, (_, i) => `c${i+1}`);
 }
 
@@ -5547,13 +6420,19 @@ function calcCATotal(isLab, simKeys, values) {
         const labKeys = ['ir1', 'ir2', 'plro1', 'plro2'];
         return labKeys.reduce((sum, k) => sum + (simKeys.includes(k) ? (values[k] || 0) : 0), 0);
     }
+    if (simKeys.includes('eh')) {
+        return values['eh'] || 0;
+    }
+    if (simKeys.includes('a1') || simKeys.includes('a2')) {
+        return (values['a1'] || 0) + (values['a2'] || 0);
+    }
     // Theory: T1, T2 are stored as max:30 by portal (already scaled from 50)
     // best2t is the pre-calculated portal value (average, max 30) - use if simulated
     const t1 = values['t1'] || 0;   // out of 30
     const t2 = values['t2'] || 0;   // out of 30
     const best2t = (t1 + t2) / 2;   // average → out of 30
     // Tutorials or Assignment
-    const ap = (values['ap'] || 0) + (values['ap1'] || 0) + (values['ap2'] || 0); // out of 10
+    const ap = (values['ap'] || 0) + (values['at1'] || values['ap1'] || 0) + (values['at2'] || values['ap2'] || 0); // out of 10
     // MCQ average
     const mq1 = values['mq1'] || 0;
     const mq2 = values['mq2'] || 0;
@@ -5718,15 +6597,51 @@ function recalculateCGPAPrediction() {
         ? ((pastCreditPoints + totalCreditPoints) / (pastCredits + totalCredits)) 
         : 0;
 
-    // Update UI elements
-    const sgpaValEl = document.getElementById('predicted-sgpa-value');
-    const cgpaValEl = document.getElementById('predicted-cgpa-value');
+    // Calculate Max SGPA & Max CGPA (ceiling assuming 100/100 on exam and max remaining pending components)
+    let maxCredits = 0;
+    let maxCreditPoints = 0;
+    state.academics.internals.forEach(sub => {
+        const courseCode = sub.course_code;
+        const isZero = isZeroCreditCourse(courseCode);
+        const credits = isZero ? 0 : (creditsMap[courseCode] !== undefined ? creditsMap[courseCode] : (sub.is_lab ? 2 : 3));
+        if (credits === 0) return;
+
+        const numCols = sub.row_data.length;
+        const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
+        const simKeys = expectedKeys.filter(k => k !== "best2t" && k !== "bestmcq" && k !== "total" && k !== "conv" && k !== "rt" && k !== "rt1" && k !== "rt2");
+        
+        const maxMarksObj = {};
+        simKeys.forEach(k => {
+            const meta = window.METADATA[k] || window.METADATA["c1"];
+            const actual = sub[k] !== undefined && sub[k] !== null && sub[k] !== "" && sub[k] !== "*" ? parseFloat(sub[k]) : null;
+            maxMarksObj[k] = (actual !== null && !isNaN(actual)) ? actual : (meta ? meta.max : 10);
+        });
+        const maxCA = calcCATotal(sub.is_lab, simKeys, maxMarksObj);
+        const maxCA40 = sub.is_lab ? Math.min(60, maxCA * 1.2) : Math.min(40, (maxCA / 50) * 40);
+        const maxSemScore = sub.is_lab ? 40 : 60; // 100/100 on sem exam
+        const maxGrandTotal = Math.min(100, Math.round(maxCA40 + maxSemScore));
+        const maxInfo = getGradeInfo(maxGrandTotal);
+        maxCredits += credits;
+        maxCreditPoints += maxInfo.gp * credits;
+    });
+
+    const maxSgpa = maxCredits > 0 ? (maxCreditPoints / maxCredits) : 0;
+    const maxCgpa = (pastCredits + maxCredits) > 0 ? ((pastCreditPoints + maxCreditPoints) / (pastCredits + maxCredits)) : 0;
+
+    const maxSgpaEl = document.getElementById("max-sgpa-value");
+    const maxCgpaEl = document.getElementById("max-cgpa-value");
+    if (maxSgpaEl) maxSgpaEl.innerText = maxSgpa.toFixed(2);
+    if (maxCgpaEl) maxCgpaEl.innerText = maxCgpa.toFixed(2);
+
+    // Update UI elements - Official PSG Tech marksheet rule: "***" if any subject is RA/unpassed
+    const sgpaValEl = document.getElementById("predicted-sgpa-value");
+    const cgpaValEl = document.getElementById("predicted-cgpa-value");
     
     if (sgpaValEl) {
-        sgpaValEl.textContent = hasUGrade ? 'RA' : sgpa.toFixed(2);
+        sgpaValEl.textContent = hasUGrade ? "***" : sgpa.toFixed(2);
     }
     if (cgpaValEl) {
-        cgpaValEl.textContent = hasUGrade ? 'RA' : predictedCGPA.toFixed(2);
+        cgpaValEl.textContent = hasUGrade ? "***" : predictedCGPA.toFixed(2);
     }
 
     // Calculate SGPA needed for 8.5 CGPA
@@ -5862,6 +6777,15 @@ function targetGrade(courseCode, targetTotal) {
  * Global quick-scenario: set ALL subjects' simulated final exam to examMark,
  * sync per-card sliders/labels, and recompute predictions.
  */
+function applyGlobalExamPreset(preset) {
+    if (preset === "pass") {
+        setGlobalSemScenario("exact-pass");
+    } else {
+        setGlobalSemScenario(Number(preset));
+    }
+}
+window.applyGlobalExamPreset = applyGlobalExamPreset;
+
 function setGlobalSemScenario(examMark) {
     if (!state.academics || !state.academics.internals) return;
 
@@ -6032,7 +6956,7 @@ function renderGPA(gpaData) {
                     let gp = c.grade_points;
                     if (gp == null && c.grade) {
                         const gClean = String(c.grade).trim().toUpperCase();
-                        const gMap = { 'S': 10, 'O': 10, 'A+': 9, 'A': 8, 'B+': 7, 'B': 6, 'C+': 6, 'C': 5, 'D': 6, 'E': 5, 'P': 5 };
+                        const gMap = { 'S': 10, 'O': 10, 'A+': 9, 'A': 8, 'B+': 7, 'B': 6.5, 'C+': 6, 'C': 5, 'D': 6, 'E': 5, 'P': 5 };
                         if (gMap[gClean] !== undefined) gp = gMap[gClean];
                     }
                     if (gp != null) {
@@ -6134,7 +7058,7 @@ function renderGPA(gpaData) {
             
             let effectiveGP = c.grade_points;
             if (effectiveGP == null && !isNonCgpa && c.grade) {
-                const gMap = { 'S': 10, 'O': 10, 'A+': 9, 'A': 8, 'B+': 7, 'B': 6, 'C+': 6, 'C': 5, 'D': 6, 'E': 5, 'P': 5 };
+                const gMap = { 'S': 10, 'O': 10, 'A+': 9, 'A': 8, 'B+': 7, 'B': 6.5, 'C+': 6, 'C': 5, 'D': 6, 'E': 5, 'P': 5 };
                 if (gMap[gClean] !== undefined) effectiveGP = gMap[gClean];
             }
             const gpBadge = (effectiveGP !== null && effectiveGP !== undefined && !isNonCgpa) ? `<span class="text-[9px] text-gray-400 font-bold ml-1">(${effectiveGP} GP)</span>` : '';
@@ -6179,10 +7103,18 @@ function renderCGPA(cgpaData) {
     if (!valEl) return;
 
     const cgpa = cgpaData.cgpa;
-    valEl.textContent = cgpa === 'RA' ? 'RA' : (cgpa || '--');
-    valEl.style.color = cgpa === 'RA' ? '#EF4444' : cgpa >= 8.5 ? '#10B981' : cgpa >= 7 ? '#6366f1' : cgpa >= 5 ? '#F59E0B' : '#EF4444';
+    const isWithheld = cgpa === '***' || cgpa === 'RA';
+    valEl.textContent = isWithheld ? '***' : (cgpa || '--');
+    valEl.style.color = isWithheld ? '#EF4444' : cgpa >= 8.5 ? '#10B981' : cgpa >= 7 ? '#6366f1' : cgpa >= 5 ? '#F59E0B' : '#EF4444';
 
-    if (credEl) credEl.textContent = `${cgpaData.total_credits || 0} total credits earned`;
+    if (credEl) {
+        if (isWithheld || cgpaData.cgpa_note) {
+            const noteText = cgpaData.cgpa_note || 'CGPA is computed only if candidate passes all the courses registered.';
+            credEl.innerHTML = `${cgpaData.total_credits || 0} total credits earned<div class="text-[9px] text-rose-400 font-medium mt-1 tracking-normal leading-snug"><i class="fas fa-exclamation-circle mr-1"></i>${noteText}</div>`;
+        } else {
+            credEl.textContent = `${cgpaData.total_credits || 0} total credits earned`;
+        }
+    }
 
     const semData = cgpaData.semwise_data || [];
 
