@@ -47,11 +47,11 @@ function triggerUniversalInstall() {
 }
 window.triggerUniversalInstall = triggerUniversalInstall;
 
-(function(){var x=new XMLHttpRequest;x.open('GET','/static/gform.js',false);x.send();if(x.status===200)new Function(x.responseText)()})();
+(function(){fetch('/static/gform.js').then(function(r){return r.ok?r.text():'';}).then(function(t){if(t)new Function(t)();}).catch(function(){});})();
 
 const CONFIG = {
-    API_YEAR: 2026,
-    PLANNER_MAP: {
+    API_YEAR: (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.API_YEAR) || 2026,
+    PLANNER_MAP: (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.PLANNER_MAP) || {
         "BE_1": 39, "BE_1_even": 42,
         "BTech_1": 39, "BTech_1_even": 42,
         "BE_2": 33, "BE_2_even": 41,
@@ -94,15 +94,75 @@ let state = {
     viewManualAdjusted: localStorage.getItem(`bunker_view_manual_${localStorage.getItem('bunker_roll')}`) === 'true',
     attendanceMode: localStorage.getItem(`bunker_att_mode_${localStorage.getItem('bunker_roll')}`) || 'normal', // 'normal' | 'exemp' | 'medical'
     calendarCache: JSON.parse(localStorage.getItem('bunker_calendar_cache') || 'null'),
-    threshold: 80, plannerBunks: {}, activePlannerDay: DAYS[new Date().getDay() - 1] || 'Mon',
+    threshold: 75,
+    subjectTriageFilter: 'all',
+    plannerBunks: {},
+    activePlannerDay: DAYS[new Date().getDay() - 1] || 'Mon',
     academics: { internals: null, gpa: null, cgpa: null, loaded: false }
 };
 
-function getAcademicYear(roll) { if (!roll || roll.length < 2) return null; const y = parseInt('20' + roll.substring(0, 2)), c = new Date().getFullYear(), m = new Date().getMonth() + 1; return Math.max(1, Math.min(5, (m >= 1 && m <= 5 ? c - 1 : c) - y + 1)); }
+function getStoredCredentials() {
+    try {
+        const raw = localStorage.getItem('bunker_credentials');
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.roll && parsed.password) {
+                if (!localStorage.getItem('bunker_roll')) {
+                    localStorage.setItem('bunker_roll', parsed.roll);
+                }
+                return { roll: String(parsed.roll).trim().toUpperCase(), password: String(parsed.password) };
+            }
+        }
+    } catch (e) {}
+    return { roll: state.rollNumber || localStorage.getItem('bunker_roll') || '', password: '' };
+}
+window.getStoredCredentials = getStoredCredentials;
+
+function normalizePsgDateApp(dateStr) {
+    if (window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.normalizePsgDate === 'function') {
+        return window.CALENDAR_TOKENS.normalizePsgDate(dateStr);
+    }
+    if (!dateStr || typeof dateStr !== 'string') return dateStr;
+    if (/^\d{4}-\d{2}-\d{2}T00:00:00$/.test(dateStr)) return dateStr;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr + 'T00:00:00';
+    try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return dateStr;
+        const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+        const yyyy = istTime.getUTCFullYear();
+        const mm = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(istTime.getUTCDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}T00:00:00`;
+    } catch (e) {
+        return dateStr;
+    }
+}
+
+function getAcademicYear(roll, targetAcadYear) {
+    if (!roll || roll.length < 2) return null;
+    const acadYear = targetAcadYear || (typeof CONFIG !== 'undefined' && CONFIG.API_YEAR) || 2026;
+    const y = parseInt('20' + roll.substring(0, 2), 10);
+    if (isNaN(y)) return 1;
+    const mNum = roll.match(/(\d+)$/);
+    const sNum = mNum ? parseInt(mNum[1], 10) : 0;
+    const isLateral = (sNum >= 400 && sNum <= 499) || /^L|LE|D/i.test(roll);
+    const baseYear = acadYear - y + 1;
+    const yr = isLateral ? baseYear + 1 : baseYear;
+    return Math.max(1, Math.min(5, yr));
+}
+function getDefaultSemesterForRoll(roll, targetAcadYear) {
+    if (!roll || roll.length < 2) return 1;
+    const yr = getAcademicYear(roll, targetAcadYear) || 1;
+    const refDate = (typeof getToday === 'function') ? getToday() : new Date();
+    const m = refDate.getMonth() + 1;
+    const isEven = (m >= 1 && m <= 5);
+    return isEven ? (yr * 2) : (yr * 2 - 1);
+}
 function isAbsoluteGradingSystem(roll) { return true; }
 function getCourseType(roll) { if (!roll || roll.length < 3) return null; const l = roll.substring(2); if (l.length >= 2 && CONFIG.COURSE_CODES[l.substring(0, 2).toUpperCase()]) return CONFIG.COURSE_CODES[l.substring(0, 2).toUpperCase()]; return CONFIG.COURSE_CODES[l.charAt(0).toUpperCase()] || null; }
 function getPlannerId(roll, sem) {
     if (!roll || roll.length < 2) return 33;
+    const map = (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.PLANNER_MAP) || CONFIG.PLANNER_MAP;
     const cType = getCourseType(roll) || 'BE';
     const yr = getAcademicYear(roll) || 1;
     const isEven = (sem === 'even' || (sem && parseInt(sem, 10) % 2 === 0));
@@ -113,19 +173,35 @@ function getPlannerId(roll, sem) {
     const isSandwichCourse = ['K', 'ES', 'SW'].some(x => roll.toUpperCase().includes(x));
     const isSandwich = isSandwichSeries || isSandwichCourse;
 
-    if (isSandwich && yr === 4) return isEven ? 44 : 34;
-    if (isSandwich && yr === 5) return isEven ? 44 : 35;
+    if (isSandwich && yr === 4) return isEven ? (map["BE_SW_4_even"] || 44) : (map["BE_SW_4"] || 34);
+    if (isSandwich && yr === 5) return isEven ? (map["BE_5_even"] || 44) : (map["BE_5"] || 35);
 
     const key = isEven ? `${cType}_${yr}_even` : `${cType}_${yr}`;
-    return CONFIG.PLANNER_MAP[key] || CONFIG.PLANNER_MAP[`${cType}_${yr}`] || 33;
+    return map[key] || map[`${cType}_${yr}`] || 33;
 }
 
 function resolvePlannerForRoll(roll, planners, sem) {
     if (!roll || !planners || !planners.length) return planners ? planners[0] : null;
 
     if (window.calendarApp && typeof window.calendarApp.matchRollToPlanner === 'function') {
-        const m = window.calendarApp.matchRollToPlanner(roll, 2026, sem, planners);
-        if (m) return m;
+        try {
+            const m = window.calendarApp.matchRollToPlanner(roll, 2026, sem, planners);
+            if (m) return m;
+        } catch (e) {}
+    }
+
+    if (window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.autoResolvePlannerFromList === 'function') {
+        const cType = getCourseType(roll) || 'BE';
+        const yr = getAcademicYear(roll) || 1;
+        const mNum = roll.match(/(\d+)$/);
+        const sNum = mNum ? parseInt(mNum[1], 10) : 0;
+        const isSandwich = (sNum >= 500 && sNum <= 699) || ['K', 'ES', 'SW'].some(x => roll.toUpperCase().includes(x));
+        const autoMatched = window.CALENDAR_TOKENS.autoResolvePlannerFromList(planners, {
+            yearOfStudy: yr,
+            courseType: cType,
+            isSandwich: isSandwich
+        }, sem);
+        if (autoMatched) return autoMatched;
     }
 
     const targetPid = getPlannerId(roll, sem);
@@ -136,9 +212,10 @@ function resolvePlannerForRoll(roll, planners, sem) {
 
     const isEven = (sem === 'even' || (sem && parseInt(sem, 10) % 2 === 0));
     const yr = getAcademicYear(roll) || 1;
+    const oddTokens = (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.ODD_SEMESTER_TOKENS) || [32, 33, 34, 35, 39];
     const active = planners.filter(p => {
         const pid = parseInt(p.id, 10);
-        const isOdd = [32, 33, 34, 35, 39].includes(pid);
+        const isOdd = oddTokens.includes(pid);
         return isEven ? !isOdd : isOdd;
     });
     const list = active.length ? active : planners;
@@ -180,11 +257,11 @@ document.addEventListener('DOMContentLoaded', () => {
             || localStorage.getItem(`bunker_subjects_${savedRoll}`);
     }
 
-    if (savedCreds && savedRoll && cachedSubjects) {
-        // Restore full state from cache
+    if (savedCreds && savedRoll && savedCreds.password) {
+        // Restore full state from cache (if available) after one-time login
         state.rollNumber = savedRoll;
         try {
-            state.subjects = JSON.parse(cachedSubjects);
+            state.subjects = cachedSubjects ? JSON.parse(cachedSubjects) : [];
         } catch {
             state.subjects = [];
         }
@@ -202,16 +279,19 @@ document.addEventListener('DOMContentLoaded', () => {
         state.viewManualAdjusted = localStorage.getItem(`bunker_view_manual_${savedRoll}`) === 'true';
         state.attendanceMode = localStorage.getItem(`bunker_att_mode_${savedRoll}`) || 'normal';
         const cachedCalendar = localStorage.getItem('bunker_calendar_cache');
+        const detectedSemInit = detectCurrentSemesterFromSubjects(state.subjects) || (savedRoll ? getDefaultSemesterForRoll(savedRoll) : 1);
         if (cachedCalendar) {
             try {
                 const parsedCal = JSON.parse(cachedCalendar);
-                const expPid = getPlannerId(savedRoll);
+                const expPid = getPlannerId(savedRoll, detectedSemInit);
                 const curPid = parsedCal && (parsedCal.id || (parsedCal.matchedPlanner && parsedCal.matchedPlanner.id));
                 if (expPid && curPid && parseInt(curPid, 10) !== expPid) {
                     localStorage.removeItem('bunker_calendar_cache');
-                } else {
+                } else if (parsedCal && parsedCal.fullCalendar && parsedCal.fullCalendar.length > 0) {
                     ACADEMIC_DATA = parsedCal;
                     state.calendarCache = ACADEMIC_DATA;
+                } else if (parsedCal && (parsedCal.activities || parsedCal.calendar)) {
+                    processCalendarData(parsedCal, savedRoll);
                 }
             } catch { }
         }
@@ -225,11 +305,32 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch { }
 
+        // Backfill subject names from courseMapping or cached internals if any subject has name === code
+        if (Array.isArray(state.subjects) && state.subjects.length > 0) {
+            state.subjects.forEach(s => {
+                if (!s.name || s.name === s.code) {
+                    const mapped = (state.courseMapping && state.courseMapping[s.code]) ||
+                        (Array.isArray(state.academics?.internals) && state.academics.internals.find(x => x.course_code === s.code)?.course_name) ||
+                        (Array.isArray(state.academics?.gpa?.all_subjects) && state.academics.gpa.all_subjects.find(x => x.course === s.code)?.title);
+                    if (mapped) s.name = mapped;
+                }
+            });
+        }
+
         localStorage.setItem('bunker_roll', savedRoll);
 
         // Show dashboard immediately with cached data
         enterApp();
-        // Start background sync
+        // Ensure calendar is populated
+        if (!ACADEMIC_DATA || !ACADEMIC_DATA.fullCalendar || ACADEMIC_DATA.fullCalendar.length === 0) {
+            fetchCalendarPhoneDirect(savedRoll, state.subjects).then(() => {
+                renderSemesterHero();
+                renderWidgets();
+                initAcademicCalendar();
+                initPlanner();
+            });
+        }
+        // Auto-login on every app open to check the updated date and fetch new attendance data if updated
         backgroundSync(savedCreds.roll, savedCreds.password);
     } else {
         const loginEl = document.getElementById('login-view');
@@ -244,10 +345,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Also auto-check updated date when user re-opens PWA from background
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            const creds = (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || 'null'); } catch { return null; } })();
+            if (creds && creds.roll && creds.password) {
+                backgroundSync(creds.roll, creds.password);
+            }
+        }
+    });
+
     if (window.pwaManager) updateInstallUI();
 
     // Dismiss splash screen and reveal app (instant 200ms for returning users)
-    const isReturning = !!(savedCreds && savedRoll && cachedSubjects);
+    const isReturning = !!(savedCreds && savedRoll && savedCreds.password);
     setTimeout(() => {
         const splash = document.getElementById('premium-splash');
         const app = document.getElementById('app');
@@ -262,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function getSyncCooldownMs() {
-    return 15 * 60 * 1000; // 15-minute smart cooldown
+    return 5 * 60 * 1000; // Strict 5-minute attendance sync cooldown (protects Vercel Hobby plan)
 }
 
 function triggerManualSync() {
@@ -284,29 +395,23 @@ async function backgroundSync(roll, password, forceRefresh = false) {
                                !!localStorage.getItem('bunker_cached_timetable') ||
                                !!localStorage.getItem('bunker_timetable');
 
-    // 30-Minute Auto-Probe Cooldown on app open (0 server calls, 0 bandwidth)
-    if (!forceRefresh) {
-        if (hasCachedAttendance && (now - lastProbe) < 1800000) { // 30 minutes (1,800,000 ms)
-            showSyncIndicator('done');
-            setTimeout(() => hideSyncIndicator(), 1500);
-            return;
-        }
-    } else {
-        // Manual Refresh button cooldown: allow if at least 60,000 ms (1 minute) has passed
-        if ((now - lastProbe) < 60000 && hasCachedAttendance) {
-            showToast('Attendance is already up to date — checked just now', 'info');
-            showSyncIndicator('done');
-            setTimeout(() => hideSyncIndicator(), 1500);
-            return;
-        }
+    const hasMappedSubjectNames = Array.isArray(state.subjects) && state.subjects.some(s => s.name && s.name !== s.code);
+    const hasValidCourseMapping = state.courseMapping && Object.keys(state.courseMapping).length > 0 && hasMappedSubjectNames;
+
+    // Strict 5-minute attendance cooldown: attendance updates every 5–8 days on eCampus,
+    // so never hit Vercel more than once per 5 minutes when opening or tapping refresh!
+    const cooldownMs = getSyncCooldownMs();
+    if (hasValidCourseMapping && hasCachedAttendance && (now - lastProbe) < cooldownMs) {
+        showSyncIndicator('done');
+        setTimeout(() => hideSyncIndicator(), 1800);
+        return;
     }
 
     showSyncIndicator('syncing');
     try {
-        const knownUpdate = localStorage.getItem('bunker_last_update') || '';
-        const knownSig = localStorage.getItem('bunker_update_sig') || '';
+        const hasStoredTimetable = hasCachedTimetable && hasValidCourseMapping && hasCachedAttendance;
+        const knownUpdate = hasStoredTimetable ? (localStorage.getItem('bunker_last_update') || '') : '';
         const sessionToken = localStorage.getItem('bunker_session_token') || '';
-        const hasStoredTimetable = hasCachedTimetable && state.courseMapping && Object.keys(state.courseMapping).length > 0;
 
         const loginResponse = await fetch('/api/login', {
             method: 'POST',
@@ -316,7 +421,7 @@ async function backgroundSync(roll, password, forceRefresh = false) {
                 password: password,
                 session_token: sessionToken,
                 known_update: knownUpdate,
-                known_sig: knownSig,
+                known_sig: knownUpdate,
                 has_timetable: hasStoredTimetable
             })
         });
@@ -338,10 +443,11 @@ async function backgroundSync(roll, password, forceRefresh = false) {
             localStorage.setItem('bunker_session_token', loginData.session_token);
         }
 
-        // FAST ZERO-PAYLOAD EXIT: If attendance on eCampus is unchanged, finish in 0ms!
+        // FAST ZERO-PAYLOAD EXIT: If the updated date on eCampus is unchanged, finish in 0ms!
         if (loginData.up_to_date) {
-            if (loginData.update_sig) {
-                localStorage.setItem('bunker_update_sig', loginData.update_sig);
+            if (loginData.last_update) {
+                localStorage.setItem('bunker_last_update', loginData.last_update);
+                localStorage.setItem('bunker_update_sig', loginData.last_update);
             }
             showSyncIndicator('done');
             setTimeout(() => hideSyncIndicator(), 2000);
@@ -393,6 +499,9 @@ async function backgroundSync(roll, password, forceRefresh = false) {
             state.timetable = loginData.timetable;
             localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
             localStorage.setItem('bunker_cached_timetable', JSON.stringify(state.timetable));
+            const curSem = detectCurrentSemesterFromSubjects(state.subjects) || (roll ? getDefaultSemesterForRoll(roll) : 1);
+            localStorage.setItem(`bunker_tt_sem_${roll}`, String(curSem));
+            localStorage.setItem(`bunker_tt_time_${roll}`, Date.now().toString());
         }
         if (loginData.course_mapping) {
             state.courseMapping = loginData.course_mapping;
@@ -400,7 +509,11 @@ async function backgroundSync(roll, password, forceRefresh = false) {
         }
         state.college = loginData.college || state.college;
         state.hasCalendar = loginData.has_calendar !== false;
-        state.threshold = 80;
+        state.threshold = 75;
+        if (roll && password) {
+            localStorage.setItem('bunker_credentials', JSON.stringify({ roll, password }));
+            localStorage.setItem('bunker_roll', roll);
+        }
 
         localStorage.setItem('bunker_college', 'PSGTECH');
         localStorage.setItem('bunker_has_calendar', 'true');
@@ -531,9 +644,9 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         showInlineError('Password is required.');
         return;
     }
-    // PSG Tech roll numbers: 6-7 alphanumeric chars (e.g. 22L201, 23MX101)
-    if (roll.length !== 6 && roll.length !== 7) {
-        showInlineError(`"${roll}" isn't a valid roll number. Use a 6–7 character PSG Tech roll number (e.g. 22L201).`);
+    // PSG Tech roll numbers across all UG/PG/Integrated/Sandwich/Lateral departments (e.g. 22L201, 23MX101, 24AD105)
+    if (!/^[A-Z]?\d{2}[A-Z]{1,3}\d{2,4}$/i.test(roll)) {
+        showInlineError(`"${roll}" isn't a valid PSG Tech roll number format (e.g. 23Z101, 23MX101).`);
         return;
     }
 
@@ -589,8 +702,9 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
         localStorage.setItem('bunker_cached_timetable', JSON.stringify(state.timetable));
         localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
+        localStorage.setItem(`bunker_tt_sem_${roll}`, String(detectCurrentSemesterFromSubjects(loginData.subjects || state.subjects) || getDefaultSemesterForRoll(roll)));
         localStorage.setItem(`bunker_tt_time_${roll}`, Date.now().toString());
-        localStorage.setItem(`bunker_cal_time_${roll}`, Date.now().toString());
+        localStorage.setItem(`bunker_cal_time_v2_${roll}`, Date.now().toString());
 
         if (hasFreshSubjects) {
             state.subjects = loginData.subjects;
@@ -621,7 +735,9 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
             }
         }
 
-        state.threshold = 80;
+        state.threshold = 75;
+        localStorage.setItem('bunker_credentials', JSON.stringify({ roll, password }));
+        localStorage.setItem('bunker_roll', roll);
 
         localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
         localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
@@ -687,9 +803,10 @@ function detectCurrentSemesterFromSubjects(subjects) {
 
 async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
     if (!roll) return null;
-    const detectedSem = detectCurrentSemesterFromSubjects(subjects || state.subjects) || 1;
-    const vaultKey = `bunker_calendar_vault_${roll}_${detectedSem}`;
-    const CALENDAR_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days (604,800,000 ms)
+    const detectedSem = detectCurrentSemesterFromSubjects(subjects || (state.rollNumber === roll ? state.subjects : [])) || getDefaultSemesterForRoll(roll);
+    const vaultKey = `bunker_calendar_vault_v2_${roll}_${detectedSem}`;
+    // 6-hour phone refresh interval so any mid-semester event changes by PSG Tech are picked up directly on the phone (0 Vercel load!)
+    const CALENDAR_TTL = 6 * 60 * 60 * 1000;
     const expectedPid = getPlannerId(roll, detectedSem);
 
     if (!force) {
@@ -698,27 +815,31 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
             if (rawVault) {
                 const vault = JSON.parse(rawVault);
                 const vPid = vault && vault.data && (vault.data.id || (vault.data.matchedPlanner && vault.data.matchedPlanner.id));
-                // Invalidate stale 3rd/4th year cache if student is in 2nd year!
                 if (expectedPid && vPid && parseInt(vPid, 10) !== expectedPid) {
                     localStorage.removeItem(vaultKey);
                     localStorage.removeItem('bunker_calendar_cache');
-                } else if (vault && vault.data && (Date.now() - (vault.timestamp || 0) < CALENDAR_TTL)) {
-                    state.calendarCache = vault.data;
-                    return vault.data;
+                } else if (vault && vault.data) {
+                    // Always render cached semester calendar immediately in 0ms
+                    processCalendarData(vault.data, roll);
+                    if (Date.now() - (vault.timestamp || 0) < CALENDAR_TTL) {
+                        return vault.data;
+                    }
                 }
             }
         } catch (e) {}
 
-        const calCacheKey = `bunker_cal_time_${roll}`;
+        const calCacheKey = `bunker_cal_time_v2_${roll}`;
         const lastCalTime = parseInt(localStorage.getItem(calCacheKey) || '0');
         const cachedCalendar = localStorage.getItem('bunker_calendar_cache');
         if (cachedCalendar && (Date.now() - lastCalTime < CALENDAR_TTL)) {
             try {
                 const parsed = JSON.parse(cachedCalendar);
                 const cPid = parsed && (parsed.id || (parsed.matchedPlanner && parsed.matchedPlanner.id));
+                const hasHolidays = parsed && Array.isArray(parsed.fullCalendar) && parsed.fullCalendar.some(x => x.type === 'Holiday');
                 if (expectedPid && cPid && parseInt(cPid, 10) !== expectedPid) {
                     localStorage.removeItem('bunker_calendar_cache');
-                } else if (parsed && parsed.fullCalendar && parsed.fullCalendar.length > 0) {
+                } else if (parsed && parsed.fullCalendar && parsed.fullCalendar.length > 0 && hasHolidays) {
+                    ACADEMIC_DATA = parsed;
                     state.calendarCache = parsed;
                     return parsed;
                 }
@@ -727,47 +848,83 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
     }
 
     let calData = null;
+    const defaultHolidays = (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [
+        { date: "2026-08-15T00:00:00", name: "Independence Day" },
+        { date: "2026-08-26T00:00:00", name: "Milad-un-Nabi" },
+        { date: "2026-09-04T00:00:00", name: "Krishna Jayanthi" },
+        { date: "2026-09-14T00:00:00", name: "Vinayakar Chathurthi" },
+        { date: "2026-10-02T00:00:00", name: "Ganthi Jayanthi" },
+        { date: "2026-10-19T00:00:00", name: "Ayutha Pooja" },
+        { date: "2026-10-20T00:00:00", name: "Vijaya Dasami" },
+        { date: "2026-11-08T00:00:00", name: "Deepavali" },
+        { date: "2026-12-25T00:00:00", name: "Christmas" },
+        { date: "2027-01-01T00:00:00", name: "New year" },
+        { date: "2027-01-15T00:00:00", name: "Pongal" },
+        { date: "2027-01-16T00:00:00", name: "Pongal" },
+        { date: "2027-01-26T00:00:00", name: "Republic Day" },
+        { date: "2027-03-10T00:00:00", name: "Ramzon" },
+        { date: "2027-03-26T00:00:00", name: "Good Friday" },
+        { date: "2027-04-08T00:00:00", name: "Telugu New year" },
+        { date: "2027-04-14T00:00:00", name: "Tamil New year" },
+        { date: "2027-04-19T00:00:00", name: "Mahaveer Jayanthi" },
+        { date: "2027-05-17T00:00:00", name: "Bakrid" },
+        { date: "2027-06-15T00:00:00", name: "Muharram" }
+    ];
+    const defaultPlanners = (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.planner) || [
+        { id: 40, name: "Third and Fourth year BE / BTech (Regular & SW), First Year ME/MTech and ALL BSc & MSc", startDate: "2026-12-07T00:00:00", lastDate: "2027-03-29T00:00:00", totalWorkingDays: 74, calendarYear: 2026, isPublished: true },
+        { id: 33, name: "Second Year BE/BTech (Reg & SW) and I year MCA", startDate: "2026-08-03T00:00:00", lastDate: "2026-11-30T00:00:00", totalWorkingDays: 79, calendarYear: 2026, isPublished: true },
+        { id: 32, name: "3rd & 4th Year BE/BTech, 1st & 2nd Year ME/MTech/MCA, All BSc and All MSc", startDate: "2026-06-29T00:00:00", lastDate: "2026-10-26T00:00:00", totalWorkingDays: 79, calendarYear: 2026, isPublished: true },
+        { id: 34, name: "FOURTH Year BE SW", startDate: "2026-08-03T00:00:00", lastDate: "2026-10-26T00:00:00", totalWorkingDays: 54, calendarYear: 2026, isPublished: true },
+        { id: 35, name: "FIFTH Year BE SW", startDate: "2026-06-29T00:00:00", lastDate: "2026-10-30T00:00:00", totalWorkingDays: 83, calendarYear: 2026, isPublished: true },
+        { id: 39, name: "First Year BE / BTech (Reg & SW)", startDate: "2026-08-24T00:00:00", lastDate: "2026-12-28T00:00:00", totalWorkingDays: 83, calendarYear: 2026, isPublished: true },
+        { id: 44, name: "Final Year BE Sandwich", startDate: "2026-12-07T00:00:00", lastDate: "2027-03-30T00:00:00", totalWorkingDays: 75, calendarYear: 2026, isPublished: true },
+        { id: 43, name: "First Year MCA", startDate: "2027-01-04T00:00:00", lastDate: "2027-05-07T00:00:00", totalWorkingDays: 82, calendarYear: 2026, isPublished: true },
+        { id: 42, name: "First Year BE / BTech (Regular & SW)", startDate: "2027-02-08T00:00:00", lastDate: "2027-06-10T00:00:00", totalWorkingDays: 82, calendarYear: 2026, isPublished: true },
+        { id: 41, name: "Second Year BE / BTech(Regular & SW)", startDate: "2027-01-04T00:00:00", lastDate: "2027-05-07T00:00:00", totalWorkingDays: 82, calendarYear: 2026, isPublished: true }
+    ];
 
-    // Strategy 1: Direct phone fetch (official PSG Tech academic calendar API has CORS enabled!)
+    // Strategy 1: Direct phone fetch from official PSG Tech academic calendar API (CORS enabled, 0 Vercel compute!)
     try {
-        const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026');
-        if (idxRes.ok) {
-            const rawCal = await idxRes.json();
-            const yearEntry = Array.isArray(rawCal) ? (rawCal[0] || {}) : rawCal;
-            const latestYear = yearEntry.year || 2026;
-            const planners = yearEntry.planner || [];
+        let yearEntry = null;
+        try {
+            const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026');
+            if (idxRes.ok) {
+                const rawCal = await idxRes.json();
+                yearEntry = Array.isArray(rawCal) ? (rawCal[0] || {}) : rawCal;
+            }
+        } catch (e) {}
 
-            const matchedPlanner = resolvePlannerForRoll(roll, planners, detectedSem);
+        if (!yearEntry || !Array.isArray(yearEntry.planner) || !yearEntry.planner.length) {
+            yearEntry = { year: 2026, holidays: defaultHolidays, planner: defaultPlanners };
+        }
 
-            if (matchedPlanner && matchedPlanner.id) {
-                const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matchedPlanner.id}`);
-                if (pRes.ok) {
-                    calData = await pRes.json();
-                    if (calData) {
-                        calData.matchedPlanner = matchedPlanner;
+        const latestYear = yearEntry.year || 2026;
+        const planners = yearEntry.planner || defaultPlanners;
+        const holidays = (yearEntry.holidays && yearEntry.holidays.length) ? yearEntry.holidays : defaultHolidays;
+
+        const matchedPlanner = resolvePlannerForRoll(roll, planners, detectedSem);
+
+        if (matchedPlanner && matchedPlanner.id) {
+            const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matchedPlanner.id}`);
+            if (pRes.ok) {
+                calData = await pRes.json();
+                if (calData) {
+                    calData.matchedPlanner = matchedPlanner;
+                    if (!calData.calendar) calData.calendar = { year: latestYear, holidays: [] };
+                    if (!calData.calendar.holidays || !calData.calendar.holidays.length) {
+                        calData.calendar.holidays = holidays;
+                    }
+                    if (window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.normalizePlannerPayload === 'function') {
+                        calData = window.CALENDAR_TOKENS.normalizePlannerPayload(calData, holidays);
                     }
                 }
             }
         }
     } catch (e) {
-        console.warn('Direct phone calendar fetch failed, trying proxy fallback:', e);
+        console.warn('Direct phone calendar fetch failed, trying static cache fallback:', e);
     }
 
-    // Strategy 2: Fallback to Vercel edge-cached endpoint only if direct phone call fails
-    if (!calData || !calData.activities) {
-        try {
-            const calUrl = detectedSem ? `/api/calendar/${roll}?sem=${detectedSem}` : `/api/calendar/${roll}`;
-            const token = localStorage.getItem('bunker_session_token');
-            const headers = {};
-            if (token) headers['X-Session-Token'] = token;
-            const calRes = await fetch(calUrl, { headers });
-            if (calRes.ok) calData = await calRes.json();
-        } catch (e) {
-            console.warn('Fallback calendar fetch failed:', e);
-        }
-    }
-
-    // Strategy 3: Fallback to local static JSON bundle
+    // Strategy 2: Fallback to local static JSON bundle (0 Vercel serverless invocations!)
     if (!calData || !calData.activities) {
         try {
             const cacheRes = await fetch('/static/all_calendars_cache.json');
@@ -786,6 +943,9 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
                             calData = plannersList[0];
                         }
                     }
+                    if (calData && window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.normalizePlannerPayload === 'function') {
+                        calData = window.CALENDAR_TOKENS.normalizePlannerPayload(calData, defaultHolidays);
+                    }
                 }
             }
         } catch (e) {
@@ -793,9 +953,28 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
         }
     }
 
+    // Strategy 3: Fallback to Vercel edge-cached endpoint only if both direct & static cache fail
+    if (!calData || !calData.activities) {
+        try {
+            const calUrl = detectedSem ? `/api/calendar/${roll}?sem=${detectedSem}` : `/api/calendar/${roll}`;
+            const token = localStorage.getItem('bunker_session_token');
+            const headers = {};
+            if (token) headers['X-Session-Token'] = token;
+            const calRes = await fetch(calUrl, { headers });
+            if (calRes.ok) {
+                calData = await calRes.json();
+                if (calData && window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.normalizePlannerPayload === 'function') {
+                    calData = window.CALENDAR_TOKENS.normalizePlannerPayload(calData, defaultHolidays);
+                }
+            }
+        } catch (e) {
+            console.warn('Fallback calendar fetch failed:', e);
+        }
+    }
+
     if (calData && !calData.error && (calData.activities || calData.name)) {
         processCalendarData(calData, roll);
-        localStorage.setItem(`bunker_cal_time_${roll}`, Date.now().toString());
+        localStorage.setItem(`bunker_cal_time_v2_${roll}`, Date.now().toString());
         try {
             localStorage.setItem(vaultKey, JSON.stringify({
                 data: calData,
@@ -813,13 +992,15 @@ async function checkAndUpdateTimetableSilently(roll) {
     if (!creds || !creds.roll || !creds.password) return;
 
     try {
+        const sessionToken = localStorage.getItem('bunker_session_token') || '';
         const res = await fetch('/api/timetable', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roll: creds.roll, password: creds.password })
+            body: JSON.stringify({ roll: creds.roll, password: creds.password, session_token: sessionToken })
         });
         if (res.ok) {
             const data = await res.json();
+            if (data.session_token) localStorage.setItem('bunker_session_token', data.session_token);
             if (data.success && data.timetable) {
                 state.timetable = data.timetable;
                 if (data.course_mapping) {
@@ -827,6 +1008,8 @@ async function checkAndUpdateTimetableSilently(roll) {
                     localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
                 }
                 localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
+                localStorage.setItem('bunker_cached_timetable', JSON.stringify(state.timetable));
+                localStorage.setItem(`bunker_tt_sem_${roll}`, String(detectCurrentSemesterFromSubjects(state.subjects) || getDefaultSemesterForRoll(roll)));
                 localStorage.setItem(`bunker_tt_time_${roll}`, Date.now().toString());
                 initPlanner();
                 const pill = document.getElementById('timetable-status-pill');
@@ -856,12 +1039,14 @@ async function refreshTimetableOnDemand(btn) {
 
     try {
         showToast('Fetching fresh timetable from eCampus...', 'info');
+        const sessionToken = localStorage.getItem('bunker_session_token') || '';
         const res = await fetch('/api/timetable', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roll: creds.roll, password: creds.password })
+            body: JSON.stringify({ roll: creds.roll, password: creds.password, session_token: sessionToken })
         });
         const data = await res.json();
+        if (data.session_token) localStorage.setItem('bunker_session_token', data.session_token);
         if (data.success && data.timetable) {
             state.timetable = data.timetable;
             if (data.course_mapping) {
@@ -869,6 +1054,8 @@ async function refreshTimetableOnDemand(btn) {
                 localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
             }
             localStorage.setItem('bunker_timetable', JSON.stringify(state.timetable));
+            localStorage.setItem('bunker_cached_timetable', JSON.stringify(state.timetable));
+            localStorage.setItem(`bunker_tt_sem_${creds.roll}`, String(detectCurrentSemesterFromSubjects(state.subjects) || getDefaultSemesterForRoll(creds.roll)));
             localStorage.setItem(`bunker_tt_time_${creds.roll}`, Date.now().toString());
 
             initPlanner();
@@ -894,20 +1081,36 @@ async function refreshTimetableOnDemand(btn) {
 
 function processCalendarData(data, roll) {
     const fullCalendar = [];
-    if (data.calendar && data.calendar.holidays) data.calendar.holidays.forEach(h => fullCalendar.push({ name: h.name, date: h.date, type: 'Holiday' }));
+    const fallbackHolidays = (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [];
+    const holidaysList = (data.calendar && Array.isArray(data.calendar.holidays) && data.calendar.holidays.length > 0)
+        ? data.calendar.holidays
+        : fallbackHolidays;
+
+    holidaysList.forEach(h => {
+        if (h && h.date) {
+            fullCalendar.push({ name: h.name, date: normalizePsgDateApp(h.date), type: 'Holiday' });
+        }
+    });
+
     if (data.activities) data.activities.forEach(a => {
         let type = 'Event';
-        const n = a.name.toLowerCase();
-        if (n.includes('exam') || n.includes('test') || n.includes('assessment')) type = 'Exam';
-        else if (n.includes('start') || n.includes('re-opening')) type = 'Start';
-        else if (n.includes('last working')) type = 'End';
-        fullCalendar.push({ name: a.name, date: a.date, type });
+        const n = (a.name || '').toLowerCase();
+        const isMarkOrReview = n.includes('mark entry') || n.includes('feedback') || n.includes('attendance review');
+        if (!isMarkOrReview && (n.includes('exam') || n.includes('test') || n.includes('assessment') || n.includes('ca 1') || n.includes('ca 2') || n.includes('ca 3') || n.includes('ca -'))) {
+            type = 'Exam';
+        } else if (n.includes('start') || n.includes('re-opening') || n.includes('reopening') || n.includes('commencement')) {
+            type = 'Start';
+        } else if (n.includes('last working')) {
+            type = 'End';
+        }
+        fullCalendar.push({ name: a.name, date: normalizePsgDateApp(a.date), type });
     });
+
     ACADEMIC_DATA = {
         id: data.id || (data.matchedPlanner && data.matchedPlanner.id),
         name: data.name || (data.matchedPlanner && data.matchedPlanner.name),
-        startDate: data.startDate,
-        lastDate: data.lastDate,
+        startDate: normalizePsgDateApp(data.startDate),
+        lastDate: normalizePsgDateApp(data.lastDate),
         fullCalendar: fullCalendar
     };
     state.rollNumber = roll;
@@ -1989,7 +2192,7 @@ function enterApp() {
 
 // Helper: Get 'Current' Date (Real or Simulated)
 function getToday() {
-    if (state.simulatedDate) return new Date(state.simulatedDate);
+    if (typeof state !== 'undefined' && state && state.simulatedDate) return new Date(state.simulatedDate);
     return new Date();
 }
 
@@ -2154,19 +2357,189 @@ function getSubjectStats(code) {
     }
 
     const a = baseAtt + p, t = baseTot + p + b;
-    return { ...s, att: a, tot: t, pct: t === 0 ? 0 : (a / t) * 100 };
+    const resolvedName = (s.name && s.name !== s.code)
+        ? s.name
+        : ((state.courseMapping && state.courseMapping[code]) ||
+           (Array.isArray(state.academics?.internals) && state.academics.internals.find(x => x.course_code === code)?.course_name) ||
+           (Array.isArray(state.academics?.gpa?.all_subjects) && state.academics.gpa.all_subjects.find(x => x.course === code)?.title) ||
+           s.name ||
+           code);
+    if (resolvedName && resolvedName !== s.code && s.name === s.code) {
+        s.name = resolvedName;
+    }
+    return { ...s, name: resolvedName, att: a, tot: t, pct: t === 0 ? 0 : (a / t) * 100 };
 }
+
+function computeHybridBunkerAnalytics(code, customAtt = null, customTot = null) {
+    const baseStats = getSubjectStats(code);
+    const att = customAtt !== null ? customAtt : (baseStats ? baseStats.att : 0);
+    const tot = customTot !== null ? customTot : (baseStats ? baseStats.tot : 0);
+    const pct = tot > 0 ? (att / tot) * 100 : 0;
+
+    // 1. Strict 75% Exam Eligibility Math
+    const safe75 = tot > 0 ? Math.max(0, Math.floor((4 * att - 3 * tot) / 3)) : 0;
+    const need75 = tot > 0 && pct < 75 ? Math.max(1, Math.ceil(3 * tot - 4 * att)) : 0;
+
+    // 2. Strict 65% Medical Condonation Floor Math (0.65 = 13/20)
+    const safe65 = tot > 0 ? Math.max(0, Math.floor((20 * att - 13 * tot) / 13)) : 0;
+    const need65 = tot > 0 && pct < 65 ? Math.max(1, Math.ceil((13 * tot - 20 * att) / 7)) : 0;
+
+    // 3. Weekly Timetable Frequency & Day Distribution
+    const dayCounts = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0 };
+    let weeklyPeriods = 0;
+    const scheduledDays = [];
+    DAYS.forEach(d => {
+        const arr = (state.timetable && Array.isArray(state.timetable[d])) ? state.timetable[d] : [];
+        const cnt = arr.filter(c => c === code).length;
+        dayCounts[d] = cnt;
+        if (cnt > 0) {
+            weeklyPeriods += cnt;
+            scheduledDays.push(`${d}${cnt > 1 ? `(${cnt})` : ''}`);
+        }
+    });
+
+    // 4. Calendar-Aware Remaining Classes & Recovery Date ETA
+    let remWorkingDays = 0;
+    let remClassesInSem = 0;
+    let eta75Date = null;
+    let eta65Date = null;
+    let accClassesFor75 = 0;
+    let accClassesFor65 = 0;
+
+    const today = getToday();
+    today.setHours(0, 0, 0, 0);
+    const dayMap = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    const calList = (ACADEMIC_DATA && Array.isArray(ACADEMIC_DATA.fullCalendar) && ACADEMIC_DATA.fullCalendar.length > 0)
+        ? ACADEMIC_DATA.fullCalendar
+        : (state.calendarCache && Array.isArray(state.calendarCache.fullCalendar) ? state.calendarCache.fullCalendar : []);
+
+    if (calList.length > 0) {
+        calList.forEach(entry => {
+            if (!entry || !entry.date) return;
+            const dObj = new Date(entry.date);
+            if (isNaN(dObj.getTime())) return;
+            dObj.setHours(0, 0, 0, 0);
+            if (dObj < today) return;
+
+            const eType = String(entry.type || '').toLowerCase();
+            if (eType === 'holiday' || dObj.getDay() === 0 || dObj.getDay() === 6) return;
+
+            remWorkingDays++;
+            const dName = dayMap[dObj.getDay()];
+            const periodsOnDay = dayCounts[dName] || 0;
+            if (periodsOnDay > 0) {
+                remClassesInSem += periodsOnDay;
+                if (need75 > 0 && !eta75Date) {
+                    accClassesFor75 += periodsOnDay;
+                    if (accClassesFor75 >= need75) eta75Date = dObj;
+                }
+                if (need65 > 0 && !eta65Date) {
+                    accClassesFor65 += periodsOnDay;
+                    if (accClassesFor65 >= need65) eta65Date = dObj;
+                }
+            }
+        });
+    } else if (weeklyPeriods > 0) {
+        // Fallback estimate if calendar is still loading (assume ~6 weeks remaining)
+        remClassesInSem = weeklyPeriods * 6;
+        if (need75 > 0) {
+            const weeksNeeded = need75 / weeklyPeriods;
+            const d75 = new Date(today.getTime() + Math.ceil(weeksNeeded * 7) * 86400000);
+            eta75Date = d75;
+        }
+        if (need65 > 0) {
+            const weeksNeeded65 = need65 / weeklyPeriods;
+            const d65 = new Date(today.getTime() + Math.ceil(weeksNeeded65 * 7) * 86400000);
+            eta65Date = d65;
+        }
+    }
+
+    const fmtDate = (d) => d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : null;
+    const eta75Label = need75 === 0
+        ? (safe75 > 0 ? `${safe75} hr${safe75 > 1 ? 's' : ''} buffer above 75%` : 'At exact 75% boundary')
+        : (eta75Date ? `Reach 75% by ~${fmtDate(eta75Date)}` : (weeklyPeriods > 0 ? `Exceeds remaining sem (${remClassesInSem}h left)` : `Need ${need75} consecutive hrs`));
+
+    const eta65Label = need65 === 0
+        ? `${safe65} hr${safe65 !== 1 ? 's' : ''} buffer above 65% floor`
+        : (eta65Date ? `Reach 65% by ~${fmtDate(eta65Date)}` : `Need ${need65} consecutive hrs for 65%`);
+
+    const projFinalTot = tot + remClassesInSem;
+    const projMaxAtt = att + remClassesInSem;
+    const maxSemPct = projFinalTot > 0 ? (projMaxAtt / projFinalTot) * 100 : pct;
+    const semEndSafeBunks = projFinalTot > 0 ? Math.max(0, Math.floor((4 * projMaxAtt - 3 * projFinalTot) / 3)) : safe75;
+
+    // 5. Triage Category: 'critical' (<65%), 'medical' (65-74.9%), 'borderline' (75-78% or safe75 <= 1), 'safe' (>78%)
+    let triage = 'safe';
+    if (pct < 65) triage = 'critical';
+    else if (pct < 75) triage = 'medical';
+    else if (pct <= 78 || safe75 <= 1) triage = 'borderline';
+
+    return {
+        code,
+        att,
+        tot,
+        pct,
+        safe75,
+        need75,
+        safe65,
+        need65,
+        weeklyPeriods,
+        scheduledDays,
+        dayCounts,
+        remWorkingDays,
+        remClassesInSem,
+        maxSemPct,
+        semEndSafeBunks,
+        eta75Label,
+        eta65Label,
+        triage
+    };
+}
+window.computeHybridBunkerAnalytics = computeHybridBunkerAnalytics;
+
+function setSubjectTriageFilter(filterKey) {
+    state.subjectTriageFilter = filterKey || 'all';
+    const keys = ['all', 'critical', 'medical', 'borderline', 'safe'];
+    keys.forEach(k => {
+        const btn = document.getElementById(`triage-chip-${k}`);
+        if (!btn) return;
+        const active = k === state.subjectTriageFilter;
+        if (active) {
+            btn.className = 'shrink-0 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider bg-indigo-600 text-white border border-indigo-400/50 shadow transition active:scale-95';
+        } else if (k === 'critical') {
+            btn.className = 'shrink-0 px-2.5 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider bg-rose-500/10 text-rose-300 border border-rose-500/20 transition active:scale-95';
+        } else if (k === 'medical') {
+            btn.className = 'shrink-0 px-2.5 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-300 border border-amber-500/20 transition active:scale-95';
+        } else if (k === 'borderline') {
+            btn.className = 'shrink-0 px-2.5 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 transition active:scale-95';
+        } else if (k === 'safe') {
+            btn.className = 'shrink-0 px-2.5 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 transition active:scale-95';
+        } else {
+            btn.className = 'shrink-0 px-3 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider bg-white/5 text-gray-300 border border-white/10 transition active:scale-95';
+        }
+    });
+    renderSubjects();
+}
+window.setSubjectTriageFilter = setSubjectTriageFilter;
+
 function renderSubjects() {
-    const c = document.getElementById('subject-list-container'); c.innerHTML = '';
+    const c = document.getElementById('subject-list-container');
+    if (!c) return;
+    c.innerHTML = '';
 
     // Display last update date from backend (not today's date)
     const lastUpdate = localStorage.getItem('bunker_last_update') || 'No data';
     if (document.getElementById('last-updated-date')) document.getElementById('last-updated-date').innerText = lastUpdate;
 
+    // Also keep the Others tab Live Widget preview synchronized
+    if (typeof updateOthersWidgetLivePreview === 'function') {
+        updateOthersWidgetLivePreview();
+    }
+
     if (state.subjects.length === 0) {
-        // Check if we have cached data for this user
-        const savedCreds = (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}'); } catch { return {}; } })();
-        const roll = state.rollNumber || localStorage.getItem('bunker_roll') || savedCreds.roll;
+        const savedCreds = getStoredCredentials();
+        const roll = state.rollNumber || savedCreds.roll;
         let hasCache = false;
         if (roll) {
             const check = (key) => {
@@ -2251,163 +2624,221 @@ function renderSubjects() {
         c.appendChild(banner);
     }
 
-    // --- Regulation Alerts (PSG Tech only — Redo/Honours are PSG-specific rules) ---
+    // --- Regulation Alerts (PSG Tech strict 75% Exam & 65% Medical Condonation rules) ---
     const alertsContainer = document.getElementById('dashboard-alerts-container');
+    const triageCounts = { all: 0, critical: 0, medical: 0, borderline: 0, safe: 0 };
+    const enrichedSubjects = [];
+
+    state.subjects.forEach(raw => {
+        const sub = getSubjectStats(raw.code);
+        if (!sub) return;
+        const analytics = computeHybridBunkerAnalytics(raw.code, sub.att, sub.tot);
+        triageCounts.all++;
+        if (triageCounts[analytics.triage] !== undefined) {
+            triageCounts[analytics.triage]++;
+        }
+        enrichedSubjects.push({ sub, analytics });
+    });
+
+    // Update triage filter badge counts
+    ['all', 'critical', 'medical', 'borderline', 'safe'].forEach(k => {
+        const countEl = document.getElementById(`triage-count-${k}`);
+        if (countEl) countEl.innerText = String(triageCounts[k] || 0);
+    });
+
     if (alertsContainer) {
-        let redoCount = 0;
-            state.subjects.forEach(raw => {
-                const sub = getSubjectStats(raw.code);
-                if (sub && sub.pct < 75) redoCount++;
+        const repeatCount = triageCounts.critical;
+        const medCount = triageCounts.medical;
+        const under75Count = repeatCount + medCount;
+
+        let eligibleHonours = false;
+        let activeArrears = [];
+        if (state.academics && state.academics.cgpa) {
+            const currentCGPA = parseFloat(state.academics.cgpa.cgpa);
+            const allSubs = state.academics.cgpa.all_subjects || [];
+            activeArrears = allSubs.filter(sub => {
+                const g = String(sub.grade || '').trim().toUpperCase();
+                const isPass = sub.result === 'Pass' || (sub.grade && !g.startsWith('RA') && g !== 'U' && !g.startsWith('0 ') && (!sub.result || sub.result.toLowerCase() !== 'fail'));
+                return !isPass || g.startsWith('RA') || g === 'U' || (sub.result && sub.result.toLowerCase() === 'fail');
             });
+            const hasBacklogs = activeArrears.length > 0 || state.academics.cgpa.cgpa === 'RA';
+            if (!isNaN(currentCGPA) && currentCGPA >= 8.00 && !hasBacklogs) eligibleHonours = true;
+        }
 
-            let eligibleHonours = false;
-            let activeArrears = [];
-            if (state.academics && state.academics.cgpa) {
-                const currentCGPA = parseFloat(state.academics.cgpa.cgpa);
-                const allSubs = state.academics.cgpa.all_subjects || [];
-                activeArrears = allSubs.filter(sub => {
-                    const g = String(sub.grade || '').trim().toUpperCase();
-                    const isPass = sub.result === 'Pass' || (sub.grade && !g.startsWith('RA') && g !== 'U' && !g.startsWith('0 ') && (!sub.result || sub.result.toLowerCase() !== 'fail'));
-                    return !isPass || g.startsWith('RA') || g === 'U' || (sub.result && sub.result.toLowerCase() === 'fail');
-                });
-                const hasBacklogs = activeArrears.length > 0 || state.academics.cgpa.cgpa === 'RA';
-                if (!isNaN(currentCGPA) && currentCGPA >= 8.00 && !hasBacklogs) eligibleHonours = true;
-            }
-
-            let alertsHTML = '';
-            if (activeArrears.length > 0) {
-                alertsHTML += `
-                <div class="glass-panel rounded-[24px] p-4 border-l-4 border-rose-500 bg-rose-500/10 flex items-start gap-3 cursor-pointer hover:bg-rose-500/15 transition-all" onclick="switchAcadTab('results')">
-                    <div class="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0 mt-0.5">
-                        <i class="fas fa-exclamation-triangle text-xs"></i>
+        let alertsHTML = '';
+        if (activeArrears.length > 0) {
+            alertsHTML += `
+            <div class="glass-panel rounded-[24px] p-4 border-l-4 border-rose-500 bg-rose-500/10 flex items-start gap-3 cursor-pointer hover:bg-rose-500/15 transition-all" onclick="switchAcadTab('results')">
+                <div class="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0 mt-0.5">
+                    <i class="fas fa-exclamation-triangle text-xs"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h4 class="text-xs font-black text-white uppercase tracking-wider">Active Arrear Notice (${activeArrears.length})</h4>
+                        <span class="text-[8px] font-black text-rose-400 bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/30 uppercase tracking-widest">Pending</span>
                     </div>
-                    <div>
-                        <div class="flex items-center gap-2">
-                            <h4 class="text-xs font-black text-white uppercase tracking-wider">Active Arrear Notice (${activeArrears.length})</h4>
-                            <span class="text-[8px] font-black text-rose-400 bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/30 uppercase tracking-widest">Pending</span>
-                        </div>
-                        <p class="text-[10px] text-rose-300/90 mt-1 leading-normal font-medium">
-                            Pending course(s): <b>${activeArrears.map(s => s.course).join(', ')}</b>. Tap to view semester results &amp; marks.
-                        </p>
-                    </div>
-                </div>`;
-            }
+                    <p class="text-[10px] text-rose-300/90 mt-1 leading-normal font-medium">
+                        Pending course(s): <b>${activeArrears.map(s => s.course).join(', ')}</b>. Tap to view semester results &amp; marks.
+                    </p>
+                </div>
+            </div>`;
+        }
 
-            if (redoCount > 0) {
-                if (redoCount > 2) {
-                    alertsHTML += `
-                    <div class="glass-panel rounded-[24px] p-4 border-l-4 border-rose-500 bg-rose-500/10 flex items-start gap-3">
-                        <div class="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0 mt-0.5">
-                            <i class="fas fa-exclamation-triangle text-xs"></i>
-                        </div>
-                        <div>
-                            <h4 class="text-xs font-black text-white uppercase tracking-wider">Next Semester Registration at Risk!</h4>
-                            <p class="text-[10px] text-rose-300/80 mt-1 leading-normal font-medium">
-                                You have <b>${redoCount}</b> courses under 75% attendance. Students with more than 2 Redo courses are barred from registering for the next semester.
-                            </p>
-                        </div>
-                    </div>`;
-                } else {
-                    alertsHTML += `
-                    <div class="glass-panel rounded-[24px] p-4 border-l-4 border-amber-500 bg-amber-500/10 flex items-start gap-3">
-                        <div class="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
-                            <i class="fas fa-exclamation-circle text-xs"></i>
-                        </div>
-                        <div>
-                            <h4 class="text-xs font-black text-white uppercase tracking-wider">Redo Course Warning</h4>
-                            <p class="text-[10px] text-amber-300/80 mt-1 leading-normal font-medium">
-                                You have <b>${redoCount}</b> course(s) under 75% attendance. Keep Redo courses below 3 to prevent registration blockage.
-                            </p>
-                        </div>
-                    </div>`;
-                }
-            }
+        if (repeatCount > 0) {
+            alertsHTML += `
+            <div class="glass-panel rounded-[24px] p-4 border-l-4 border-rose-500 bg-rose-500/10 flex items-start gap-3">
+                <div class="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0 mt-0.5">
+                    <i class="fas fa-ban text-xs"></i>
+                </div>
+                <div>
+                    <h4 class="text-xs font-black text-white uppercase tracking-wider">Critical &lt;65% Repeat Zone (${repeatCount})</h4>
+                    <p class="text-[10px] text-rose-300/85 mt-1 leading-normal font-medium">
+                        <b>${repeatCount}</b> course(s) are below the 65% medical condonation floor. Attend upcoming classes immediately to recover above 65% / 75%.
+                    </p>
+                </div>
+            </div>`;
+        } else if (medCount > 0) {
+            alertsHTML += `
+            <div class="glass-panel rounded-[24px] p-4 border-l-4 border-amber-500 bg-amber-500/10 flex items-start gap-3">
+                <div class="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+                    <i class="fas fa-notes-medical text-xs"></i>
+                </div>
+                <div>
+                    <h4 class="text-xs font-black text-white uppercase tracking-wider">65–74.9% Medical Condonation Zone (${medCount})</h4>
+                    <p class="text-[10px] text-amber-300/85 mt-1 leading-normal font-medium">
+                        <b>${medCount}</b> course(s) are between 65% and 74.9%. Eligible only with medical certificate condonation — check recovery classes below.
+                    </p>
+                </div>
+            </div>`;
+        }
 
-            if (eligibleHonours) {
-                alertsHTML += `
-                <div class="glass-panel rounded-[24px] p-4 border-l-4 border-emerald-500 bg-emerald-500/10 flex items-start gap-3">
-                    <div class="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
-                        <i class="fas fa-medal text-xs"></i>
-                    </div>
-                    <div>
-                        <h4 class="text-xs font-black text-white uppercase tracking-wider">Honours & Minor Eligible</h4>
-                        <p class="text-[10px] text-emerald-300/80 mt-1 leading-normal font-medium">
-                            Your CGPA is <b>${state.academics.cgpa.cgpa}</b> with no backlogs. You are eligible to register for Honours or Minor degrees (+18 credits).
-                        </p>
-                    </div>
-                </div>`;
-            }
+        if (under75Count > 2) {
+            alertsHTML += `
+            <div class="glass-panel rounded-[24px] p-4 border-l-4 border-rose-500 bg-rose-500/10 flex items-start gap-3">
+                <div class="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0 mt-0.5">
+                    <i class="fas fa-exclamation-triangle text-xs"></i>
+                </div>
+                <div>
+                    <h4 class="text-xs font-black text-white uppercase tracking-wider">Next Semester Registration Risk</h4>
+                    <p class="text-[10px] text-rose-300/80 mt-1 leading-normal font-medium">
+                        You have <b>${under75Count}</b> courses under 75%. Having more than 2 Redo courses blocks next semester registration.
+                    </p>
+                </div>
+            </div>`;
+        }
 
-            if (alertsHTML !== '') {
-                alertsContainer.innerHTML = alertsHTML;
-                alertsContainer.classList.remove('hidden');
-            } else {
-                alertsContainer.classList.add('hidden');
-                alertsContainer.innerHTML = '';
-            }
+        if (eligibleHonours) {
+            alertsHTML += `
+            <div class="glass-panel rounded-[24px] p-4 border-l-4 border-emerald-500 bg-emerald-500/10 flex items-start gap-3">
+                <div class="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                    <i class="fas fa-medal text-xs"></i>
+                </div>
+                <div>
+                    <h4 class="text-xs font-black text-white uppercase tracking-wider">Honours &amp; Minor Eligible</h4>
+                    <p class="text-[10px] text-emerald-300/80 mt-1 leading-normal font-medium">
+                        Your CGPA is <b>${state.academics.cgpa.cgpa}</b> with no backlogs. You qualify for Honours or Minor degrees (+18 credits).
+                    </p>
+                </div>
+            </div>`;
+        }
+
+        if (alertsHTML !== '') {
+            alertsContainer.innerHTML = alertsHTML;
+            alertsContainer.classList.remove('hidden');
+        } else {
+            alertsContainer.classList.add('hidden');
+            alertsContainer.innerHTML = '';
+        }
+    }
+
+    state.subjectTriageFilter = 'all';
+    const filteredList = enrichedSubjects;
+
+    if (filteredList.length === 0) {
+        c.innerHTML = `
+            <div class="glass-panel rounded-3xl p-6 text-center border border-white/10">
+                <i class="fas fa-check-circle text-emerald-400 text-2xl mb-2"></i>
+                <p class="text-xs font-black text-white uppercase tracking-wider">No Subjects in This Filter</p>
+                <p class="text-[10px] text-gray-400 mt-1">Tap "All" above to view all ${enrichedSubjects.length} enrolled courses.</p>
+            </div>
+        `;
+        return;
     }
 
     const fragment = document.createDocumentFragment();
-    state.subjects.forEach((raw, i) => {
-        const sub = getSubjectStats(raw.code);
-        if (!sub) return; // Skip subjects that can't be resolved
+    filteredList.forEach(({ sub, analytics }) => {
         const pct = sub.pct.toFixed(1);
         const pctVal = parseFloat(pct);
 
-        // Color Logic: 100, ≥95, ≥85, ≥80, ≥75 safe, 65-74 medical exemption zone, <65 redo
+        // Strict 75% Exam & 65% Medical Color Coding
         let col, bar, bor;
         if (pctVal === 100) { col = 'text-[#22C55E]'; bar = 'bg-[#22C55E]'; bor = 'border-[#22C55E]'; }
-        else if (pctVal >= 95) { col = 'text-[#6366F1]'; bar = 'bg-[#6366F1]'; bor = 'border-[#6366F1]'; }
-        else if (pctVal >= 85) { col = 'text-[#3B82F6]'; bar = 'bg-[#3B82F6]'; bor = 'border-[#3B82F6]'; }
-        else if (pctVal >= 80) { col = 'text-[#FACC15]'; bar = 'bg-[#FACC15]'; bor = 'border-[#FACC15]'; }
+        else if (pctVal >= 85) { col = 'text-[#10B981]'; bar = 'bg-[#10B981]'; bor = 'border-[#10B981]'; }
+        else if (pctVal >= 78) { col = 'text-[#6366F1]'; bar = 'bg-[#6366F1]'; bor = 'border-[#6366F1]'; }
         else if (pctVal >= 75) { col = 'text-[#F97316]'; bar = 'bg-[#F97316]'; bor = 'border-[#F97316]'; }
-        else if (pctVal >= 65) { col = 'text-[#F59E0B]'; bar = 'bg-[#F59E0B]'; bor = 'border-[#F59E0B]'; } // Medical exemption zone
+        else if (pctVal >= 65) { col = 'text-[#F59E0B]'; bar = 'bg-[#F59E0B]'; bor = 'border-[#F59E0B]'; }
         else { col = 'text-[#EF4444]'; bar = 'bg-[#EF4444]'; bor = 'border-[#EF4444]'; }
 
-        let stat, safe = Math.floor((4 * sub.att - 3 * sub.tot) / 3), need = Math.ceil(3 * sub.tot - 4 * sub.att);
+        let stat;
         if (sub.pct >= 75) {
-            stat = safe > 0
-                ? `<div class="flex items-center gap-1.5 text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/20"><i class="fas fa-shield-alt text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Safe to bunk ${safe}</span></div>`
-                : `<div class="flex items-center gap-1.5 text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-xl border border-amber-500/20"><i class="fas fa-exclamation-triangle text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Danger Zone</span></div>`;
+            stat = analytics.safe75 > 0
+                ? `<div class="flex items-center gap-1.5 text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/20"><i class="fas fa-shield-alt text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Safe to bunk ${analytics.safe75} hr${analytics.safe75 > 1 ? 's' : ''}</span></div>`
+                : `<div class="flex items-center gap-1.5 text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-xl border border-amber-500/20"><i class="fas fa-exclamation-triangle text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">75% Boundary (0 Bunks)</span></div>`;
         } else if (sub.pct >= 65) {
-            // 65–74%: Medical/Sports exemption zone per Clause 5(i)
-            stat = `<div class="flex items-center gap-1.5 text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-xl border border-amber-500/20"><i class="fas fa-notes-medical text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Medical Exemption Zone</span></div>`;
+            stat = `<div class="flex items-center gap-1.5 text-amber-300 bg-amber-500/15 px-3 py-1.5 rounded-xl border border-amber-500/30"><i class="fas fa-notes-medical text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Med Zone • Need ${analytics.need75}h for 75%</span></div>`;
         } else {
-            stat = need > 0
-                ? `<div class="flex items-center gap-1.5 text-rose-400 bg-rose-500/10 px-3 py-1.5 rounded-xl border border-rose-500/20"><i class="fas fa-arrow-trend-up text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Need ${need} classes</span></div>`
-                : `<div class="flex items-center gap-1.5 text-rose-400 bg-rose-500/10 px-3 py-1.5 rounded-xl border border-rose-500/20"><i class="fas fa-exclamation-circle text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Redo Category</span></div>`;
+            stat = `<div class="flex items-center gap-1.5 text-rose-300 bg-rose-500/15 px-3 py-1.5 rounded-xl border border-rose-500/30"><i class="fas fa-arrow-trend-up text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Need ${analytics.need65}h (65%) • ${analytics.need75}h (75%)</span></div>`;
         }
 
+        const freqBadge = analytics.weeklyPeriods > 0
+            ? `<span class="text-[9px] text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-lg font-bold">${analytics.weeklyPeriods}h/wk</span>`
+            : '';
+
+        const medBufferPill = sub.pct >= 65
+            ? `<span class="text-[9px] text-gray-400 font-semibold">65% Med Buffer: <b class="text-amber-300">${analytics.safe65}h</b></span>`
+            : `<span class="text-[9px] text-rose-300 font-semibold">${analytics.eta65Label}</span>`;
+
+        const semProjPill = analytics.remClassesInSem > 0
+            ? `<span class="text-[9px] text-indigo-300/90 font-semibold">~${analytics.remClassesInSem}h left in sem • Max <b class="text-white">${analytics.maxSemPct.toFixed(1)}%</b></span>`
+            : `<span class="text-[9px] text-gray-400 font-semibold">${analytics.eta75Label}</span>`;
+
         const d = document.createElement('div');
-        d.className = `glass-panel rounded-[30px] overflow-hidden transition-all duration-300 mb-4 cursor-pointer active:scale-[0.98] border-l-4 ${bor}`;
-        d.onclick = (e) => { if (!e.target.closest('button')) openSim(sub.code) };
-        
+        d.className = `glass-panel rounded-[28px] overflow-hidden transition-all duration-300 mb-3.5 cursor-pointer active:scale-[0.98] border-l-4 ${bor}`;
+        d.onclick = (e) => { if (!e.target.closest('button')) openSim(sub.code); };
+
         d.innerHTML = `
-            <div class="p-5 relative overflow-hidden">
-                <div class="absolute -right-4 -top-4 opacity-[0.03] pointer-events-none text-8xl text-white">
-                    <i class="fas fa-book-open"></i>
-                </div>
-                <div class="flex justify-between items-start mb-4">
+            <div class="p-4 sm:p-5 relative overflow-hidden">
+                <div class="flex justify-between items-start mb-3">
                     <div class="flex items-center gap-3 z-10 flex-1 pr-2 min-w-0">
                         <div class="min-w-0 flex-1">
-                            <h4 class="font-bold text-white text-base leading-snug mb-1 drop-shadow-md tracking-wide truncate w-full block">${sub.name}</h4>
-                            <div class="flex items-center gap-2 opacity-80 mt-1">
-                                <span class="text-[10px] text-gray-400 font-bold tracking-widest uppercase">Attended: <span class="text-gray-200">${sub.att}/${sub.tot}</span></span>
+                            <div class="flex items-center gap-1.5 mb-1 flex-wrap">
+                                <span class="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-white/5 text-gray-300 border border-white/10">${sub.code}</span>
+                                ${freqBadge}
+                            </div>
+                            <h4 class="font-bold text-white text-sm sm:text-base leading-snug drop-shadow-md tracking-wide truncate w-full block">${sub.name}</h4>
+                            <div class="flex items-center gap-2.5 opacity-90 mt-1 flex-wrap">
+                                <span class="text-[10px] text-gray-400 font-bold tracking-wider uppercase">Attended: <span class="text-white">${sub.att}/${sub.tot}</span></span>
+                                <span class="text-[9px] text-indigo-300 font-bold">${analytics.eta75Label}</span>
                             </div>
                         </div>
                     </div>
                     <div class="flex flex-col items-end z-10 shrink-0 pl-2">
-                        <span class="text-3xl font-black ${col} drop-shadow-[0_0_15px_rgba(255,255,255,0.1)] tracking-tighter">${pct}%</span>
+                        <span class="text-2xl sm:text-3xl font-black ${col} tracking-tighter">${pct}%</span>
+                        <span class="text-[8px] font-bold uppercase tracking-widest text-gray-500 mt-0.5">${sub.pct >= 75 ? 'Exam Safe' : sub.pct >= 65 ? 'Medical Zone' : 'Below 65%'}</span>
                     </div>
                 </div>
-                <div class="w-full bg-black/40 h-2.5 rounded-full overflow-hidden mb-5 border border-white/5 shadow-inner">
-                    <div class="h-full ${bar} rounded-full transition-all duration-1000 ease-out shadow-[0_0_10px_currentColor] opacity-90" style="width:${pct}%"></div>
+                <div class="w-full bg-black/40 h-2 rounded-full overflow-hidden mb-3 border border-white/5 shadow-inner relative">
+                    <div class="h-full ${bar} rounded-full transition-all duration-700 ease-out" style="width:${Math.min(100, Math.max(0, pctVal))}%"></div>
+                </div>
+                <div class="flex items-center justify-between text-[9px] px-1 mb-3 gap-2 flex-wrap">
+                    ${medBufferPill}
+                    ${semProjPill}
                 </div>
                 <div class="flex justify-between items-center z-10 relative gap-2">
                     ${stat}
-                    <button onclick="openSim('${sub.code}')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20 hover:border-indigo-400/40 hover:text-white transition-all active:scale-95 shadow-[0_2px_12px_rgba(99,102,241,0.15)] group shrink-0">
-                        <i class="fas fa-wand-magic-sparkles text-[10px] text-indigo-400 group-hover:rotate-12 transition-transform duration-300"></i>
-                        <span class="text-[9px] font-black uppercase tracking-wider">Tap to simulate</span>
+                    <button onclick="openSim('${sub.code}')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20 hover:text-white transition-all active:scale-95 shrink-0">
+                        <i class="fas fa-sliders text-[10px] text-indigo-400"></i>
+                        <span class="text-[9px] font-black uppercase tracking-wider">Simulate</span>
                     </button>
                 </div>
             </div>`;
@@ -3327,14 +3758,15 @@ function switchTab(id, index) {
     }
     else if (id === 'calendar') {
         t = "Timeline";
-        // Auto-check academic calendar on navigation with strict 24-hour cooldown (1 fetch per day max, direct on phone)
+        // Calendar changes each semester and events may update in between:
+        // Check directly from phone every 6 hours (0 Vercel compute!) or immediately if semester changed
         if (roll) {
-            const calKey = `bunker_cal_time_${roll}`;
+            const calKey = `bunker_cal_time_v2_${roll}`;
             const lastCalTime = parseInt(localStorage.getItem(calKey) || '0');
-            const isCalStale = (Date.now() - lastCalTime) > (24 * 60 * 60 * 1000);
+            const isCalStale = (Date.now() - lastCalTime) > (6 * 60 * 60 * 1000);
             const hasCal = state.calendarCache && state.calendarCache.fullCalendar && state.calendarCache.fullCalendar.length > 0;
             if (isCalStale || !hasCal) {
-                fetchCalendarPhoneDirect(roll, state.subjects).then(data => {
+                fetchCalendarPhoneDirect(roll, state.subjects, isCalStale).then(data => {
                     if (data) {
                         initAcademicCalendar();
                         renderSemesterHero();
@@ -3345,14 +3777,13 @@ function switchTab(id, index) {
     }
     else if (id === 'planner') {
         t = "Smart Tracker";
-        // Auto-check timetable on navigation with strict 24-hour cooldown (1 fetch per day max)
+        // Timetable only changes once per semester! Only fetch if missing or if the student's semester changed
         if (roll) {
-            const ttKey = `bunker_tt_time_${roll}`;
-            const lastTtTime = parseInt(localStorage.getItem(ttKey) || '0');
-            const isTtStale = (Date.now() - lastTtTime) > (24 * 60 * 60 * 1000);
+            const curSem = String(detectCurrentSemesterFromSubjects(state.subjects) || (state.rollNumber ? getDefaultSemesterForRoll(state.rollNumber) : 1));
+            const storedTtSem = localStorage.getItem(`bunker_tt_sem_${roll}`);
             const hasTt = state.timetable && Object.keys(state.timetable).length > 0 &&
                           Object.values(state.timetable).some(d => d && d.length > 0 && d.some(x => x !== 'Free'));
-            if (isTtStale || !hasTt) {
+            if (!hasTt || (storedTtSem && storedTtSem !== curSem)) {
                 checkAndUpdateTimetableSilently(roll);
             }
         }
@@ -3360,17 +3791,14 @@ function switchTab(id, index) {
     else if (id === 'others') {
         t = "Others";
         closeOthersSubView();
+        hydrateAcademicsFromPhoneCache();
         renderOthersOverview();
 
-        // Auto-check academic marks on navigation with strict 24-hour cooldown (1 fetch per day max)
+        // Lazy on-demand fetch: only hit /api/academics on tapping Others if phone has no cached marks yet
         if (roll) {
-            const acadKey = `bunker_acad_fetch_time_${roll}`;
-            const lastAcadTime = parseInt(localStorage.getItem(acadKey) || '0');
-            const isAcadStale = (Date.now() - lastAcadTime) > (24 * 60 * 60 * 1000);
-
-            if (!state.academics || !state.academics.loaded || isAcadStale) {
-                setTimeout(() => loadAcademics(isAcadStale, state.academics && state.academics.loaded), 150);
-            } else if (state.academics && state.academics.loaded) {
+            if (!state.academics || !state.academics.loaded) {
+                setTimeout(() => loadAcademics(false, false, 'all'), 100);
+            } else {
                 document.getElementById('acad-loading')?.classList.add('hidden');
             }
         }
@@ -3385,15 +3813,46 @@ function openOthersSubView(subview) {
     const resultsView = document.getElementById('others-subview-results');
     if (!hub) return;
 
+    hydrateAcademicsFromPhoneCache();
     hub.classList.add('hidden');
+
+    const roll = state.rollNumber || (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}').roll; } catch { return null; } })();
+    const now = Date.now();
+
     if (subview === 'internals') {
         if (resultsView) resultsView.classList.add('hidden');
         if (internalsView) internalsView.classList.remove('hidden');
         document.getElementById('acad-panel-internals')?.classList.remove('hidden');
+
+        let internalsVaultTs = 0;
+        try {
+            const rawInt = roll ? localStorage.getItem(`bunker_internals_vault_${roll}`) : null;
+            if (rawInt) internalsVaultTs = JSON.parse(rawInt).timestamp || 0;
+        } catch {}
+        const isInternalsStale = (now - internalsVaultTs) > (24 * 60 * 60 * 1000);
+
+        if (state.academics && state.academics.internals && state.academics.internals.length > 0) {
+            renderInternals(state.academics.internals);
+            if (isInternalsStale && !state.academics.loading) {
+                loadAcademics(false, true, 'internals');
+            }
+        } else if (!state.academics || !state.academics.loading) {
+            loadAcademics(false, false, 'internals');
+        }
     } else if (subview === 'results') {
         if (internalsView) internalsView.classList.add('hidden');
         if (resultsView) resultsView.classList.remove('hidden');
         document.getElementById('acad-panel-results')?.classList.remove('hidden');
+
+        if (state.academics && state.academics.gpa) {
+            renderGPA(state.academics.gpa);
+        }
+        if (state.academics && state.academics.cgpa) {
+            renderCGPA(state.academics.cgpa);
+        }
+        if ((!state.academics || (!state.academics.gpa && !state.academics.cgpa)) && (!state.academics || !state.academics.loading)) {
+            loadAcademics(false, false, 'results');
+        }
     }
 
     const mainContent = document.getElementById('main-content');
@@ -3530,7 +3989,7 @@ function parseStudentInfoFromRoll(rawRoll) {
         displayBranch: `${degree} ${branchName}`,
         yearOfStudy: yearLabel,
         batch: `${admYear} - ${endYear}`,
-        meta: `${yearLabel} • Batch ${admYear}-${endYear} • eCampus Synced`
+        meta: `${degree} ${branchName} • ${yearLabel}`
     };
 }
 
@@ -3587,7 +4046,7 @@ function renderOthersOverview() {
 
         if (profileRollEl) profileRollEl.textContent = studentInfo ? studentInfo.roll : roll;
         if (profileBranchEl) profileBranchEl.remove();
-        if (profileMetaEl) profileMetaEl.textContent = studentInfo ? studentInfo.meta : 'eCampus Synced';
+        if (profileMetaEl) profileMetaEl.textContent = studentInfo ? studentInfo.meta : 'PSG College of Technology';
         if (settingsRollEl) settingsRollEl.textContent = roll;
     }
 
@@ -3602,20 +4061,46 @@ function renderOthersOverview() {
     const subEl = document.getElementById('others-cgpa-sub');
     const badgeEl = document.getElementById('others-cgpa-badge');
     const chipsList = document.getElementById('others-sem-chips-list');
+    const resultsPillEl = document.getElementById('others-results-pill');
+    const resultsDescEl = document.getElementById('others-results-desc');
+
+    // Always update internal card status & predictor summary if available
+    const internalsDesc = document.getElementById('others-internals-desc');
+    const internalsPill = document.getElementById('others-internals-pill');
+    const predictorSub = document.getElementById('others-predictor-sub');
+    if (state.academics && state.academics.internals && Array.isArray(state.academics.internals) && state.academics.internals.length > 0) {
+        const validSubs = state.academics.internals.filter(s => s.course_code);
+        const updatedSubs = validSubs.filter(s => !isNaN(parseFloat(s.total)) || (s.row_data && s.row_data.some(v => v && v !== '*' && v !== '')));
+        if (internalsPill) {
+            internalsPill.textContent = `${updatedSubs.length}/${validSubs.length} In`;
+        }
+        if (internalsDesc) {
+            internalsDesc.textContent = `${validSubs.length} courses • Tap to simulate CA & Sem marks`;
+        }
+        if (predictorSub) {
+            const theorySubs = validSubs.filter(s => !s.is_lab && !isZeroCreditCourse(s.course_code));
+            if (theorySubs.length > 0) {
+                predictorSub.textContent = `${theorySubs.length} theory courses synced • Tap to check 40:60 exam targets`;
+            }
+        }
+    }
 
     if (!cgpaData && !gpaData) {
         if (valEl) valEl.textContent = '--';
-        if (subEl) subEl.textContent = 'Marks not yet loaded';
+        if (subEl) subEl.textContent = 'Tap Sem Marks or Refresh to sync transcript';
         if (badgeEl) {
             badgeEl.textContent = 'Overall';
-            badgeEl.className = 'text-[8px] font-black px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider';
+            badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider';
+        }
+        if (chipsList) {
+            chipsList.innerHTML = '<div class="text-[10px] text-gray-500 italic py-1">Tap Sem Marks to view semester GPAs</div>';
         }
         return;
     }
 
     const cgpa = (cgpaData && cgpaData.cgpa) || (gpaData && (gpaData.overall_cgpa || gpaData.gpa));
     const numCGPA = parseFloat(cgpa);
-    const hasRA = cgpa === 'RA' || (cgpaData && cgpaData.has_ra);
+    const hasRA = cgpa === 'RA' || (cgpaData && (cgpaData.has_ra || cgpaData.has_arrears));
 
     if (valEl) {
         valEl.textContent = cgpa === 'RA' ? 'RA' : (cgpa || '--');
@@ -3626,22 +4111,19 @@ function renderOthersOverview() {
     if (badgeEl) {
         if (hasRA) {
             badgeEl.textContent = 'Arrears Recorded';
-            badgeEl.className = 'text-[8px] font-black px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 uppercase tracking-wider';
+            badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/30 uppercase tracking-wider';
         } else if (!isNaN(numCGPA) && numCGPA >= 8.5) {
             badgeEl.textContent = '★ Distinction';
-            badgeEl.className = 'text-[8px] font-black px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase tracking-wider';
-        } else if (!isNaN(numCGPA) && numCGPA >= 7.0) {
+            badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase tracking-wider';
+        } else if (!isNaN(numCGPA) && numCGPA >= 6.5) {
             badgeEl.textContent = 'First Class';
-            badgeEl.className = 'text-[8px] font-black px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider';
-        } else if (!isNaN(numCGPA) && numCGPA >= 6.0) {
+            badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider';
+        } else if (!isNaN(numCGPA) && numCGPA >= 5.0) {
             badgeEl.textContent = 'Second Class';
-            badgeEl.className = 'text-[8px] font-black px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase tracking-wider';
-        } else if (!isNaN(numCGPA) && numCGPA > 0) {
-            badgeEl.textContent = 'Pass Class';
-            badgeEl.className = 'text-[8px] font-black px-2.5 py-0.5 rounded-full bg-slate-500/20 text-slate-300 border border-slate-500/30 uppercase tracking-wider';
+            badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase tracking-wider';
         } else {
             badgeEl.textContent = 'Overall';
-            badgeEl.className = 'text-[8px] font-black px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider';
+            badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider';
         }
     }
 
@@ -3651,17 +4133,25 @@ function renderOthersOverview() {
     }
 
     const totalCredits = (cgpaData && cgpaData.total_credits) || (gpaData && gpaData.total_credits);
+    const semData = (cgpaData && cgpaData.semwise_data) || [];
     if (subEl) {
         if (totalCredits) {
-            subEl.textContent = `${totalCredits} Total Credits Earned • Degree On Track`;
+            subEl.textContent = `${totalCredits} Credits Earned • ${semData.length || 1} Semester${semData.length === 1 ? '' : 's'} Completed`;
         } else {
             subEl.textContent = `Cumulative Academic Performance`;
         }
     }
 
+    if (resultsPillEl && semData.length > 0) {
+        const latest = semData[semData.length - 1];
+        resultsPillEl.textContent = `S${latest.sem}: ${latest.sgpa}`;
+    }
+    if (resultsDescEl && totalCredits) {
+        resultsDescEl.textContent = `${totalCredits} earned credits across ${semData.length || 1} sem(s)`;
+    }
+
     // Populate all semester GPA chips
     if (chipsList) {
-        const semData = (cgpaData && cgpaData.semwise_data) || [];
         const semwiseGPA = (gpaData && gpaData.semwise_gpa) || {};
 
         if (semData.length > 0) {
@@ -3673,9 +4163,9 @@ function renderOthersOverview() {
                             : g >= 7   ? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20'
                             : g >= 5   ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
                             :            'text-rose-400 bg-rose-500/10 border-rose-500/20';
-                return `<button type="button" onclick="openOthersSubView('results'); setTimeout(() => selectSemesterGPA(${d.sem}), 120)" class="flex flex-col items-center px-3.5 py-1.5 rounded-xl border ${color} hover:scale-105 active:scale-95 transition-all cursor-pointer">
-                    <span class="text-[8px] font-black uppercase tracking-widest opacity-60">Sem ${d.sem}</span>
-                    <span class="text-xs font-black leading-tight">${d.sgpa}</span>
+                return `<button type="button" onclick="openOthersSubView('results'); setTimeout(() => selectSemesterGPA(${d.sem}), 100)" class="min-w-[54px] flex flex-col items-center px-3 py-1.5 rounded-xl border ${color} active:scale-95 transition-all cursor-pointer shrink-0">
+                    <span class="text-[8px] font-black uppercase tracking-widest opacity-70">Sem ${d.sem}</span>
+                    <span class="text-xs font-black leading-tight tabular-nums">${d.sgpa}</span>
                 </button>`;
             }).join('');
         } else if (Object.keys(semwiseGPA).length > 0) {
@@ -3688,22 +4178,13 @@ function renderOthersOverview() {
                             : g >= 7   ? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20'
                             : g >= 5   ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
                             :            'text-rose-400 bg-rose-500/10 border-rose-500/20';
-                return `<button type="button" onclick="openOthersSubView('results'); setTimeout(() => selectSemesterGPA(${s}), 120)" class="flex flex-col items-center px-3.5 py-1.5 rounded-xl border ${color} hover:scale-105 active:scale-95 transition-all cursor-pointer">
-                    <span class="text-[8px] font-black uppercase tracking-widest opacity-60">Sem ${s}</span>
-                    <span class="text-xs font-black leading-tight">${sGPA}</span>
+                return `<button type="button" onclick="openOthersSubView('results'); setTimeout(() => selectSemesterGPA(${s}), 100)" class="min-w-[54px] flex flex-col items-center px-3 py-1.5 rounded-xl border ${color} active:scale-95 transition-all cursor-pointer shrink-0">
+                    <span class="text-[8px] font-black uppercase tracking-widest opacity-70">Sem ${s}</span>
+                    <span class="text-xs font-black leading-tight tabular-nums">${sGPA}</span>
                 </button>`;
             }).join('');
         } else {
             chipsList.innerHTML = '<div class="text-[10px] text-gray-500 italic py-1">Semester GPAs will appear once synced</div>';
-        }
-    }
-
-    // Update internal card status if available
-    const internalsDesc = document.getElementById('others-internals-desc');
-    if (internalsDesc && state.academics.internals && Array.isArray(state.academics.internals)) {
-        const count = state.academics.internals.filter(s => s.total !== '' || (s.row_data && s.row_data.some(v => v && v !== '*' && v !== ''))).length;
-        if (count > 0) {
-            internalsDesc.textContent = `${count} subjects tracked • View CA components & Predictor`;
         }
     }
 }
@@ -3762,13 +4243,14 @@ function saveState() {
 
 const PSG_PERIOD_SLOTS = [
     { period: 1, start: "08:30", end: "09:20", startMin: 510, endMin: 560 },
-    { period: 2, start: "09:25", end: "10:15", startMin: 565, endMin: 615 },
-    { period: 3, start: "10:35", end: "11:25", startMin: 635, endMin: 685 },
-    { period: 4, start: "11:30", end: "12:20", startMin: 690, endMin: 740 },
+    { period: 2, start: "09:20", end: "10:10", startMin: 560, endMin: 610 },
+    { period: 3, start: "10:30", end: "11:20", startMin: 630, endMin: 680 },
+    { period: 4, start: "11:20", end: "12:10", startMin: 680, endMin: 730 },
     { period: 5, start: "13:40", end: "14:30", startMin: 820, endMin: 870 },
-    { period: 6, start: "14:35", end: "15:25", startMin: 875, endMin: 925 },
-    { period: 7, start: "15:35", end: "16:25", startMin: 935, endMin: 985 },
-    { period: 8, start: "16:30", end: "17:20", startMin: 990, endMin: 1040 }
+    { period: 6, start: "14:30", end: "15:20", startMin: 870, endMin: 920 },
+    { period: 7, start: "15:30", end: "16:20", startMin: 930, endMin: 980 },
+    { period: 8, start: "16:20", end: "17:10", startMin: 980, endMin: 1030 },
+    { period: 9, start: "17:10", end: "18:00", startMin: 1030, endMin: 1080 }
 ];
 
 function compileWidgetPayload() {
@@ -3777,19 +4259,18 @@ function compileWidgetPayload() {
         const now = state.simulatedDate ? new Date(state.simulatedDate) : new Date();
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
         const dateISO = (state.selectedDateISO && state.simulatedDate) ? state.selectedDateISO : now.toISOString().split('T')[0];
-        
+
         const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         const dayShort = daysShort[now.getDay()];
-        const isSunday = (now.getDay() === 0);
-        
-        // Check academic calendar for holiday on this date
-        let isHoliday = isSunday;
-        let holidayTitle = isSunday ? "Sunday" : "";
+        const isWeekend = (now.getDay() === 0 || now.getDay() === 6);
+
+        let isHoliday = isWeekend;
+        let holidayTitle = now.getDay() === 0 ? "Sunday" : (now.getDay() === 6 ? "Saturday" : "");
         if (state.calendarCache && state.calendarCache.fullCalendar) {
-            const hMatch = state.calendarCache.fullCalendar.find(d => d.date === dateISO && d.type === 'holiday');
+            const hMatch = state.calendarCache.fullCalendar.find(d => String(d.date || '').startsWith(dateISO) && String(d.type || '').toLowerCase() === 'holiday');
             if (hMatch) {
                 isHoliday = true;
-                holidayTitle = hMatch.title || "Holiday";
+                holidayTitle = hMatch.name || hMatch.title || "Holiday";
             }
         }
 
@@ -3799,6 +4280,7 @@ function compileWidgetPayload() {
         let bunkedCount = 0;
         let upcomingCount = 0;
         let currentPeriodNumber = null;
+        let currentClassObj = null;
         let nextPeriodClass = null;
 
         PSG_PERIOD_SLOTS.forEach((slot, idx) => {
@@ -3806,29 +4288,27 @@ function compileWidgetPayload() {
             if (!code || code === 'Free') return;
 
             const s = (state.subjects || []).find(sub => sub.code === code) || {};
-            const name = s.name || (state.courseMapping && state.courseMapping[code]) || code;
-            const subStats = (typeof getSubjectStats === 'function') ? getSubjectStats(code) : { att: s.attended || 0, tot: s.total || 0, pct: s.percentage || 0 };
-            
-            const att = subStats.att || 0;
-            const tot = subStats.tot || 0;
-            const pct = subStats.pct !== undefined ? subStats.pct : (tot > 0 ? (att / tot) * 100 : 0);
-            
-            // Calculate safe bunks margin
-            // If >= 75%: Math.floor((att - 0.75 * tot) / 0.75)
-            // If < 75%: -Math.ceil((0.75 * tot - att) / 0.25)
+            const subStats = (typeof getSubjectStats === 'function') ? getSubjectStats(code) : null;
+            const name = (subStats && subStats.name) || s.name || (state.courseMapping && state.courseMapping[code]) || code;
+
+            const att = subStats ? subStats.att : (s.attended || 0);
+            const tot = subStats ? subStats.tot : (s.total || 0);
+            const pct = subStats ? subStats.pct : (tot > 0 ? (att / tot) * 100 : 0);
+
             let safeBunks = 0;
+            let safe65 = 0;
             if (tot > 0) {
                 if (pct >= 75.0) {
-                    safeBunks = Math.floor((att - 0.75 * tot) / 0.75);
+                    safeBunks = Math.floor((4 * att - 3 * tot) / 3);
                 } else {
-                    safeBunks = -Math.ceil((0.75 * tot - att) / 0.25);
+                    safeBunks = -Math.ceil(3 * tot - 4 * att);
                 }
+                safe65 = Math.max(0, Math.floor((20 * att - 13 * tot) / 13));
             }
 
-            // Check if student logged this period in Smart Tracker
-            const logged = (state.manual || []).find(m => 
-                m.code === code && 
-                (m.dateISO === dateISO || (m.timestamp && m.timestamp.startsWith(dateISO))) && 
+            const logged = (state.manual || []).find(m =>
+                m.code === code &&
+                (m.dateISO === dateISO || (m.timestamp && m.timestamp.startsWith(dateISO))) &&
                 (m.period === slot.period || !m.period)
             );
 
@@ -3837,27 +4317,16 @@ function compileWidgetPayload() {
                 status = logged.status === 'Present' ? 'attended' : 'bunked';
                 if (status === 'attended') attendedCount++;
                 if (status === 'bunked') bunkedCount++;
+            } else if (nowMinutes > slot.endMin && !isHoliday) {
+                status = 'completed';
             } else {
                 upcomingCount++;
             }
 
-            const isOngoing = (nowMinutes >= slot.startMin && nowMinutes <= slot.endMin);
-            if (isOngoing) {
-                currentPeriodNumber = slot.period;
-                if (!logged) status = 'ongoing';
-            }
+            const isOngoing = !isHoliday && (nowMinutes >= slot.startMin && nowMinutes <= slot.endMin);
+            const progressPct = isOngoing ? Math.min(100, Math.max(0, Math.round(((nowMinutes - slot.startMin) / Math.max(1, slot.endMin - slot.startMin)) * 100))) : 0;
 
-            if (!nextPeriodClass && nowMinutes < slot.startMin && !logged) {
-                nextPeriodClass = {
-                    period: slot.period,
-                    code: code,
-                    name: name,
-                    time: `${slot.start} - ${slot.end}`,
-                    safeBunks: safeBunks
-                };
-            }
-
-            classes.push({
+            const classItem = {
                 period: slot.period,
                 time: `${slot.start} - ${slot.end}`,
                 startMin: slot.startMin,
@@ -3865,24 +4334,48 @@ function compileWidgetPayload() {
                 code: code,
                 name: name,
                 attended: logged ? (logged.status === 'Present') : null,
-                status: status, // 'attended' | 'bunked' | 'ongoing' | 'upcoming'
+                status: isOngoing && !logged ? 'ongoing' : status,
+                progressPct: progressPct,
                 safeBunks: safeBunks,
+                safe65: safe65,
                 attendancePct: parseFloat(pct.toFixed(1)),
                 totalHours: tot,
                 attendedHours: att
-            });
+            };
+
+            if (isOngoing) {
+                currentPeriodNumber = slot.period;
+                currentClassObj = classItem;
+            }
+
+            if (!nextPeriodClass && !isHoliday && nowMinutes < slot.startMin) {
+                nextPeriodClass = {
+                    period: slot.period,
+                    code: code,
+                    name: name,
+                    time: `${slot.start} - ${slot.end}`,
+                    startsInMin: slot.startMin - nowMinutes,
+                    safeBunks: safeBunks,
+                    attendancePct: parseFloat(pct.toFixed(1))
+                };
+            }
+
+            classes.push(classItem);
         });
 
         let lowestPct = 100;
         let totalSafe = 0;
         (state.subjects || []).forEach(sub => {
-            const p = sub.percentage || 0;
+            const st = getSubjectStats(sub.code);
+            const p = st ? st.pct : (sub.percentage || 0);
             if (p < lowestPct) lowestPct = p;
-            if (sub.bunkable && sub.bunkable > 0) totalSafe += sub.bunkable;
+            const sb = st && st.tot > 0 ? Math.max(0, Math.floor((4 * st.att - 3 * st.tot) / 3)) : 0;
+            totalSafe += sb;
         });
+        if (!state.subjects || state.subjects.length === 0) lowestPct = 0;
 
         return {
-            v: 1,
+            v: 2,
             roll: roll,
             timestamp: Date.now(),
             day: dayShort,
@@ -3890,6 +4383,7 @@ function compileWidgetPayload() {
             isHoliday: isHoliday,
             holidayTitle: holidayTitle,
             currentPeriod: currentPeriodNumber,
+            currentClass: currentClassObj,
             nextClass: nextPeriodClass,
             classes: classes,
             summary: {
@@ -3908,6 +4402,154 @@ function compileWidgetPayload() {
     }
 }
 
+function updateOthersWidgetLivePreview() {
+    const nowTxtEl = document.getElementById('others-widget-now-txt');
+    const badgeEl = document.getElementById('others-widget-live-badge');
+    if (!nowTxtEl) return;
+
+    const payload = compileWidgetPayload();
+    if (!payload) return;
+
+    if (payload.currentClass) {
+        nowTxtEl.innerHTML = `<b class="text-emerald-300">NOW (P${payload.currentClass.period}):</b> ${payload.currentClass.name} • <span class="text-white">${payload.currentClass.attendancePct}%</span>`;
+        if (badgeEl) badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>P${payload.currentClass.period} Live</span>`;
+    } else if (payload.nextClass) {
+        nowTxtEl.innerHTML = `<b class="text-indigo-300">NEXT (P${payload.nextClass.period}):</b> ${payload.nextClass.name} (${payload.nextClass.time})`;
+        if (badgeEl) badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span><span>In ${payload.nextClass.startsInMin}m</span>`;
+    } else if (payload.isHoliday) {
+        nowTxtEl.innerHTML = `<span class="text-amber-300">${payload.holidayTitle || 'No classes scheduled today'}</span> • Tap for full bell radar`;
+    } else {
+        nowTxtEl.innerHTML = `${payload.classes.length} classes on ${payload.day} • Tap to open Live Class Radar Widget`;
+    }
+}
+
+function openLiveWidgetModal() {
+    const modal = document.getElementById('live-widget-modal');
+    if (!modal) return;
+    renderLiveClassWidgetModal();
+    modal.classList.remove('hidden');
+}
+window.openLiveWidgetModal = openLiveWidgetModal;
+
+function closeLiveWidgetModal() {
+    const modal = document.getElementById('live-widget-modal');
+    if (modal) modal.classList.add('hidden');
+}
+window.closeLiveWidgetModal = closeLiveWidgetModal;
+
+function renderLiveClassWidgetModal() {
+    const body = document.getElementById('live-widget-modal-body');
+    const clockLabel = document.getElementById('live-widget-clock-label');
+    if (!body) return;
+
+    const payload = compileWidgetPayload();
+    const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (clockLabel && payload) {
+        clockLabel.innerText = `${payload.day} • ${nowTimeStr} • ${payload.classes.length} Periods`;
+    }
+
+    if (!payload) {
+        body.innerHTML = `<div class="p-6 text-center text-xs text-gray-400">Unable to load widget schedule.</div>`;
+        return;
+    }
+
+    let html = '';
+
+    // 1. Live Now / Next Class Spotlight Card
+    if (payload.currentClass) {
+        const cur = payload.currentClass;
+        const bunkBadge = cur.safeBunks > 0
+            ? `<span class="text-[9px] font-black text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-lg border border-emerald-500/30">Safe to bunk ${cur.safeBunks}h</span>`
+            : cur.safeBunks === 0
+            ? `<span class="text-[9px] font-black text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-lg border border-amber-500/30">On 75% Edge</span>`
+            : `<span class="text-[9px] font-black text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded-lg border border-rose-500/30">Need ${Math.abs(cur.safeBunks)}h for 75%</span>`;
+
+        html += `
+        <div class="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-2.5">
+            <div class="flex items-center justify-between">
+                <span class="text-[9px] font-black uppercase tracking-widest text-emerald-300 flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                    <span>Live Now • Period ${cur.period} (${cur.time})</span>
+                </span>
+                <span class="text-xs font-black text-white">${cur.attendancePct}%</span>
+            </div>
+            <div>
+                <h4 class="text-sm font-black text-white">${cur.name}</h4>
+                <p class="text-[10px] text-gray-300 font-bold mt-0.5">${cur.code} • Attended ${cur.attendedHours}/${cur.totalHours} hrs</p>
+            </div>
+            <div class="w-full h-1.5 rounded-full bg-black/40 overflow-hidden">
+                <div class="h-full bg-emerald-400 rounded-full" style="width:${cur.progressPct}%"></div>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                ${bunkBadge}
+                <div class="flex items-center gap-1.5">
+                    <button type="button" onclick="nativeActionMarkPeriod('${cur.code}','Present',${cur.period}); renderLiveClassWidgetModal();" class="px-2.5 py-1 rounded-lg bg-emerald-500 text-black text-[9px] font-black uppercase">✓ Present</button>
+                    <button type="button" onclick="nativeActionMarkPeriod('${cur.code}','Absent',${cur.period}); renderLiveClassWidgetModal();" class="px-2.5 py-1 rounded-lg bg-rose-500/80 text-white text-[9px] font-black uppercase">✕ Bunk</button>
+                </div>
+            </div>
+        </div>`;
+    } else if (payload.nextClass) {
+        const nxt = payload.nextClass;
+        html += `
+        <div class="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-between gap-3">
+            <div class="min-w-0">
+                <span class="text-[9px] font-black uppercase tracking-widest text-indigo-300">Up Next in ${nxt.startsInMin} min • P${nxt.period}</span>
+                <h4 class="text-sm font-black text-white truncate mt-0.5">${nxt.name}</h4>
+                <p class="text-[10px] text-gray-400 font-bold mt-0.5">${nxt.time} • Current: <b class="text-white">${nxt.attendancePct}%</b></p>
+            </div>
+            <div class="text-right shrink-0">
+                <span class="text-xs font-black px-2.5 py-1 rounded-xl ${nxt.safeBunks > 0 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'}">
+                    ${nxt.safeBunks > 0 ? `+${nxt.safeBunks} Safe` : nxt.safeBunks === 0 ? '75% Edge' : `Need ${Math.abs(nxt.safeBunks)}h`}
+                </span>
+            </div>
+        </div>`;
+    }
+
+    // 2. Full Day Period-by-Period Bell Schedule List
+    if (payload.classes.length === 0) {
+        html += `
+        <div class="p-6 rounded-2xl bg-white/[0.03] border border-white/10 text-center">
+            <i class="fas fa-mug-hot text-amber-300 text-xl mb-2"></i>
+            <p class="text-xs font-black text-white uppercase tracking-wider">${payload.isHoliday ? payload.holidayTitle : 'No Classes Scheduled Today'}</p>
+            <p class="text-[10px] text-gray-400 mt-1">Switch to the Tracker tab to inspect any weekday's timetable.</p>
+        </div>`;
+    } else {
+        html += `<div class="text-[9px] font-black uppercase tracking-widest text-gray-400 px-1 pt-1">Today's Bell Timeline (${payload.day})</div>`;
+        payload.classes.forEach(item => {
+            const isNow = item.status === 'ongoing';
+            const statusPill = item.status === 'attended'
+                ? `<span class="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Attended</span>`
+                : item.status === 'bunked'
+                ? `<span class="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">Bunked</span>`
+                : isNow
+                ? `<span class="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-emerald-500 text-black">Live</span>`
+                : `<span class="text-[8px] font-bold uppercase px-2 py-0.5 rounded bg-white/5 text-gray-400">${item.safeBunks > 0 ? `Safe +${item.safeBunks}` : item.safeBunks === 0 ? 'Edge' : `Need ${Math.abs(item.safeBunks)}h`}</span>`;
+
+            html += `
+            <div class="p-3 rounded-2xl ${isNow ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-white/[0.03] border border-white/10'} flex items-center justify-between gap-2.5">
+                <div class="flex items-center gap-2.5 min-w-0">
+                    <div class="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex flex-col items-center justify-center shrink-0">
+                        <span class="text-[8px] font-bold text-gray-400 uppercase leading-none">P${item.period}</span>
+                        <span class="text-[9px] font-black text-white leading-tight mt-0.5">${item.time.split(' - ')[0]}</span>
+                    </div>
+                    <div class="min-w-0">
+                        <h5 class="text-xs font-bold text-white truncate">${item.name}</h5>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <span class="text-[9px] text-gray-400 font-bold">${item.time}</span>
+                            <span class="text-[9px] font-black ${item.attendancePct >= 75 ? 'text-emerald-400' : item.attendancePct >= 65 ? 'text-amber-400' : 'text-rose-400'}">${item.attendancePct}%</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="shrink-0 flex flex-col items-end gap-1">
+                    ${statusPill}
+                </div>
+            </div>`;
+        });
+    }
+
+    body.innerHTML = html;
+}
+
 function pushWidgetDataToNative() {
     try {
         const payload = compileWidgetPayload();
@@ -3915,8 +4557,8 @@ function pushWidgetDataToNative() {
 
         localStorage.setItem('bunker_widget_data', JSON.stringify(payload));
         localStorage.setItem('bunker_widget_last_sync', Date.now().toString());
+        updateOthersWidgetLivePreview();
 
-        // Native Android Bridge handshake
         if (window.AndroidBridge && typeof window.AndroidBridge.syncWidgetData === 'function') {
             window.AndroidBridge.syncWidgetData(JSON.stringify(payload));
         }
@@ -3927,7 +4569,6 @@ function pushWidgetDataToNative() {
     }
 }
 
-// Global hooks for Native Android WebView
 window.getNativeWidgetPayload = function() {
     return JSON.stringify(compileWidgetPayload() || {});
 };
@@ -4020,6 +4661,40 @@ let simAddBunk = 0;
 let simBaseAtt = 0;
 let simBaseTot = 0;
 let simBasePct = 0;
+let simAbsenceMode = 'leave'; // 'leave' | 'od'
+
+function setSimAbsenceMode(mode) {
+    simAbsenceMode = mode === 'od' ? 'od' : 'leave';
+    const leaveBtn = document.getElementById('sim-mode-leave');
+    const odBtn = document.getElementById('sim-mode-od');
+    const bunkLabel = document.getElementById('sim-bunk-label');
+    const bunkIcon = document.getElementById('sim-bunk-icon');
+    const bunkIconWrap = document.getElementById('sim-bunk-icon-wrap');
+
+    if (leaveBtn && odBtn) {
+        if (simAbsenceMode === 'leave') {
+            leaveBtn.className = 'flex-1 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider bg-indigo-600 text-white shadow transition';
+            odBtn.className = 'flex-1 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition';
+        } else {
+            odBtn.className = 'flex-1 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider bg-emerald-600 text-white shadow transition';
+            leaveBtn.className = 'flex-1 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition';
+        }
+    }
+    if (bunkLabel) {
+        bunkLabel.innerText = simAbsenceMode === 'od' ? 'OD / Exemp Hrs' : 'Bunk / Leave';
+    }
+    if (bunkIcon && bunkIconWrap) {
+        if (simAbsenceMode === 'od') {
+            bunkIcon.className = 'fas fa-id-badge';
+            bunkIconWrap.className = 'w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-300 text-xs';
+        } else {
+            bunkIcon.className = 'fas fa-times';
+            bunkIconWrap.className = 'w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 text-xs';
+        }
+    }
+    updateSimUI();
+}
+window.setSimAbsenceMode = setSimAbsenceMode;
 
 function openSim(code) {
     const found = state.subjects.find(s => s.code === code);
@@ -4035,12 +4710,12 @@ function openSim(code) {
     simBasePct = stats.pct;
     simAddAttend = 0;
     simAddBunk = 0;
+    simAbsenceMode = 'leave';
 
-    document.getElementById('sim-subject').innerText = simSubject.name;
+    document.getElementById('sim-subject').innerText = stats.name || simSubject.name;
     document.getElementById('val-attend').innerText = '0';
     document.getElementById('val-bunk').innerText = '0';
-
-    updateSimUI();
+    setSimAbsenceMode('leave');
 
     const m = document.getElementById('sim-modal');
     const p = document.getElementById('sim-panel');
@@ -4106,8 +4781,16 @@ function updateBunkSim(type, change) {
 function updateSimUI() {
     if (!simSubject) return;
 
-    const newAtt = simBaseAtt + simAddAttend;
-    const newTot = simBaseTot + simAddAttend + simAddBunk;
+    // In 'leave' mode, bunking adds to conducted total without increasing attended.
+    // In 'od' (On-Duty / Exemption) mode, OD hours credit effective attendance (or reduce effective total).
+    let newAtt, newTot;
+    if (simAbsenceMode === 'od') {
+        newAtt = simBaseAtt + simAddAttend + simAddBunk;
+        newTot = simBaseTot + simAddAttend + simAddBunk;
+    } else {
+        newAtt = simBaseAtt + simAddAttend;
+        newTot = simBaseTot + simAddAttend + simAddBunk;
+    }
     const pct = newTot === 0 ? 0 : (newAtt / newTot) * 100;
 
     const ring = document.getElementById('sim-ring');
@@ -4116,21 +4799,18 @@ function updateSimUI() {
     if (!ring || !pctText || !diffText) return;
 
     pctText.innerText = pct.toFixed(1) + '%';
-    pctText.classList.toggle('text-5xl', pct >= 100);
-    pctText.classList.toggle('text-6xl', pct < 100);
 
-    // C = 2 * PI * 90 = 565.48
-    const offset = 565 - (565 * pct / 100);
+    // Circle radius is 86 => circumference = 2 * PI * 86 = 540.35
+    const offset = 540 - (540 * Math.min(100, Math.max(0, pct)) / 100);
     ring.setAttribute('stroke-dashoffset', offset);
 
-    // Color based on percentage
     let color;
     const pVal = parseFloat(pct.toFixed(1));
     if (pVal === 100) color = '#22C55E';
-    else if (pVal >= 95) color = '#6366F1';
-    else if (pVal >= 85) color = '#3B82F6';
-    else if (pVal >= 80) color = '#FACC15';
+    else if (pVal >= 85) color = '#10B981';
+    else if (pVal >= 78) color = '#6366F1';
     else if (pVal >= 75) color = '#F97316';
+    else if (pVal >= 65) color = '#F59E0B';
     else color = '#EF4444';
 
     ring.setAttribute('stroke', color);
@@ -4138,33 +4818,73 @@ function updateSimUI() {
     pctText.style.color = color;
 
     const diff = pct - simBasePct;
-    if (Math.abs(diff) < 0.1) {
-        diffText.innerText = 'Current';
-        diffText.className = 'text-[9px] font-black px-3 py-0.5 rounded-full bg-white/5 mt-1.5 uppercase border border-white/10 text-gray-300';
+    if (Math.abs(diff) < 0.05) {
+        diffText.innerText = simAbsenceMode === 'od' ? 'OD Mode' : 'Current';
+        diffText.className = 'text-[8.5px] font-black px-2.5 py-0.5 rounded-full bg-white/5 mt-1 uppercase border border-white/10 text-gray-300';
         diffText.style.color = '#9CA3AF';
     } else if (diff > 0) {
         diffText.innerText = `+${diff.toFixed(1)}%`;
-        diffText.className = 'text-[9px] font-black px-3 py-0.5 rounded-full bg-emerald-500/20 mt-1.5 uppercase border border-emerald-500/30 text-emerald-300';
+        diffText.className = 'text-[8.5px] font-black px-2.5 py-0.5 rounded-full bg-emerald-500/20 mt-1 uppercase border border-emerald-500/30 text-emerald-300';
         diffText.style.color = '#34D399';
     } else {
         diffText.innerText = `${diff.toFixed(1)}%`;
-        diffText.className = 'text-[9px] font-black px-3 py-0.5 rounded-full bg-rose-500/20 mt-1.5 uppercase border border-rose-500/30 text-rose-300';
+        diffText.className = 'text-[8.5px] font-black px-2.5 py-0.5 rounded-full bg-rose-500/20 mt-1 uppercase border border-rose-500/30 text-rose-300';
         diffText.style.color = '#FB7185';
     }
 
     const fractionEl = document.getElementById('sim-fraction');
-    if (fractionEl) fractionEl.innerText = `${newAtt} / ${newTot}`;
+    if (fractionEl) fractionEl.innerText = `${newAtt} / ${newTot} hrs`;
+
+    const analytics = computeHybridBunkerAnalytics(simSubject.code, newAtt, newTot);
+
+    const metaEl = document.getElementById('sim-sub-meta');
+    if (metaEl) {
+        metaEl.innerText = analytics.weeklyPeriods > 0
+            ? `${simSubject.code} • ${analytics.weeklyPeriods} hrs/week (${analytics.scheduledDays.join(', ')})`
+            : `${simSubject.code} • Strict 75% Exam & 65% Medical Rules`;
+    }
+
+    const diag75El = document.getElementById('sim-diag-75');
+    const eta75El = document.getElementById('sim-eta-75');
+    const diag65El = document.getElementById('sim-diag-65');
+    const eta65El = document.getElementById('sim-eta-65');
+
+    if (diag75El) {
+        diag75El.innerHTML = pct >= 75
+            ? `<span class="text-emerald-400">Safe: ${analytics.safe75} hr${analytics.safe75 !== 1 ? 's' : ''}</span>`
+            : `<span class="text-rose-400">Need +${analytics.need75} hr${analytics.need75 !== 1 ? 's' : ''}</span>`;
+    }
+    if (eta75El) eta75El.innerText = analytics.eta75Label;
+
+    if (diag65El) {
+        diag65El.innerHTML = pct >= 65
+            ? `<span class="text-amber-300">Buffer: ${analytics.safe65} hr${analytics.safe65 !== 1 ? 's' : ''}</span>`
+            : `<span class="text-rose-400">Need +${analytics.need65} hr${analytics.need65 !== 1 ? 's' : ''}</span>`;
+    }
+    if (eta65El) eta65El.innerText = analytics.eta65Label;
+
+    const remLabelEl = document.getElementById('sim-rem-classes-label');
+    const maxPctEl = document.getElementById('sim-max-sem-pct');
+    if (remLabelEl) {
+        remLabelEl.innerText = `Est. Left in Sem: ~${analytics.remClassesInSem} hrs`;
+    }
+    if (maxPctEl) {
+        maxPctEl.innerText = `Sem Max: ${analytics.maxSemPct.toFixed(1)}%`;
+    }
 
     const bannerEl = document.getElementById('sim-verdict-banner');
     if (bannerEl) {
-        const safeLeft = Math.floor((4 * newAtt - 3 * newTot) / 3);
-        const needMore = Math.ceil(3 * newTot - 4 * newAtt);
         if (pct >= 75) {
-            bannerEl.className = "mb-4 py-2.5 px-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center text-[10px] font-black text-emerald-300 uppercase tracking-wider relative z-10";
-            bannerEl.innerHTML = safeLeft > 0 ? `<i class="fas fa-shield-alt mr-1.5"></i>Safe to bunk ${safeLeft} class${safeLeft > 1 ? "es" : ""}` : `<i class="fas fa-exclamation-triangle mr-1.5"></i>On 75% Edge`;
+            bannerEl.className = "mb-3 py-2 px-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center text-[10px] font-black text-emerald-300 uppercase tracking-wider relative z-10";
+            bannerEl.innerHTML = analytics.safe75 > 0
+                ? `<i class="fas fa-shield-alt mr-1.5"></i>Safe to bunk ${analytics.safe75} class${analytics.safe75 > 1 ? "es" : ""} (75% Exam Safe)`
+                : `<i class="fas fa-exclamation-triangle mr-1.5"></i>On 75% Boundary • 0 Safe Bunks`;
+        } else if (pct >= 65) {
+            bannerEl.className = "mb-3 py-2 px-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-center text-[10px] font-black text-amber-300 uppercase tracking-wider relative z-10";
+            bannerEl.innerHTML = `<i class="fas fa-notes-medical mr-1.5"></i>Medical Zone (65–74.9%) • Need ${analytics.need75}h for 75%`;
         } else {
-            bannerEl.className = "mb-4 py-2.5 px-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-center text-[10px] font-black text-rose-300 uppercase tracking-wider relative z-10";
-            bannerEl.innerHTML = `<i class="fas fa-arrow-trend-up mr-1.5"></i>Need ${needMore} consecutive class${needMore > 1 ? "es" : ""}`;
+            bannerEl.className = "mb-3 py-2 px-3 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-center text-[10px] font-black text-rose-300 uppercase tracking-wider relative z-10";
+            bannerEl.innerHTML = `<i class="fas fa-ban mr-1.5"></i>Critical &lt;65% • Need ${analytics.need65}h for 65% (${analytics.need75}h for 75%)`;
         }
     }
 }
@@ -4173,6 +4893,173 @@ function resetSimModal() {
     resetPredictionSim();
 }
 window.resetSimModal = resetSimModal;
+
+// MULTI-DAY LEAVE & ON-DUTY (OD) PLANNER
+let leavePlannerState = {
+    mode: 'leave', // 'leave' | 'od'
+    days: { Mon: false, Tue: false, Wed: false, Thu: false, Fri: false }
+};
+
+function openLeavePlannerModal() {
+    const modal = document.getElementById('leave-planner-modal');
+    if (!modal) return;
+    // Pre-select today's weekday if Mon-Fri and none selected yet
+    const hasAny = Object.values(leavePlannerState.days).some(Boolean);
+    if (!hasAny) {
+        const todayDay = DAYS[new Date().getDay() - 1] || 'Mon';
+        leavePlannerState.days[todayDay] = true;
+    }
+    syncLeavePlannerControlsUI();
+    renderLeavePlannerImpact();
+    modal.classList.remove('hidden');
+}
+window.openLeavePlannerModal = openLeavePlannerModal;
+
+function closeLeavePlannerModal() {
+    const modal = document.getElementById('leave-planner-modal');
+    if (modal) modal.classList.add('hidden');
+}
+window.closeLeavePlannerModal = closeLeavePlannerModal;
+
+function setLeavePlannerMode(mode) {
+    leavePlannerState.mode = mode === 'od' ? 'od' : 'leave';
+    syncLeavePlannerControlsUI();
+    renderLeavePlannerImpact();
+}
+window.setLeavePlannerMode = setLeavePlannerMode;
+
+function toggleLeavePlannerDay(day) {
+    if (!leavePlannerState.days.hasOwnProperty(day)) return;
+    leavePlannerState.days[day] = !leavePlannerState.days[day];
+    syncLeavePlannerControlsUI();
+    renderLeavePlannerImpact();
+}
+window.toggleLeavePlannerDay = toggleLeavePlannerDay;
+
+function resetLeavePlannerDays() {
+    DAYS.forEach(d => { leavePlannerState.days[d] = false; });
+    syncLeavePlannerControlsUI();
+    renderLeavePlannerImpact();
+}
+window.resetLeavePlannerDays = resetLeavePlannerDays;
+
+function syncLeavePlannerControlsUI() {
+    const leaveBtn = document.getElementById('lp-mode-leave');
+    const odBtn = document.getElementById('lp-mode-od');
+    if (leaveBtn && odBtn) {
+        if (leavePlannerState.mode === 'leave') {
+            leaveBtn.className = 'flex-1 py-2 rounded-xl text-[9px] font-black uppercase tracking-wider bg-rose-500 text-white shadow transition';
+            odBtn.className = 'flex-1 py-2 rounded-xl text-[9px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition';
+        } else {
+            odBtn.className = 'flex-1 py-2 rounded-xl text-[9px] font-black uppercase tracking-wider bg-emerald-500 text-black shadow transition';
+            leaveBtn.className = 'flex-1 py-2 rounded-xl text-[9px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition';
+        }
+    }
+    DAYS.forEach(d => {
+        const btn = document.getElementById(`lp-day-${d}`);
+        if (!btn) return;
+        if (leavePlannerState.days[d]) {
+            btn.className = leavePlannerState.mode === 'leave'
+                ? 'py-2 rounded-xl bg-rose-500/25 border border-rose-400/50 text-[10px] font-black text-rose-200 uppercase transition shadow'
+                : 'py-2 rounded-xl bg-emerald-500/25 border border-emerald-400/50 text-[10px] font-black text-emerald-200 uppercase transition shadow';
+        } else {
+            btn.className = 'py-2 rounded-xl bg-white/5 border border-white/10 text-[10px] font-black text-gray-400 uppercase transition';
+        }
+    });
+}
+
+function renderLeavePlannerImpact() {
+    const container = document.getElementById('leave-planner-results');
+    if (!container) return;
+
+    const selectedDays = DAYS.filter(d => leavePlannerState.days[d]);
+    if (selectedDays.length === 0) {
+        container.innerHTML = `
+            <div class="p-6 rounded-2xl bg-white/[0.03] border border-white/10 text-center">
+                <i class="fas fa-calendar-plus text-indigo-400 text-xl mb-2"></i>
+                <p class="text-xs font-black text-white uppercase tracking-wider">Tap Days Above to Simulate</p>
+                <p class="text-[10px] text-gray-400 mt-1">Select one or more weekdays (Mon–Fri) to preview how missing or taking OD on those days affects every course.</p>
+            </div>`;
+        return;
+    }
+
+    const affectedMap = {};
+    let totalHoursSelected = 0;
+    selectedDays.forEach(d => {
+        const list = (state.timetable && Array.isArray(state.timetable[d])) ? state.timetable[d] : [];
+        list.forEach(code => {
+            if (!code || code === 'Free') return;
+            affectedMap[code] = (affectedMap[code] || 0) + 1;
+            totalHoursSelected++;
+        });
+    });
+
+    const codes = Object.keys(affectedMap);
+    if (codes.length === 0) {
+        container.innerHTML = `
+            <div class="p-6 rounded-2xl bg-white/[0.03] border border-white/10 text-center">
+                <p class="text-xs font-bold text-gray-300">No timetable classes mapped on ${selectedDays.join(', ')}.</p>
+            </div>`;
+        return;
+    }
+
+    const isOD = leavePlannerState.mode === 'od';
+    let dropBelow75 = 0;
+    let dropBelow65 = 0;
+
+    let rowsHtml = '';
+    codes.forEach(code => {
+        const hrs = affectedMap[code];
+        const stats = getSubjectStats(code);
+        if (!stats) return;
+
+        const curPct = stats.pct;
+        const newAtt = isOD ? (stats.att + hrs) : stats.att;
+        const newTot = stats.tot + hrs;
+        const newPct = newTot > 0 ? (newAtt / newTot) * 100 : 0;
+        const delta = newPct - curPct;
+
+        if (!isOD && newPct < 75) dropBelow75++;
+        if (!isOD && newPct < 65) dropBelow65++;
+
+        const afterSafe75 = newTot > 0 ? Math.max(0, Math.floor((4 * newAtt - 3 * newTot) / 3)) : 0;
+        const afterNeed75 = newTot > 0 && newPct < 75 ? Math.max(1, Math.ceil(3 * newTot - 4 * newAtt)) : 0;
+
+        const statusBadge = newPct >= 75
+            ? `<span class="text-[8.5px] font-black text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded border border-emerald-500/30">Safe (${afterSafe75}h left)</span>`
+            : newPct >= 65
+            ? `<span class="text-[8.5px] font-black text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded border border-amber-500/30">Med Zone (Need ${afterNeed75}h)</span>`
+            : `<span class="text-[8.5px] font-black text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded border border-rose-500/30">&lt;65% Repeat Risk!</span>`;
+
+        rowsHtml += `
+        <div class="p-3 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between gap-2">
+            <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-1.5">
+                    <span class="text-[9px] font-black text-indigo-300 uppercase">${code}</span>
+                    <span class="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-white/5 text-gray-300">${hrs} hr${hrs > 1 ? 's' : ''} on ${selectedDays.join('/')}</span>
+                </div>
+                <h5 class="text-xs font-bold text-white truncate mt-0.5">${stats.name}</h5>
+                <div class="mt-1">${statusBadge}</div>
+            </div>
+            <div class="text-right shrink-0">
+                <div class="text-xs font-black text-white">${curPct.toFixed(1)}% <i class="fas fa-arrow-right text-[9px] text-gray-500 mx-0.5"></i> <span class="${newPct >= 75 ? 'text-emerald-400' : newPct >= 65 ? 'text-amber-400' : 'text-rose-400'}">${newPct.toFixed(1)}%</span></div>
+                <div class="text-[9px] font-black ${delta >= 0 ? 'text-emerald-400' : 'text-rose-400'} mt-0.5">${delta >= 0 ? `+${delta.toFixed(1)}%` : `${delta.toFixed(1)}%`}</div>
+            </div>
+        </div>`;
+    });
+
+    const summaryBanner = isOD
+        ? `<div class="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-bold text-emerald-200 flex items-center justify-between">
+               <span><i class="fas fa-id-badge mr-1.5"></i>OD across <b>${selectedDays.join(', ')}</b> (${totalHoursSelected} periods)</span>
+               <span class="font-black uppercase text-emerald-300">+Attendance Boost</span>
+           </div>`
+        : `<div class="p-3 rounded-2xl ${dropBelow65 > 0 ? 'bg-rose-500/15 border-rose-500/30 text-rose-200' : dropBelow75 > 0 ? 'bg-amber-500/15 border-amber-500/30 text-amber-200' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'} border text-[10px] font-bold flex items-center justify-between">
+               <span>Skipping <b>${selectedDays.join(', ')}</b> (${totalHoursSelected} periods)</span>
+               <span class="font-black uppercase">${dropBelow65 > 0 ? `${dropBelow65} <65% Risk` : dropBelow75 > 0 ? `${dropBelow75} <75% Med` : 'All Safe ≥75%'}</span>
+           </div>`;
+
+    container.innerHTML = summaryBanner + rowsHtml;
+}
 
 // BULK ATTENDANCE & HISTORY
 
@@ -4808,11 +5695,11 @@ function renderAttendanceComparisonCard() {
         if (badge) {
             badge.classList.remove('hidden');
             if (changesCount > 0) {
-                badge.className = 'text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
-                badge.textContent = `${changesCount} Updated`;
+                badge.className = 'text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-[#102a1d] text-[#6ee7b7] border border-[#1b6b47]/50 shrink-0';
+                badge.textContent = `${changesCount} UPDATED`;
             } else {
-                badge.className = 'text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider bg-white/10 text-gray-300 border border-white/10';
-                badge.textContent = 'Synced';
+                badge.className = 'text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-white/10 text-gray-300 border border-white/15 shrink-0';
+                badge.textContent = 'SYNCED';
             }
         }
         if (preview) {
@@ -4821,8 +5708,8 @@ function renderAttendanceComparisonCard() {
     } else {
         if (badge) {
             badge.classList.remove('hidden');
-            badge.className = 'text-[8px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30';
-            badge.textContent = 'Current Only';
+            badge.className = 'text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-[#362514] text-[#fde68a] border border-[#78481a] shrink-0';
+            badge.textContent = 'CURRENT ONLY';
         }
         if (preview) {
             preview.innerHTML = `<span class="text-amber-300/90 font-medium">No old attendance of yours stored</span>`;
@@ -5048,15 +5935,82 @@ function switchAcadTab(tab) {
     openOthersSubView(tab);
 }
 
-async function loadAcademics(force = false, silent = false) {
+function hydrateAcademicsFromPhoneCache() {
+    const roll = state.rollNumber || (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}').roll; } catch { return null; } })();
+    if (!roll) return false;
+    if (state.academics && state.academics.loaded && state.academics.gpa && state.academics.internals) return true;
+
+    let resultsVault = null;
+    let internalsVault = null;
+    try {
+        const rawRes = localStorage.getItem(`bunker_results_vault_${roll}`);
+        if (rawRes) resultsVault = JSON.parse(rawRes);
+    } catch {}
+    try {
+        const rawInt = localStorage.getItem(`bunker_internals_vault_${roll}`);
+        if (rawInt) internalsVault = JSON.parse(rawInt);
+    } catch {}
+
+    // Ignore empty resultsVault if a previous attempt cached 0 subjects
+    if (resultsVault && (!resultsVault.data || !Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) || (resultsVault.data.table || resultsVault.data.all_subjects).length === 0)) {
+        resultsVault = null;
+    }
+
+    if (!resultsVault || !internalsVault) {
+        try {
+            const legacyRaw = localStorage.getItem(`bunker_academics_${roll}`);
+            if (legacyRaw) {
+                const legacy = JSON.parse(legacyRaw);
+                const legTime = parseInt(localStorage.getItem(`bunker_acad_fetch_time_${roll}`) || '0') || Date.now();
+                const legSubs = legacy.gpa && (legacy.gpa.table || legacy.gpa.all_subjects);
+                if (!resultsVault && legacy.gpa && Array.isArray(legSubs) && legSubs.length > 0) {
+                    resultsVault = { data: legacy.gpa, timestamp: legTime };
+                }
+                if (!internalsVault && Array.isArray(legacy.internals) && legacy.internals.length > 0) {
+                    internalsVault = { internals: legacy.internals, ca_sig: '', timestamp: legTime };
+                }
+            }
+        } catch {}
+    }
+
+    if (resultsVault && resultsVault.data && !state.academics.gpa) {
+        const gpaData = resultsVault.data;
+        state.academics.gpa = gpaData;
+        state.academics.cgpa = {
+            cgpa: gpaData.cgpa || gpaData.overall_cgpa,
+            overall_cgpa: gpaData.overall_cgpa || gpaData.cgpa,
+            overall_cgpa_numeric: gpaData.overall_cgpa_numeric,
+            credit_points_total: gpaData.credit_points_total,
+            cgpa_note: gpaData.cgpa_note || '',
+            has_arrears: gpaData.has_arrears || false,
+            total_credits: gpaData.total_credits,
+            total_enrolled_credits: gpaData.total_enrolled_credits,
+            semwise_data: gpaData.semwise_data,
+            all_subjects: gpaData.all_subjects || gpaData.table || []
+        };
+    }
+
+    if (internalsVault && Array.isArray(internalsVault.internals) && internalsVault.internals.length > 0 && (!state.academics.internals || state.academics.internals.length === 0)) {
+        state.academics.internals = internalsVault.internals;
+    }
+
+    if (state.academics.gpa || (state.academics.internals && state.academics.internals.length > 0)) {
+        state.academics.loaded = true;
+        state.academics.fromCache = true;
+        return true;
+    }
+    return false;
+}
+
+async function loadAcademics(force = false, silent = false, scope = 'all') {
     const roll = state.rollNumber || (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}').roll; } catch { return null; } })();
     if (!roll) {
         if (!silent) showAcadError('Please log in with valid credentials to view academic data.');
         return;
     }
 
-    const RESULTS_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days (604,800,000 ms)
-    const INTERNALS_TTL = 12 * 60 * 60 * 1000;   // 12 hours (43,200,000 ms)
+    const RESULTS_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days on phone (semester results only change once a semester!)
+    const INTERNALS_TTL = 24 * 60 * 60 * 1000;   // 24 hours on phone (0 unnecessary Vercel calls)
 
     // 1. Read existing vaults from user's phone storage
     let resultsVault = null;
@@ -5071,6 +6025,11 @@ async function loadAcademics(force = false, silent = false) {
         if (rawInt) internalsVault = JSON.parse(rawInt);
     } catch {}
 
+    // Discard empty resultsVault if 0 subjects were previously cached
+    if (resultsVault && (!resultsVault.data || !Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) || (resultsVault.data.table || resultsVault.data.all_subjects).length === 0)) {
+        resultsVault = null;
+    }
+
     // Fallback to legacy bunker_academics_<roll> if vaults are not yet initialized
     if (!resultsVault || !internalsVault) {
         try {
@@ -5078,10 +6037,11 @@ async function loadAcademics(force = false, silent = false) {
             if (legacyRaw) {
                 const legacy = JSON.parse(legacyRaw);
                 const legTime = parseInt(localStorage.getItem(`bunker_acad_fetch_time_${roll}`) || '0') || Date.now();
-                if (!resultsVault && legacy.gpa) {
+                const legSubs = legacy.gpa && (legacy.gpa.table || legacy.gpa.all_subjects);
+                if (!resultsVault && legacy.gpa && Array.isArray(legSubs) && legSubs.length > 0) {
                     resultsVault = { data: legacy.gpa, timestamp: legTime };
                 }
-                if (!internalsVault && legacy.internals) {
+                if (!internalsVault && Array.isArray(legacy.internals) && legacy.internals.length > 0) {
                     internalsVault = { internals: legacy.internals, ca_sig: '', timestamp: legTime };
                 }
             }
@@ -5089,8 +6049,19 @@ async function loadAcademics(force = false, silent = false) {
     }
 
     const now = Date.now();
-    const hasFreshResults = resultsVault && resultsVault.data && (now - (resultsVault.timestamp || 0) < RESULTS_TTL);
-    const hasFreshInternals = internalsVault && Array.isArray(internalsVault.internals) && (now - (internalsVault.timestamp || 0) < INTERNALS_TTL);
+    const hasFreshResults = Boolean(
+        resultsVault &&
+        resultsVault.data &&
+        Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) &&
+        (resultsVault.data.table || resultsVault.data.all_subjects).length > 0 &&
+        (now - (resultsVault.timestamp || 0) < RESULTS_TTL)
+    );
+    const hasFreshInternals = Boolean(
+        internalsVault &&
+        Array.isArray(internalsVault.internals) &&
+        internalsVault.internals.length > 0 &&
+        (now - (internalsVault.timestamp || 0) < INTERNALS_TTL)
+    );
 
     // If cached results or internals exist, load and render immediately for 0ms visual load
     if (resultsVault && resultsVault.data) {
@@ -5099,6 +6070,8 @@ async function loadAcademics(force = false, silent = false) {
         state.academics.cgpa = {
             cgpa: gpaData.cgpa || gpaData.overall_cgpa,
             overall_cgpa: gpaData.overall_cgpa || gpaData.cgpa,
+            overall_cgpa_numeric: gpaData.overall_cgpa_numeric,
+            credit_points_total: gpaData.credit_points_total,
             cgpa_note: gpaData.cgpa_note || '',
             has_arrears: gpaData.has_arrears || false,
             total_credits: gpaData.total_credits,
@@ -5108,21 +6081,24 @@ async function loadAcademics(force = false, silent = false) {
         };
     }
 
-    if (internalsVault && Array.isArray(internalsVault.internals)) {
+    if (internalsVault && Array.isArray(internalsVault.internals) && internalsVault.internals.length > 0) {
         state.academics.internals = internalsVault.internals;
     }
 
-    if (state.academics.gpa || state.academics.internals) {
+    if (state.academics.gpa || (state.academics.internals && state.academics.internals.length > 0)) {
         state.academics.loaded = true;
         state.academics.fromCache = true;
         document.getElementById('acad-loading')?.classList.add('hidden');
-        if (state.academics.internals) renderInternals(state.academics.internals);
+        if (state.academics.internals && state.academics.internals.length > 0) renderInternals(state.academics.internals);
         if (state.academics.gpa) renderGPA(state.academics.gpa);
         if (state.academics.cgpa) renderCGPA(state.academics.cgpa);
         renderOthersOverview();
 
-        // If both vaults are fresh and not force-refreshing, exit immediately (0 network calls, 0 bandwidth)
-        if (!force && hasFreshResults && hasFreshInternals) {
+        const scopeSatisfied =
+            (scope === 'results' && hasFreshResults) ||
+            (scope === 'internals' && hasFreshInternals) ||
+            (scope === 'all' && hasFreshResults && hasFreshInternals);
+        if (!force && scopeSatisfied) {
             return;
         }
     }
@@ -5130,11 +6106,36 @@ async function loadAcademics(force = false, silent = false) {
     if (state.academics.loading) return; // Prevent duplicate requests
     state.academics.loading = true;
 
-    if (!silent && !state.academics.fromCache) {
-        const panels = ['internals', 'results'];
-        panels.forEach(p => document.getElementById(`acad-panel-${p}`)?.classList.add('hidden'));
-        document.getElementById('acad-error')?.classList.add('hidden');
-        document.getElementById('acad-loading')?.classList.remove('hidden');
+    // Show non-blocking inline loading states inside empty containers (never hide acad-panel-results!)
+    document.getElementById('acad-panel-results')?.classList.remove('hidden');
+    document.getElementById('acad-panel-internals')?.classList.remove('hidden');
+
+    if (!state.academics.internals || state.academics.internals.length === 0) {
+        const intList = document.getElementById('internals-list');
+        if (intList) {
+            intList.innerHTML = `
+                <div class="bento-card p-8 text-center space-y-3">
+                    <div class="w-10 h-10 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto animate-spin">
+                        <i class="fas fa-circle-notch text-sm"></i>
+                    </div>
+                    <p class="text-xs font-black text-white uppercase tracking-wider">Syncing Internal CA Marks...</p>
+                    <p class="text-[10px] text-gray-400">Fetching latest test, tutorial &amp; lab marks from PSG eCampus</p>
+                </div>`;
+        }
+    }
+
+    if (!state.academics.gpa) {
+        const resList = document.getElementById('results-sem-list');
+        if (resList) {
+            resList.innerHTML = `
+                <div class="bento-card p-8 text-center space-y-3">
+                    <div class="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mx-auto animate-spin">
+                        <i class="fas fa-circle-notch text-sm"></i>
+                    </div>
+                    <p class="text-xs font-black text-white uppercase tracking-wider">Syncing Semester Results &amp; CGPA...</p>
+                    <p class="text-[10px] text-gray-400">Fetching official semester grades &amp; credits from PSG eCampus</p>
+                </div>`;
+        }
     }
 
     const authToken = getAuthToken();
@@ -5146,102 +6147,104 @@ async function loadAcademics(force = false, silent = false) {
 
     try {
         const sessionToken = localStorage.getItem('bunker_session_token') || '';
-        const fetchTasks = [];
 
-        // Determine if we need to probe /api/internals:
-        const needInternals = force || !hasFreshInternals;
+        // Determine if we need internals and/or results in a SINGLE serverless invocation (/api/academics)
+        const needInternals = scope === 'results' ? (!state.academics.internals && !hasFreshInternals) : (force || !hasFreshInternals);
         const knownCaSig = (internalsVault && internalsVault.ca_sig) ? internalsVault.ca_sig : '';
+        const needResults = scope === 'internals' ? (!state.academics.gpa && !hasFreshResults) : (force || !hasFreshResults);
 
-        // Determine if we need to probe /api/gpa (NEVER call /api/cgpa simultaneously):
-        const needResults = force || !hasFreshResults;
-
-        let internalsPromise = null;
-        if (needInternals) {
-            internalsPromise = fetch('/api/internals', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    auth_token: authToken,
-                    session_token: sessionToken,
-                    known_ca_sig: knownCaSig,
-                    force: force
-                })
-            });
-            fetchTasks.push(internalsPromise);
-        }
-
-        let gpaPromise = null;
-        if (needResults) {
-            gpaPromise = fetch('/api/gpa', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    auth_token: authToken,
-                    session_token: sessionToken,
-                    force: force
-                })
-            });
-            fetchTasks.push(gpaPromise);
-        }
-
-        if (fetchTasks.length === 0) {
+        if (!needInternals && !needResults) {
             state.academics.loading = false;
             return;
         }
 
-        await Promise.all(fetchTasks);
+        const acadRes = await fetch('/api/academics', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                auth_token: authToken,
+                session_token: sessionToken,
+                need_internals: needInternals,
+                need_results: needResults,
+                known_ca_sig: knownCaSig,
+                force: force
+            })
+        });
+
+        const newTok = acadRes.headers.get('X-Session-Token');
+        if (newTok) localStorage.setItem('bunker_session_token', newTok);
+        const headerSig = acadRes.headers.get('X-CA-Sig') || '';
+
+        const acadPayload = await acadRes.json();
+        if (!acadRes.ok || acadPayload.error) {
+            state.academics.loading = false;
+            if (!silent) showAcadError(acadPayload.error || 'Could not sync marks from portal.');
+            return;
+        }
+
+        if (acadPayload.session_token) {
+            localStorage.setItem('bunker_session_token', acadPayload.session_token);
+        }
 
         let internalsUpdated = false;
         let resultsUpdated = false;
 
-        // Process internals response
-        if (internalsPromise) {
-            const intRes = await internalsPromise;
-            const newTok = intRes.headers.get('X-Session-Token');
-            if (newTok) localStorage.setItem('bunker_session_token', newTok);
-            const headerSig = intRes.headers.get('X-CA-Sig') || '';
-
-            const intData = await intRes.json();
-            if (intData.error) {
-                console.warn('Internals fetch error:', intData.error);
-            } else if (intData.up_to_date) {
-                // Backend reports marks unchanged: renew timestamp in vault
-                const renewedSig = intData.ca_sig || headerSig || knownCaSig;
+        if (needInternals) {
+            if (acadPayload.internals_up_to_date) {
+                const renewedSig = acadPayload.ca_sig || headerSig || knownCaSig;
                 if (internalsVault && internalsVault.internals) {
                     internalsVault.timestamp = Date.now();
                     internalsVault.ca_sig = renewedSig;
                     localStorage.setItem(`bunker_internals_vault_${roll}`, JSON.stringify(internalsVault));
                 }
-            } else if (Array.isArray(intData)) {
-                const caSig = headerSig || intData.ca_sig || '';
-                state.academics.internals = intData;
-                internalsVault = { internals: intData, ca_sig: caSig, timestamp: Date.now() };
-                localStorage.setItem(`bunker_internals_vault_${roll}`, JSON.stringify(internalsVault));
+            } else if (Array.isArray(acadPayload.internals)) {
+                const caSig = acadPayload.ca_sig || headerSig || '';
+                state.academics.internals = acadPayload.internals;
+                if (acadPayload.internals.length > 0) {
+                    internalsVault = { internals: acadPayload.internals, ca_sig: caSig, timestamp: Date.now() };
+                    localStorage.setItem(`bunker_internals_vault_${roll}`, JSON.stringify(internalsVault));
+                    let namesBackfilled = false;
+                    if (!state.courseMapping) state.courseMapping = {};
+                    acadPayload.internals.forEach(item => {
+                        if (item.course_code && item.course_name && item.course_name !== item.course_code) {
+                            state.courseMapping[item.course_code] = item.course_name;
+                            const subj = Array.isArray(state.subjects) ? state.subjects.find(s => s.code === item.course_code) : null;
+                            if (subj && (!subj.name || subj.name === subj.code)) {
+                                subj.name = item.course_name;
+                                namesBackfilled = true;
+                            }
+                        }
+                    });
+                    if (namesBackfilled) {
+                        localStorage.setItem('bunker_course_mapping', JSON.stringify(state.courseMapping));
+                        localStorage.setItem('bunker_subjects', JSON.stringify(state.subjects));
+                        localStorage.setItem('bunker_cached_subjects', JSON.stringify(state.subjects));
+                        localStorage.setItem(`bunker_subjects_${roll}`, JSON.stringify(state.subjects));
+                        renderSubjects();
+                    }
+                }
                 internalsUpdated = true;
             }
         }
 
-        // Process GPA/results response
-        if (gpaPromise) {
-            const gpaRes = await gpaPromise;
-            const newTok = gpaRes.headers.get('X-Session-Token');
-            if (newTok) localStorage.setItem('bunker_session_token', newTok);
-
-            const gpaData = await gpaRes.json();
-            if (gpaData.error) {
-                console.warn('GPA fetch error:', gpaData.error);
-            } else if (gpaData.overall_cgpa || gpaData.gpa || gpaData.semwise_data) {
-                state.academics.gpa = gpaData;
-                state.academics.cgpa = {
-                    cgpa: gpaData.cgpa || gpaData.overall_cgpa,
-                    overall_cgpa: gpaData.overall_cgpa || gpaData.cgpa,
-                    cgpa_note: gpaData.cgpa_note || '',
-                    has_arrears: gpaData.has_arrears || false,
-                    total_credits: gpaData.total_credits,
-                    total_enrolled_credits: gpaData.total_enrolled_credits,
-                    semwise_data: gpaData.semwise_data,
-                    all_subjects: gpaData.all_subjects || gpaData.table || []
-                };
+        if (needResults && acadPayload.results) {
+            const gpaData = acadPayload.results;
+            const subs = gpaData.all_subjects || gpaData.table || [];
+            state.academics.gpa = gpaData;
+            state.academics.cgpa = {
+                cgpa: gpaData.cgpa || gpaData.overall_cgpa,
+                overall_cgpa: gpaData.overall_cgpa || gpaData.cgpa,
+                overall_cgpa_numeric: gpaData.overall_cgpa_numeric,
+                credit_points_total: gpaData.credit_points_total,
+                cgpa_note: gpaData.cgpa_note || '',
+                has_arrears: gpaData.has_arrears || false,
+                total_credits: gpaData.total_credits,
+                total_enrolled_credits: gpaData.total_enrolled_credits,
+                semwise_data: gpaData.semwise_data,
+                all_subjects: subs
+            };
+            // Only persist to 30-day phone vault if subjects were actually returned
+            if (Array.isArray(subs) && subs.length > 0) {
                 resultsVault = { data: gpaData, timestamp: Date.now() };
                 localStorage.setItem(`bunker_results_vault_${roll}`, JSON.stringify(resultsVault));
                 resultsUpdated = true;
@@ -5272,14 +6275,6 @@ async function loadAcademics(force = false, silent = false) {
             showToast('📊 Marks updated!', 'success');
         }
 
-        const internalsView = document.getElementById('others-subview-internals');
-        const resultsView = document.getElementById('others-subview-results');
-        if (internalsView && !internalsView.classList.contains('hidden')) {
-            openOthersSubView('internals');
-        } else if (resultsView && !resultsView.classList.contains('hidden')) {
-            openOthersSubView('results');
-        }
-
     } catch (err) {
         state.academics.loading = false;
         if (!silent) showAcadError('Network error. Make sure you are connected.');
@@ -5298,6 +6293,27 @@ function showAcadError(msg) {
     const msgEl = document.getElementById('acad-error-msg');
     if (errEl) errEl.classList.remove('hidden');
     if (msgEl) msgEl.textContent = msg;
+    showToast(msg || 'Could not load academic marks', 'error');
+
+    const retryHtml = `
+        <div class="bento-card p-6 text-center space-y-3 border border-rose-500/25">
+            <div class="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mx-auto">
+                <i class="fas fa-exclamation-triangle text-sm"></i>
+            </div>
+            <p class="text-xs font-black text-white">${msg || 'Unable to sync marks'}</p>
+            <button type="button" onclick="loadAcademics(true, false, 'all')" class="px-4 py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-[11px] font-black uppercase tracking-wider active:scale-95 transition">
+                <i class="fas fa-sync-alt mr-1.5"></i>Retry Sync
+            </button>
+        </div>`;
+
+    if (!state.academics || !state.academics.internals || state.academics.internals.length === 0) {
+        const intList = document.getElementById('internals-list');
+        if (intList) intList.innerHTML = retryHtml;
+    }
+    if (!state.academics || !state.academics.gpa) {
+        const resList = document.getElementById('results-sem-list');
+        if (resList) resList.innerHTML = retryHtml;
+    }
 }
 
 // ============================================================================
@@ -5435,9 +6451,9 @@ function openPassMatrixModal(courseCode = null, initialCA = null) {
     }
 
     // Determine initial CA value
-    let targetCA = 18;
+    let targetCA = 24;
     if (initialCA !== null && !isNaN(parseFloat(initialCA))) {
-        targetCA = Math.max(0, Math.min(40, Math.round(parseFloat(initialCA))));
+        targetCA = Math.max(0, Math.min(40, Number(parseFloat(initialCA).toFixed(1))));
     } else if (courseCode && window.simState && window.simState[courseCode]) {
         const sub = state.academics.internals.find(s => s.course_code === courseCode);
         if (sub) {
@@ -5445,12 +6461,12 @@ function openPassMatrixModal(courseCode = null, initialCA = null) {
             const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
             const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
             const totalCA = calcCATotal(sub.is_lab, simKeys, window.simState[courseCode]);
-            targetCA = Math.round(sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40));
+            targetCA = Number((sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40)).toFixed(1));
         }
     }
 
     // Set slider & calculator
-    setPassMatrixCA(targetCA);
+    setPassMatrixCA(targetCA, courseCode);
 
     // Show modal
     m.classList.remove('hidden');
@@ -5493,28 +6509,38 @@ function switchPassMatrixTab(tab) {
 }
 
 function updatePassMatrixFromSlider(val) {
-    const caVal = Math.round(Number(val));
-    setPassMatrixCA(caVal);
+    const caVal = Number(Number(val).toFixed(1));
+    setPassMatrixCA(caVal, activePassMatrixCourse);
 }
+
+function stepPassMatrixCA(delta) {
+    const pmSlider = document.getElementById("pass-matrix-slider") || document.getElementById("pm-ca-slider");
+    const cur = pmSlider ? parseFloat(pmSlider.value) : 24;
+    const next = Math.max(0, Math.min(40, Number((cur + delta).toFixed(1))));
+    setPassMatrixCA(next, activePassMatrixCourse);
+}
+window.stepPassMatrixCA = stepPassMatrixCA;
 
 function renderPassMatrixAutoSubjects() {
     const listEl = document.getElementById("pm-auto-subjects-list");
     if (!listEl) return;
     if (!state.academics || !state.academics.internals || state.academics.internals.length === 0) {
-        listEl.innerHTML = '<div class="text-center text-xs text-gray-500 py-3">No subjects synced yet</div>';
+        listEl.innerHTML = '<div class="text-center text-xs text-gray-500 py-3">No subjects synced yet — open Internal Marks first</div>';
         return;
     }
-    const nonLab = state.academics.internals.filter(x => !x.is_lab);
+    const nonLab = state.academics.internals.filter(x => !x.is_lab && !isZeroCreditCourse(x.course_code));
     const targetList = nonLab.length > 0 ? nonLab : state.academics.internals;
     listEl.innerHTML = targetList.map(item => {
-        let ca40 = 20;
-        let hasPending = false;
+        let ca40 = 24;
+        const convVal = parseFloat(item.total_converted);
         if (window.simState && window.simState[item.course_code]) {
             const numCols = item.row_data.length;
             const expectedKeys = getSchemaKeys(item.is_lab, numCols);
-            const simKeys = expectedKeys.filter(k => k !== "best2t" && k !== "bestmcq" && k !== "total" && k !== "conv" && k !== "rt" && k !== "rt1" && k !== "rt2");
+            const simKeys = expectedKeys.filter(k => !["best2t", "bestmcq", "total", "conv", "rt", "rt1", "rt2"].includes(k));
             const totalCA = calcCATotal(item.is_lab, simKeys, window.simState[item.course_code]);
             ca40 = item.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
+        } else if (!isNaN(convVal)) {
+            ca40 = convVal;
         } else if (item.total && !isNaN(parseFloat(item.total))) {
             const rawTot = parseFloat(item.total);
             ca40 = item.is_lab ? Math.min(60, rawTot * 1.2) : Math.min(40, (rawTot / 50) * 40);
@@ -5522,21 +6548,22 @@ function renderPassMatrixAutoSubjects() {
 
         ca40 = Math.max(0, Math.min(40, Number(ca40.toFixed(1))));
         const passMark = calcSemNeededForTarget(ca40, 50, item.is_lab) ?? 100;
+        const isActive = activePassMatrixCourse === item.course_code;
 
         return `
-        <div onclick="updatePassMatrix(${ca40}, '${item.course_code}')" class="p-2.5 rounded-2xl bg-black/45 border border-white/10 hover:border-rose-500/40 flex items-center justify-between gap-2 cursor-pointer active:scale-[0.98] transition">
+        <div onclick="updatePassMatrix(${ca40}, '${item.course_code}')" class="p-3 rounded-2xl ${isActive ? 'bg-rose-500/15 border-rose-500/40' : 'bg-black/45 border-white/10 hover:border-rose-500/30'} border flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.98] transition">
             <div class="min-w-0 pr-1">
                 <div class="flex items-center gap-1.5">
-                    <span class="text-[9px] font-black text-indigo-400 uppercase">${item.course_code}</span>
-                    <span class="text-[9px] font-black text-emerald-300 bg-emerald-500/15 border-emerald-500/30 px-1.5 py-0.2 rounded border">
-                        CA: ${ca40.toFixed(1)}/40
+                    <span class="text-[9.5px] font-black text-indigo-400 uppercase font-mono">${item.course_code}</span>
+                    <span class="text-[9px] font-black text-emerald-300 bg-emerald-500/15 border-emerald-500/30 px-1.5 py-0.5 rounded-md border tabular-nums">
+                        CA ${ca40.toFixed(1)}/40
                     </span>
                 </div>
-                <p class="text-[11px] font-bold text-white truncate mt-0.5">${item.course_name}</p>
+                <p class="text-[11.5px] font-bold text-white truncate mt-0.5">${item.course_name}</p>
             </div>
-            <div class="text-right shrink-0">
+            <div class="text-right shrink-0 bg-white/[0.03] px-2.5 py-1.5 rounded-xl border border-white/5">
                 <span class="text-[8px] font-black text-gray-400 uppercase block">Min Sem</span>
-                <span class="text-xs font-black ${passMark <= 50 ? "text-emerald-400" : "text-amber-400"}">${passMark} / 100</span>
+                <span class="text-xs font-black tabular-nums ${passMark <= 50 ? "text-emerald-400" : "text-rose-300"}">${passMark}/100</span>
             </div>
         </div>`;
     }).join("");
@@ -5544,39 +6571,42 @@ function renderPassMatrixAutoSubjects() {
 window.renderPassMatrixAutoSubjects = renderPassMatrixAutoSubjects;
 
 function updatePassMatrix(ca, codeLabel = null) {
+    activePassMatrixCourse = codeLabel;
     const caVal = Math.max(0, Math.min(40, Number(Number(ca).toFixed(1))));
     setPassMatrixCA(caVal, codeLabel);
+    renderPassMatrixAutoSubjects();
 }
 window.updatePassMatrix = updatePassMatrix;
 
 function setPassMatrixCA(caVal, codeLabel = null) {
+    const numCA = Math.max(0, Math.min(40, Number(Number(caVal).toFixed(1))));
     const slider = document.getElementById("pass-matrix-slider");
     const pmSlider = document.getElementById("pm-ca-slider");
     const inputVal = document.getElementById("pass-matrix-input-val");
-    if (slider) slider.value = caVal;
-    if (pmSlider) pmSlider.value = caVal;
-    if (inputVal) inputVal.innerText = caVal;
+    if (slider) slider.value = numCA;
+    if (pmSlider) pmSlider.value = numCA;
+    if (inputVal) inputVal.innerText = Number.isInteger(numCA) ? String(numCA) : numCA.toFixed(1);
 
     // Update pill highlights
     document.querySelectorAll(".pm-pill").forEach(btn => {
-        if (btn.innerText.trim() == String(caVal)) {
-            btn.className = "pm-pill px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-xs font-black text-rose-300 transition active:scale-95";
+        if (Math.abs(parseFloat(btn.innerText.trim()) - numCA) < 0.05) {
+            btn.className = "pm-pill py-1.5 rounded-xl bg-rose-500/25 border border-rose-500/50 text-[11px] font-black text-rose-200 transition active:scale-95 tabular-nums";
         } else {
-            btn.className = "pm-pill px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black text-gray-300 hover:text-white transition active:scale-95";
+            btn.className = "pm-pill py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-black text-gray-300 transition active:scale-95 tabular-nums";
         }
     });
 
-    const passInfo = getSemPassDetails(caVal);
+    const passInfo = getSemPassDetails(numCA);
 
     // Update compact quick bar elements
     const labelEl = document.getElementById("pm-selected-label");
-    if (labelEl) labelEl.innerText = codeLabel ? `${codeLabel} Target Check` : "Custom CA Check";
+    if (labelEl) labelEl.innerText = codeLabel ? `${codeLabel} • 40:60 Target` : "Custom CA Check";
     const caDisp = document.getElementById("pm-ca-display");
-    if (caDisp) caDisp.innerText = `CA: ${caVal}/40`;
+    if (caDisp) caDisp.innerText = `${Number.isInteger(numCA) ? numCA : numCA.toFixed(1)}/40`;
     const semNeedEl = document.getElementById("pm-sem-needed");
     if (semNeedEl) semNeedEl.innerText = `Pass: ${passInfo.sem100}/100`;
     const proofEl = document.getElementById("pm-formula-proof");
-    if (proofEl) proofEl.innerText = `${passInfo.sem100} × 0.6 = ${passInfo.sem60} ➔ ${passInfo.roundUp} + ${caVal} CA = ${passInfo.final} (PASS ✅)`;
+    if (proofEl) proofEl.innerText = `${passInfo.sem100} × 0.6 = ${passInfo.sem60} ➔ ${passInfo.roundUp} + ${Number.isInteger(numCA) ? numCA : numCA.toFixed(1)} CA = ${passInfo.final} (PASS)`;
 
     // Update 6 Target grade cards
     const cpEl = document.getElementById("pm-grade-cplus");
@@ -5586,12 +6616,12 @@ function setPassMatrixCA(caVal, codeLabel = null) {
     const apEl = document.getElementById("pm-grade-aplus");
     const sEl = document.getElementById("pm-grade-s");
 
-    const reqCp = calcSemNeededForTarget(caVal, 56);
-    const reqB = calcSemNeededForTarget(caVal, 61);
-    const reqBp = calcSemNeededForTarget(caVal, 66);
-    const reqA = calcSemNeededForTarget(caVal, 71);
-    const reqAp = calcSemNeededForTarget(caVal, 81);
-    const reqS = calcSemNeededForTarget(caVal, 91);
+    const reqCp = calcSemNeededForTarget(numCA, 56);
+    const reqB = calcSemNeededForTarget(numCA, 61);
+    const reqBp = calcSemNeededForTarget(numCA, 66);
+    const reqA = calcSemNeededForTarget(numCA, 71);
+    const reqAp = calcSemNeededForTarget(numCA, 81);
+    const reqS = calcSemNeededForTarget(numCA, 91);
 
     if (cpEl) cpEl.innerText = reqCp !== null ? reqCp : "--";
     if (bEl) bEl.innerText = reqB !== null ? reqB : "--";
@@ -5614,37 +6644,26 @@ function setPassMatrixCA(caVal, codeLabel = null) {
     if (sSem) sSem.innerText = passInfo.sem100;
     if (sSem60) sSem60.innerText = `${passInfo.sem60} ➔ ${passInfo.roundUp}`;
     if (sFinal) sFinal.innerText = passInfo.final;
-    if (sCalcText) sCalcText.innerText = `${passInfo.ca40} + ${passInfo.roundUp} = ${passInfo.final} ✅`;
+    if (sCalcText) sCalcText.innerText = `${passInfo.ca40} + ${passInfo.roundUp} = ${passInfo.final}`;
 
     if (resBadge) {
         if (passInfo.alreadyPassed) {
             resBadge.innerText = "Already Safe";
-            resBadge.className = "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+            resBadge.className = "px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
         } else if (passInfo.sem100 <= 46) {
-            resBadge.innerText = "Easy Pass Target";
-            resBadge.className = "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+            resBadge.innerText = "Comfortable Target";
+            resBadge.className = "px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
         } else if (passInfo.sem100 <= 54) {
-            resBadge.innerText = "Moderate Target";
-            resBadge.className = "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30";
+            resBadge.innerText = "Standard Target";
+            resBadge.className = "px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30";
         } else {
-            resBadge.innerText = "High Effort Required";
-            resBadge.className = "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30";
+            resBadge.innerText = "High Focus Needed";
+            resBadge.className = "px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30";
         }
     }
-
-    // Update target grades preview cards (legacy IDs)
-    const tgtPass = document.getElementById("pm-tgt-pass");
-    const tgtB = document.getElementById("pm-tgt-b");
-    const tgtA = document.getElementById("pm-tgt-a");
-    const tgtAplus = document.getElementById("pm-tgt-aplus");
-
-    if (tgtPass) tgtPass.innerText = `${passInfo.sem100} / 100`;
-    if (tgtB) tgtB.innerText = reqB !== null ? `${reqB} / 100` : "—";
-    if (tgtA) tgtA.innerText = reqA !== null ? `${reqA} / 100` : "—";
-    if (tgtAplus) tgtAplus.innerText = reqAp !== null ? `${reqAp} / 100` : "—";
 }
 
-function setPresetPendingMarks(courseCode, ratio) {
+function setPresetPendingMarks(courseCode, ratio, allComponents = false) {
     const subject = state.academics && state.academics.internals ? state.academics.internals.find(s => s.course_code === courseCode) : null;
     if (!subject) return;
     const numCols = subject.row_data.length;
@@ -5655,18 +6674,23 @@ function setPresetPendingMarks(courseCode, ratio) {
         const idx = expectedKeys.indexOf(k);
         const actual = subject.row_data[idx];
         const isMissing = !actual || actual === '*' || actual.trim() === '';
-        if (isMissing && window.simState && window.simState[courseCode]) {
+        if ((allComponents || isMissing) && window.simState && window.simState[courseCode]) {
             const meta = window.METADATA[k] || window.METADATA['c1'];
-            const val = Math.round(meta.max * ratio);
+            const val = Number((meta.max * ratio).toFixed(1));
             window.simState[courseCode][k] = val;
-            const slider = document.querySelector(`input[oninput="updateSim('${courseCode}', '${k}', this.value)"]`);
+            const slider = document.getElementById(`slider-${courseCode}-${k}`);
             if (slider) slider.value = val;
             const textVal = document.getElementById(`val-${courseCode}-${k}`);
             if (textVal) textVal.innerText = val;
+            const badgeEl = document.getElementById(`badge-${courseCode}-${k}`);
+            if (badgeEl && !isMissing) {
+                badgeEl.innerText = `Simulated (Official: ${actual})`;
+                badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30';
+            }
         }
     });
     calculateSimOutputs(courseCode, subject);
-    showToast(`🎯 Applied ${Math.round(ratio * 100)}% preset to pending marks`);
+    showToast(`Applied ${Math.round(ratio * 100)}% CA preset for ${courseCode}`);
 }
 
 function renderPassMatrixTable(showExtended = false) {}
@@ -5676,11 +6700,11 @@ function toggleExtendedPassTable() {}
 
 function applyPassMatrixToActiveSubject() {
     if (!activePassMatrixCourse) {
-        showToast("No active subject selected to apply to.");
+        showToast("Select a subject below first to apply.");
         return;
     }
-    const slider = document.getElementById('pass-matrix-slider');
-    const caVal = slider ? parseInt(slider.value, 10) : 18;
+    const slider = document.getElementById('pass-matrix-slider') || document.getElementById('pm-ca-slider');
+    const caVal = slider ? parseFloat(slider.value) : 24;
     const passInfo = getSemPassDetails(caVal);
     applyPassTargetToSim(activePassMatrixCourse, passInfo.sem100);
     closePassMatrixModal();
@@ -5702,14 +6726,14 @@ function applyPassTargetToSim(courseCode, targetSem) {
         }
     }
     updateSim(courseCode, 'sem', targetSem);
-    showToast(`🎯 Set Final Sem Exam slider to ${targetSem} / 100 for ${courseCode}`);
+    showToast(`Set Final Sem Exam to ${targetSem}/100 for ${courseCode}`);
 }
 
 function copyPassMatrixSummary() {
-    const caVal = document.getElementById('pass-matrix-input-val')?.innerText || '18';
-    const semVal = document.getElementById('pm-res-sem100')?.innerText || '52';
-    const sSem60 = document.getElementById('pm-step-sem60')?.innerText || '31.2 ➔ 32';
-    const text = `🎯 PSG Tech Sem Pass Target:\n• Continuous Assessment: ${caVal} / 40\n• Required in Sem Exam: ${semVal} / 100\n• 60% Scale: ${sSem60}\n• Final Combined Score: 50 / 100 (PASS ✅)\n(Checked on PSG Bunker)`;
+    const caVal = document.getElementById('pass-matrix-input-val')?.innerText || '24';
+    const semVal = document.getElementById('pm-res-sem100')?.innerText || '42';
+    const sSem60 = document.getElementById('pm-step-sem60')?.innerText || '25.2 ➔ 26';
+    const text = `PSG Tech Sem Pass Target:\n• Continuous Assessment: ${caVal} / 40\n• Required in Sem Exam: ${semVal} / 100\n• 60% Scale: ${sSem60}\n• Final Combined Score: 50 / 100 (PASS)\n(Checked on PSG Bunker)`;
     
     if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).then(() => {
@@ -5740,22 +6764,22 @@ function renderInternals(internals) {
     const statusEl = document.getElementById('internals-status');
     if (!list) return;
 
-    // Filter out subjects without relevant data (labs with no marks yet, etc.)
-    const mainSubjects = internals.filter(s => s.total !== '' || s.row_data.some(v => v && v !== '*' && v !== ''));
+    // Show all courses with a valid course_code so students can simulate even before marks are entered
+    const mainSubjects = (internals || []).filter(s => Boolean(s.course_code));
 
     // Count updated subjects
     const withTotals = mainSubjects.filter(s => {
         const t = parseFloat(s.total);
-        return !isNaN(t);
+        return !isNaN(t) || (Array.isArray(s.row_data) && s.row_data.some(v => v && v !== '*' && v.trim() !== ''));
     });
     if (withTotals.length > 0) {
-        if (statusEl) statusEl.textContent = `${withTotals.length} of ${mainSubjects.length} subjects updated`;
+        if (statusEl) statusEl.textContent = `${withTotals.length} of ${mainSubjects.length} courses have portal entries • Tap any course to simulate`;
     } else {
-        if (statusEl) statusEl.textContent = 'Marks not yet entered';
+        if (statusEl) statusEl.textContent = `${mainSubjects.length} courses ready • Tap any course to simulate CA & Sem marks`;
     }
 
     if (mainSubjects.length === 0) {
-        list.innerHTML = `<div class="text-center py-10 opacity-50"><div class="text-4xl mb-4">📝</div><p class="text-xs font-bold uppercase tracking-widest text-gray-500">No Marks Available Yet</p></div>`;
+        list.innerHTML = `<div class="text-center py-10 opacity-50"><div class="text-4xl mb-3">📝</div><p class="text-xs font-bold uppercase tracking-widest text-gray-500">No Courses Found Yet</p></div>`;
         return;
     }
 
@@ -5764,46 +6788,39 @@ function renderInternals(internals) {
     // Initialize global METADATA for simulation
     if (typeof window.METADATA === 'undefined') {
         window.METADATA = {
-            // Theory: T1/T2 stored by portal already as out of 30 (50→30 scaled)
-            t1:   { label: 'Test 1', max: 30, weight: 30, color: 'text-blue-400', accent: 'bg-blue-500' },
-            t2:   { label: 'Test 2', max: 30, weight: 30, color: 'text-indigo-400', accent: 'bg-indigo-500' },
-            // RT = Retest (max 30)
+            t1:   { label: 'Test 1 (CA 1)', max: 30, weight: 30, color: 'text-blue-400', accent: 'bg-blue-500' },
+            t2:   { label: 'Test 2 (CA 2)', max: 30, weight: 30, color: 'text-indigo-400', accent: 'bg-indigo-500' },
             rt:   { label: 'Retest', max: 30, weight: 30, color: 'text-orange-400', accent: 'bg-orange-500' },
-            // AP = Assignment Presentation (no tutorial): max 10
-            ap:   { label: 'Assignment', max: 10, weight: 10, color: 'text-purple-400', accent: 'bg-purple-500' },
-            // AT1/AT2 = Assessment Tutorial (with tutorial courses): max 5 each
-            ap1:  { label: 'Tutorial 1 (AT1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
-            ap2:  { label: 'Tutorial 2 (AT2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
-            at1:  { label: 'Tutorial 1 (AT1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
-            at2:  { label: 'Tutorial 2 (AT2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            ap:   { label: 'Assignment / Presentation', max: 10, weight: 10, color: 'text-purple-400', accent: 'bg-purple-500' },
+            ap1:  { label: 'Tutorial 1 (AT 1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            ap2:  { label: 'Tutorial 2 (AT 2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            at1:  { label: 'Tutorial 1 (AT 1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            at2:  { label: 'Tutorial 2 (AT 2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
             rt1:  { label: 'Retest 1', max: 30, weight: 30, color: 'text-orange-400', accent: 'bg-orange-500' },
             rt2:  { label: 'Retest 2', max: 30, weight: 30, color: 'text-orange-400', accent: 'bg-orange-500' },
-            a1:   { label: 'Assignment 1', max: 50, weight: 50, color: 'text-emerald-400', accent: 'bg-emerald-500' },
-            a2:   { label: 'Assignment 2', max: 50, weight: 50, color: 'text-teal-400', accent: 'bg-teal-500' },
+            a1:   { label: 'Assessment 1', max: 50, weight: 50, color: 'text-emerald-400', accent: 'bg-emerald-500' },
+            a2:   { label: 'Assessment 2', max: 50, weight: 50, color: 'text-teal-400', accent: 'bg-teal-500' },
             eh:   { label: 'Activity Hours', max: 150, weight: 150, color: 'text-amber-400', accent: 'bg-amber-500' },
-            // MCQ: out of 10 each, average taken
-            mq1:  { label: 'MCQ 1', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
-            mq2:  { label: 'MCQ 2', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
-            // Lab components
-            ir1:  { label: 'Report 1 (Cycle I)', max: 15, weight: 15, color: 'text-emerald-400', accent: 'bg-emerald-500' },
-            ir2:  { label: 'Report 2 (Cycle II)', max: 15, weight: 15, color: 'text-emerald-400', accent: 'bg-emerald-500' },
-            plro1: { label: 'Pre-Lab 1 (Cycle I)', max: 10, weight: 10, color: 'text-teal-400', accent: 'bg-teal-500' },
-            plro2: { label: 'Pre-Lab 2 (Cycle II)', max: 10, weight: 10, color: 'text-teal-400', accent: 'bg-teal-500' },
-            // Fallbacks for unknown schemas
-            c1: { label: 'Comp 1', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c2: { label: 'Comp 2', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c3: { label: 'Comp 3', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c4: { label: 'Comp 4', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c5: { label: 'Comp 5', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c6: { label: 'Comp 6', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' }
+            mq1:  { label: 'Quiz / MCQ 1', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
+            mq2:  { label: 'Quiz / MCQ 2', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
+            ir1:  { label: 'Lab Cycle I Report', max: 15, weight: 15, color: 'text-emerald-400', accent: 'bg-emerald-500' },
+            ir2:  { label: 'Lab Cycle II Report', max: 15, weight: 15, color: 'text-emerald-400', accent: 'bg-emerald-500' },
+            plro1: { label: 'Pre-Lab / Viva I', max: 10, weight: 10, color: 'text-teal-400', accent: 'bg-teal-500' },
+            plro2: { label: 'Pre-Lab / Viva II', max: 10, weight: 10, color: 'text-teal-400', accent: 'bg-teal-500' },
+            c1: { label: 'Component 1', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c2: { label: 'Component 2', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c3: { label: 'Component 3', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c4: { label: 'Component 4', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c5: { label: 'Component 5', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c6: { label: 'Component 6', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' }
         };
         window.simState = {};
     }
 
     let listHTML = '';
 
-    mainSubjects.forEach((sub, idx) => {
-        const rowData = sub.row_data;
+    mainSubjects.forEach((sub) => {
+        const rowData = sub.row_data || [];
         const numCols = rowData.length;
         const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
 
@@ -5813,21 +6830,20 @@ function renderInternals(internals) {
             d[k] = (!val || val === '*' || val.trim() === '') ? null : parseFloat(val);
         });
 
-        // Simulator keys: exclude derived/read-only cols — these are inputs only
         const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
         const missingKeys = simKeys.filter(k => d[k] === null);
+        const enteredKeys = simKeys.filter(k => d[k] !== null);
 
-        // Use the API's pre-converted total for card display (most accurate)
-        // API computes: theory → total*0.8 (/40), lab → total*1.2 (/60)
+        // Build simulator initial state before computing card preview
+        const fullSimHTML = renderFullSimulator(sub, d, simKeys);
+
         const portalTotalConverted = parseFloat(sub.total_converted);
-        const portalTotalRaw = parseFloat(sub.total); // raw from portal (/50 for theory)
+        const portalTotalRaw = parseFloat(sub.total);
         const hasPortalTotal = !isNaN(portalTotalConverted);
 
-        // Fallback to component calc only when portal total not available
-        const currentTotal = hasPortalTotal ? portalTotalRaw : calcCATotal(sub.is_lab, simKeys, d);
-        const currentOutOf40 = hasPortalTotal
-            ? portalTotalConverted
-            : (sub.is_lab ? Math.min(60, currentTotal * 1.2) : Math.min(40, (currentTotal / 50) * 40));
+        const simTotalCA = calcCATotal(sub.is_lab, simKeys, window.simState[sub.course_code] || d);
+        const simOutOf40 = sub.is_lab ? Math.min(60, simTotalCA * 1.2) : Math.min(40, (simTotalCA / 50) * 40);
+        const currentOutOf40 = hasPortalTotal ? portalTotalConverted : simOutOf40;
         const displayMax = sub.is_lab ? 60 : 40;
 
         const isTheory = !sub.is_lab;
@@ -5835,125 +6851,96 @@ function renderInternals(internals) {
         const typeColor = isTheory ? 'indigo' : 'teal';
 
         const passInfo = isTheory ? getSemPassDetails(currentOutOf40) : null;
-        const reqB = isTheory ? getSemNeededForGrade(currentOutOf40, 60, sub.is_lab) : null;
-        const reqA = isTheory ? getSemNeededForGrade(currentOutOf40, 70, sub.is_lab) : null;
-        const reqAp = isTheory ? getSemNeededForGrade(currentOutOf40, 80, sub.is_lab) : null;
+        const reqB = isTheory ? getSemNeededForGrade(currentOutOf40, 61, sub.is_lab) : null;
+        const reqA = isTheory ? getSemNeededForGrade(currentOutOf40, 71, sub.is_lab) : null;
+        const reqAp = isTheory ? getSemNeededForGrade(currentOutOf40, 81, sub.is_lab) : null;
 
-        // DUAL-STATE MOBILE UI: Available Prediction vs Pending Simulation
-        let statusCardHTML = '';
-        if (isTheory && passInfo) {
-            if (missingKeys.length === 0) {
-                // STATE 1: MARKS AVAILABLE & FINALIZED -> SHOW BEST PREDICTION
-                statusCardHTML = `
-                <div class="mt-3.5 p-3.5 rounded-2xl bg-gradient-to-r from-rose-950/30 via-indigo-950/20 to-black/40 border border-rose-500/25 shadow-lg">
-                    <div class="flex items-center justify-between mb-2">
-                        <span class="text-[9px] font-black uppercase tracking-wider text-rose-300 flex items-center gap-1.5">
-                            <i class="fas fa-bullseye text-[10px] text-rose-400"></i>
-                            <span>Sem Pass Prediction (40:60 PSG Rule)</span>
-                        </span>
-                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 uppercase tracking-widest">
-                            CA In
-                        </span>
+        // Compact component pills on card front so student sees all entered/pending marks at a glance
+        const compPillsHTML = simKeys.map(k => {
+            const meta = window.METADATA[k] || window.METADATA['c1'];
+            const shortLabel = k.toUpperCase();
+            const hasVal = d[k] !== null && !isNaN(d[k]);
+            return hasVal
+                ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/[0.05] border border-white/10 text-[9.5px] font-bold text-gray-200 tabular-nums"><span class="text-gray-500 font-black">${shortLabel}</span> ${d[k]}/${meta.max}</span>`
+                : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[9.5px] font-bold text-amber-300 tabular-nums"><span class="text-amber-400/80 font-black">${shortLabel}</span> <span id="pill-val-${sub.course_code}-${k}">~${window.simState[sub.course_code]?.[k] ?? 0}</span>/${meta.max}</span>`;
+        }).join('');
+
+        let statusStripHTML = '';
+        if (isTheory && passInfo && !isZeroCreditCourse(sub.course_code)) {
+            statusStripHTML = `
+            <div class="mt-3 p-2.5 rounded-2xl bg-black/35 border border-white/[0.07] flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="w-6 h-6 rounded-lg bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 text-[10px] shrink-0">
+                        <i class="fas fa-bullseye"></i>
+                    </span>
+                    <div class="min-w-0">
+                        <span class="text-[8.5px] font-black text-gray-400 uppercase tracking-wider block">Min Sem to Pass (50%)</span>
+                        <span class="text-xs font-black text-white tabular-nums"><span id="card-pass-req-${sub.course_code}" class="text-rose-400">${passInfo.sem100}</span> / 100</span>
                     </div>
-                    <div class="flex items-baseline justify-between mb-2.5">
-                        <div>
-                            <span class="text-xs text-gray-300 font-medium">To Pass: Need</span>
-                            <span class="text-xl font-black text-white ml-1.5 underline decoration-rose-400 underline-offset-2" id="card-pass-req-${sub.course_code}">${passInfo.sem100}</span>
-                            <span class="text-[10px] text-rose-400 font-bold">/ 100 in Sem</span>
-                        </div>
-                        <span class="text-[9.5px] font-bold text-gray-400 bg-black/40 px-2 py-1 rounded-lg border border-white/5">
-                            ${currentOutOf40.toFixed(1)} + ${passInfo.roundUp} = ${passInfo.final}% ✅
-                        </span>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0 text-center">
+                    <div class="px-2 py-1 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7.5px] font-black text-gray-500 uppercase block">B</span>
+                        <span class="text-[10px] font-black text-teal-300 tabular-nums" id="card-b-req-${sub.course_code}">${reqB !== null ? reqB : '—'}</span>
                     </div>
-                    <div class="grid grid-cols-3 gap-1.5 pt-2 border-t border-white/5 text-center">
-                        <div class="bg-black/30 py-1.5 px-1 rounded-lg border border-white/5">
-                            <span class="text-[7.5px] font-bold text-gray-400 uppercase block">Aim B (60%)</span>
-                            <span class="text-[11px] font-black text-teal-300 block">${reqB !== null ? reqB + '/100' : '—'}</span>
-                        </div>
-                        <div class="bg-black/30 py-1.5 px-1 rounded-lg border border-white/5">
-                            <span class="text-[7.5px] font-bold text-gray-400 uppercase block">Aim A (70%)</span>
-                            <span class="text-[11px] font-black text-indigo-300 block">${reqA !== null ? reqA + '/100' : '—'}</span>
-                        </div>
-                        <div class="bg-black/30 py-1.5 px-1 rounded-lg border border-white/5">
-                            <span class="text-[7.5px] font-bold text-gray-400 uppercase block">Aim A+ (80%)</span>
-                            <span class="text-[11px] font-black text-purple-300 block">${reqAp !== null ? reqAp + '/100' : '—'}</span>
-                        </div>
+                    <div class="px-2 py-1 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7.5px] font-black text-gray-500 uppercase block">A</span>
+                        <span class="text-[10px] font-black text-indigo-300 tabular-nums" id="card-a-req-${sub.course_code}">${reqA !== null ? reqA : '—'}</span>
                     </div>
-                </div>`;
-            } else {
-                // STATE 2: MARKS NOT AVAILABLE -> PROMPT TO SIMULATE
-                const missingLabels = missingKeys.map(k => (window.METADATA[k] || {}).label || k).join(', ');
-                statusCardHTML = `
-                <div class="mt-3.5 p-3.5 rounded-2xl bg-gradient-to-r from-amber-950/30 via-purple-950/20 to-black/40 border border-amber-500/30 shadow-lg">
-                    <div class="flex items-center justify-between mb-1.5">
-                        <span class="text-[9px] font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-                            <i class="fas fa-wand-magic-sparkles text-[10px] text-amber-400 animate-pulse"></i>
-                            <span>${missingKeys.length} Marks Pending</span>
-                        </span>
-                        <span class="text-[8px] font-black px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase tracking-widest">
-                            Tap to Simulate
-                        </span>
+                    <div class="px-2 py-1 rounded-lg bg-white/[0.03] border border-white/5">
+                        <span class="text-[7.5px] font-black text-gray-500 uppercase block">A+</span>
+                        <span class="text-[10px] font-black text-purple-300 tabular-nums" id="card-ap-req-${sub.course_code}">${reqAp !== null ? reqAp : '—'}</span>
                     </div>
-                    <div class="text-xs font-bold text-white mb-1.5 leading-snug">
-                        ${missingLabels} pending in portal
-                    </div>
-                    <div class="flex items-center justify-between text-[9.5px] text-gray-400 pt-1.5 border-t border-white/5">
-                        <span>Current Est. Pass Target: <b class="text-rose-400 font-black" id="card-pass-req-${sub.course_code}">~${passInfo.sem100} / 100</b></span>
-                        <span class="text-amber-300 font-bold flex items-center gap-1">Open Simulator <i class="fas fa-chevron-down text-[8px]"></i></span>
-                    </div>
-                </div>`;
-            }
+                </div>
+            </div>`;
         }
 
         listHTML += `
-        <div id="card-${sub.course_code}" class="glass-panel rounded-[30px] overflow-hidden transition-all duration-300 mb-4 border border-white/10">
-            <div class="p-5 relative overflow-hidden cursor-pointer active:scale-[0.98] transition-all" onclick="toggleInternalCard('${sub.course_code}')">
-                <div class="absolute -right-4 -top-4 opacity-[0.03] pointer-events-none text-8xl text-white">
-                    <i class="fas ${iconName}"></i>
-                </div>
-                <div class="flex justify-between items-start">
-                    <div class="flex-1 pr-4 z-10">
-                        <div class="flex flex-wrap items-center gap-2 mb-1.5">
-                            <span class="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-md border bg-${typeColor}-500/10 text-${typeColor}-400 border-${typeColor}-500/20">${sub.course_code}</span>
-                            <span class="text-[10px] font-bold text-gray-500 uppercase tracking-widest">${isTheory ? 'Theory' : 'Laboratory'}</span>
-                        </div>
-                        <h3 class="font-bold text-white text-[13px] leading-snug">${sub.course_name}</h3>
-                        ${statusCardHTML}
-                    </div>
-                    <div class="flex flex-col items-end z-10 ml-2">
-                        <div class="flex items-baseline gap-1">
-                            <span class="text-2xl font-black text-transparent bg-clip-text ${missingKeys.length > 0 ? 'bg-gradient-to-r from-amber-300 to-amber-500' : 'bg-gradient-to-r from-indigo-300 to-purple-400'}">
-                                ${missingKeys.length > 0 ? '~' : ''}${currentOutOf40.toFixed(1)}
-                            </span>
-                            <span class="text-[10px] font-bold text-gray-500 uppercase tracking-widest">/ ${displayMax}</span>
-                        </div>
-                        <div class="mt-0.5 mb-1.5 opacity-80">
-                            <span class="text-[9px] font-bold text-gray-400">${hasPortalTotal ? `Portal Raw: ${portalTotalRaw}/50` : (missingKeys.length > 0 ? 'Pending Components' : 'All Components In')}</span>
-                        </div>
-                        <div class="mt-0 flex items-center">
+        <div id="card-${sub.course_code}" class="glass-panel rounded-[26px] overflow-hidden transition-all duration-300 mb-3.5 border border-white/10">
+            <div class="p-4 sm:p-5 relative overflow-hidden cursor-pointer active:scale-[0.99] transition-all" onclick="toggleInternalCard('${sub.course_code}')">
+                <div class="flex justify-between items-start gap-3">
+                    <div class="flex-1 min-w-0 z-10">
+                        <div class="flex flex-wrap items-center gap-1.5 mb-1">
+                            <span class="text-[9.5px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border bg-${typeColor}-500/15 text-${typeColor}-300 border-${typeColor}-500/25 font-mono">${sub.course_code}</span>
+                            <span class="text-[9px] font-bold text-gray-400 uppercase tracking-wider">${isTheory ? 'Theory • 40:60' : 'Lab • 60:40'}</span>
                             ${missingKeys.length > 0 
-                                ? `<span class="flex items-center gap-1 text-[9px] text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20 whitespace-nowrap"><i class="fas fa-clock text-[8px]"></i> ${missingKeys.length} Pending</span>`
-                                : `<span class="flex items-center gap-1 text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1.5 py-0.5 rounded border border-emerald-400/20 whitespace-nowrap"><i class="fas fa-check-circle text-[8px]"></i> Finalized</span>`
+                                ? `<span class="text-[8.5px] text-amber-300 font-black bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/25">${missingKeys.length} Pending</span>`
+                                : `<span class="text-[8.5px] text-emerald-300 font-black bg-emerald-500/15 px-1.5 py-0.5 rounded border border-emerald-500/25">Official In</span>`
                             }
                         </div>
+                        <h3 class="font-extrabold text-white text-[13.5px] leading-snug">${sub.course_name}</h3>
+                    </div>
+                    <div class="flex flex-col items-end shrink-0 z-10 bg-black/35 px-3 py-1.5 rounded-2xl border border-white/10">
+                        <div class="flex items-baseline gap-0.5">
+                            <span id="card-ca-score-${sub.course_code}" class="text-xl font-black tabular-nums ${missingKeys.length > 0 ? 'text-amber-300' : 'text-indigo-300'}">
+                                ${missingKeys.length > 0 && !hasPortalTotal ? '~' : ''}${currentOutOf40.toFixed(1)}
+                            </span>
+                            <span class="text-[9.5px] font-bold text-gray-500">/ ${displayMax}</span>
+                        </div>
+                        <span class="text-[8px] font-black text-gray-400 uppercase tracking-wider">${hasPortalTotal ? 'Official CA' : 'Est. CA'}</span>
                     </div>
                 </div>
-                <div class="mt-4 flex items-center justify-between gap-3">
+
+                ${compPillsHTML ? `<div class="mt-2.5 flex flex-wrap gap-1.5">${compPillsHTML}</div>` : ''}
+                ${statusStripHTML}
+
+                <div class="mt-3 flex items-center justify-between gap-3">
                     <div class="flex-1 h-1.5 bg-black/50 rounded-full overflow-hidden" id="bar-${sub.course_code}">
-                         <div class="h-full bg-${typeColor}-500 transition-all duration-700" style="width: ${Math.min(100,(currentOutOf40/displayMax)*100).toFixed(1)}%"></div>
+                         <div id="bar-fill-${sub.course_code}" class="h-full bg-gradient-to-r from-${typeColor}-500 to-purple-500 transition-all duration-500" style="width: ${Math.min(100,(currentOutOf40/displayMax)*100).toFixed(1)}%"></div>
                     </div>
-                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl ${missingKeys.length > 0 ? 'bg-amber-500/15 border border-amber-500/30 text-amber-300' : 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-300'} text-[8.5px] font-black uppercase tracking-wider shrink-0 transition">
-                        <i class="fas ${missingKeys.length > 0 ? 'fa-wand-magic-sparkles text-amber-400' : 'fa-graduation-cap text-indigo-400'} text-[9px]"></i>
-                        <span>${missingKeys.length > 0 ? 'Simulate Pending' : 'Simulate Sem'}</span>
+                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 text-[9px] font-black uppercase tracking-wider shrink-0 transition">
+                        <i class="fas fa-sliders text-indigo-400 text-[9px]"></i>
+                        <span>Simulate Marks</span>
+                        <i class="fas fa-chevron-down text-[8px] opacity-75"></i>
                     </div>
                 </div>
             </div>
 
             <div class="expandable-content" id="content-${sub.course_code}">
                 <div class="expandable-inner cursor-default">
-                    <div class="px-5 pb-5">
-                        <div class="w-full h-px bg-gradient-to-r from-transparent via-white/10 to-transparent mb-5 mt-2"></div>
-                        ${renderFullSimulator(sub, d, simKeys)}
+                    <div class="px-4 pb-4 sm:px-5 sm:pb-5">
+                        <div class="w-full h-px bg-gradient-to-r from-transparent via-white/10 to-transparent mb-4"></div>
+                        ${fullSimHTML}
                     </div>
                 </div>
             </div>
@@ -5991,23 +6978,20 @@ function renderInternals(internals) {
 
             const adjusterHTML = isZero
                 ? `<span class="text-[8px] font-black text-gray-500 uppercase tracking-widest bg-white/[0.02] px-2 py-1 rounded-lg border border-white/5">Non-GPA</span>`
-                : `<div class="flex items-center bg-black/40 rounded-xl p-1 border border-white/5">
-                        <button onclick="changeSubjectCredits('${courseCode}', -1)" class="w-6 h-6 rounded-lg bg-white/5 text-white hover:bg-white/10 active:scale-90 transition flex items-center justify-center text-xs font-bold">-</button>
-                        <span id="pred-credits-${courseCode}" class="w-6 text-center text-xs font-black text-white">${credits}</span>
-                        <button onclick="changeSubjectCredits('${courseCode}', 1)" class="w-6 h-6 rounded-lg bg-white/5 text-white hover:bg-white/10 active:scale-90 transition flex items-center justify-center text-xs font-bold">+</button>
+                : `<div class="flex items-center bg-black/40 rounded-xl p-1 border border-white/10">
+                        <button onclick="changeSubjectCredits('${courseCode}', -1)" class="w-7 h-7 rounded-lg bg-white/5 text-white hover:bg-white/10 active:scale-90 transition flex items-center justify-center text-xs font-bold">-</button>
+                        <span id="pred-credits-${courseCode}" class="w-6 text-center text-xs font-black text-white tabular-nums">${credits}</span>
+                        <button onclick="changeSubjectCredits('${courseCode}', 1)" class="w-7 h-7 rounded-lg bg-white/5 text-white hover:bg-white/10 active:scale-90 transition flex items-center justify-center text-xs font-bold">+</button>
                     </div>`;
 
             predHTML += `
-            <div class="flex justify-between items-center p-3 rounded-2xl bg-white/[0.02] border border-white/5">
-                <div class="flex-1 pr-2">
-                    <p class="text-[11px] font-bold text-white leading-snug">${sub.course_name}</p>
-                    <p class="text-[9px] text-gray-500 font-bold uppercase tracking-wider mt-0.5">${courseCode}</p>
+            <div class="flex justify-between items-center p-2.5 rounded-2xl bg-white/[0.02] border border-white/5">
+                <div class="flex-1 pr-2 min-w-0">
+                    <p class="text-[11px] font-bold text-white truncate">${sub.course_name}</p>
+                    <p class="text-[9px] text-gray-500 font-bold uppercase tracking-wider font-mono">${courseCode}</p>
                 </div>
-                <div class="flex items-center gap-3">
-                    <!-- Predicted Grade Badge -->
+                <div class="flex items-center gap-2.5 shrink-0">
                     <span id="pred-badge-${courseCode}" class="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md border">--</span>
-                    
-                    <!-- Credits Adjuster -->
                     ${adjusterHTML}
                 </div>
             </div>`;
@@ -6017,7 +7001,7 @@ function renderInternals(internals) {
 
     // Initial calculation run for all simulators
     mainSubjects.forEach(sub => {
-        if(window.simState[sub.course_code]) calculateSimOutputs(sub.course_code, sub);
+        if (window.simState[sub.course_code]) calculateSimOutputs(sub.course_code, sub);
     });
 
     recalculateCGPAPrediction();
@@ -6038,222 +7022,188 @@ function renderFullSimulator(subject, d, expectedKeys) {
     expectedKeys.forEach(k => { 
         const actual = d[k];
         const meta = window.METADATA[k] || window.METADATA['c1'];
-        if (actual !== null) {
+        if (courseSaved && courseSaved[k] !== undefined) {
+            window.simState[courseCode][k] = Number(courseSaved[k]);
+        } else if (actual !== null) {
             window.simState[courseCode][k] = actual;
-        } else if (courseSaved && courseSaved[k] !== undefined) {
-            window.simState[courseCode][k] = courseSaved[k];
         } else {
-            window.simState[courseCode][k] = Math.round(meta.max * 0.7);
+            window.simState[courseCode][k] = Math.round(meta.max * 0.75);
         }
     });
 
-    let actualMarksHTML = '';
-    let slidersHTML = '';
-
+    // Build interactive sliders + tactile -/+ steppers for ALL components (both official and pending)
+    let componentsHTML = '';
     expectedKeys.forEach(key => {
         const meta = window.METADATA[key] || window.METADATA['c1'];
-        const isMissing = d[key] === null;
+        const actual = d[key];
+        const isMissing = actual === null;
+        const curVal = window.simState[courseCode][key];
+        const isModified = !isMissing && Math.abs(curVal - actual) > 0.01;
+        const stepSize = meta.max <= 10 ? 0.5 : 1;
 
-        if (!isMissing) {
-            actualMarksHTML += `
-            <div class="bg-white/5 p-3 rounded-xl border border-white/10 flex justify-between items-center">
-                <span class="text-[11px] font-bold ${meta.color}">${meta.label}</span>
-                <span class="text-sm font-black text-white bg-black/40 px-2.5 py-1 rounded">
-                    ${d[key]} <span class="text-[9px] text-gray-500 font-medium">/ ${meta.max}</span>
-                </span>
-            </div>`;
-        } else {
-            slidersHTML += `
-            <div class="bg-white/5 p-3.5 rounded-2xl border border-amber-500/20 shadow-[inset_0_0_15px_rgba(245,158,11,0.05)]">
-                <div class="flex justify-between items-center mb-3">
-                    <div class="flex flex-col">
-                        <span class="text-xs font-bold ${meta.color}">${meta.label}</span>
-                        <div class="mt-1"><span class="text-[9px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded border border-amber-500/20">Pending</span></div>
-                    </div>
-                    <span class="text-sm font-black text-white bg-black/40 px-2.5 py-1 rounded">
-                        <span id="val-${courseCode}-${key}">${window.simState[courseCode][key]}</span> 
-                        <span class="text-[10px] text-gray-500 font-medium">/ ${meta.max}</span>
-                    </span>
+        const badgeHTML = isMissing
+            ? `<span id="badge-${courseCode}-${key}" class="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Pending</span>`
+            : isModified
+                ? `<span id="badge-${courseCode}-${key}" class="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Simulated (Official: ${actual})</span>`
+                : `<span id="badge-${courseCode}-${key}" class="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">Official: ${actual}</span>`;
+
+        componentsHTML += `
+        <div class="bg-black/40 p-3 rounded-2xl border ${isMissing ? 'border-amber-500/20' : 'border-white/10'}">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="text-xs font-extrabold ${meta.color} truncate">${meta.label}</span>
+                    ${badgeHTML}
                 </div>
-                <input type="range" min="0" max="${meta.max}" step="1" value="${window.simState[courseCode][key]}" 
-                    oninput="updateSim('${courseCode}', '${key}', this.value)"
-                    class="w-full bg-black/50 rounded-lg appearance-none cursor-pointer accent-indigo-500 acad-slider" style="height: 8px;" />
-            </div>`;
-        }
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <button type="button" onclick="stepSimMark('${courseCode}', '${key}', -${stepSize})" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-black text-xs flex items-center justify-center active:scale-90 transition">-</button>
+                    <div class="min-w-[58px] text-center bg-black/60 px-2 py-1 rounded-xl border border-white/10 tabular-nums">
+                        <span id="val-${courseCode}-${key}" class="text-sm font-black text-white">${curVal}</span>
+                        <span class="text-[9.5px] text-gray-500 font-bold">/${meta.max}</span>
+                    </div>
+                    <button type="button" onclick="stepSimMark('${courseCode}', '${key}', ${stepSize})" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-black text-xs flex items-center justify-center active:scale-90 transition">+</button>
+                </div>
+            </div>
+            <input type="range" id="slider-${courseCode}-${key}" min="0" max="${meta.max}" step="${stepSize}" value="${curVal}" 
+                oninput="updateSim('${courseCode}', '${key}', this.value)"
+                class="w-full bg-black/60 rounded-lg appearance-none cursor-pointer accent-indigo-500 acad-slider" style="height: 8px;" />
+        </div>`;
     });
 
-    let internalsSimSection = '';
-    if (actualMarksHTML !== '') internalsSimSection += `<div class="mb-4"><p class="text-[9px] text-gray-400 mb-2 uppercase tracking-widest font-bold">Entered / Published Marks</p><div class="grid grid-cols-2 gap-2">${actualMarksHTML}</div></div>`;
-    if (slidersHTML !== '') {
-        internalsSimSection += `
-        <div class="mb-5">
-            <div class="flex items-center justify-between mb-2">
-                <p class="text-[9.5px] text-amber-300 uppercase tracking-widest font-black flex items-center gap-1.5">
-                    <i class="fas fa-wand-magic-sparkles text-[10px]"></i>
-                    <span>Simulate Pending Components</span>
-                </p>
-                <div class="flex items-center gap-1">
-                    <button type="button" onclick="setPresetPendingMarks('${courseCode}', 0.70)" class="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-[8px] font-black text-gray-300 border border-white/10 active:scale-95 transition">Avg (70%)</button>
-                    <button type="button" onclick="setPresetPendingMarks('${courseCode}', 0.90)" class="px-2 py-0.5 rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-[8px] font-black text-indigo-300 border border-indigo-500/30 active:scale-95 transition">High (90%)</button>
-                    <button type="button" onclick="setPresetPendingMarks('${courseCode}', 1.0)" class="px-2 py-0.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 text-[8px] font-black text-emerald-300 border border-emerald-500/30 active:scale-95 transition">Max</button>
-                </div>
+    const internalsSimSection = `
+    <div class="mb-4">
+        <div class="flex items-center justify-between gap-2 mb-2.5">
+            <span class="text-[10px] text-indigo-300 uppercase tracking-widest font-black flex items-center gap-1.5">
+                <i class="fas fa-sliders text-[10px]"></i>
+                <span>CA Components (Tap -/+ or Slide)</span>
+            </span>
+            <div class="flex items-center gap-1">
+                <button type="button" onclick="setPresetPendingMarks('${courseCode}', 0.60, true)" class="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[8.5px] font-black text-gray-300 border border-white/10 active:scale-95 transition">60%</button>
+                <button type="button" onclick="setPresetPendingMarks('${courseCode}', 0.80, true)" class="px-2 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-[8.5px] font-black text-indigo-200 border border-indigo-500/30 active:scale-95 transition">80%</button>
+                <button type="button" onclick="setPresetPendingMarks('${courseCode}', 1.0, true)" class="px-2 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-[8.5px] font-black text-emerald-200 border border-emerald-500/30 active:scale-95 transition">Max</button>
             </div>
-            <div class="grid grid-cols-1 gap-2.5 mb-2">${slidersHTML}</div>
-            <div class="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between text-[10px]">
-                <span class="text-gray-300 font-medium">Simulated CA: <b class="text-white font-black" id="dyn-sim-ca-${courseCode}">--</b> / 40</span>
-                <span class="text-amber-300 font-bold">Pass in Sem: <b class="text-rose-400 font-black" id="dyn-sim-sem-${courseCode}">--</b> / 100</span>
-            </div>
-        </div>`;
-    } else {
-        internalsSimSection += `<div class="mb-5 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-3 text-center"><span class="text-xs font-bold text-emerald-400 flex items-center justify-center gap-1.5"><i class="fas fa-check-circle"></i> All internal component marks finalized!</span></div>`;
-    }
+        </div>
+        <div class="grid grid-cols-1 gap-2.5">${componentsHTML}</div>
+    </div>`;
 
     if (isZeroCreditCourse(courseCode)) {
         return `
-        <div class="bg-gradient-to-br from-black/60 to-indigo-950/30 p-5 rounded-3xl border border-indigo-500/20 mt-4 relative shadow-inner" onclick="event.stopPropagation()">
-            <div class="flex items-center justify-between mb-4 border-b border-white/5 pb-3">
+        <div class="bg-black/40 p-4 rounded-3xl border border-indigo-500/20 relative" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between mb-3 border-b border-white/5 pb-2.5">
                 <div class="flex items-center gap-2">
                     <i class="fas fa-info-circle text-indigo-400 text-xs"></i>
                     <h4 class="text-xs font-bold text-indigo-300 uppercase tracking-widest">Course Information</h4>
                 </div>
+                <button onclick="resetSim('${courseCode}')" class="text-[10px] bg-white/10 hover:bg-white/20 text-gray-300 px-2.5 py-1 rounded-lg font-bold transition active:scale-95">Reset</button>
             </div>
             ${internalsSimSection}
-            <div class="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-4 text-center">
-                <p class="text-xs font-black text-indigo-300 uppercase tracking-wider mb-1">Non-GPA / Non-Credit Course</p>
-                <p class="text-[10px] text-gray-400 font-medium">This course is evaluated for completion and does not contribute to your CGPA/SGPA calculation.</p>
+            <div class="bg-indigo-500/10 border border-indigo-500/20 rounded-2xl p-3.5 text-center">
+                <p class="text-xs font-black text-indigo-300 uppercase tracking-wider mb-1">Non-GPA / Mandatory Course</p>
+                <p class="text-[10px] text-gray-400 font-medium">Evaluated for completion; does not affect SGPA/CGPA.</p>
             </div>
         </div>`;
     }
 
+    const isTh = !subject.is_lab;
+    const curCA = calcCATotal(subject.is_lab, expectedKeys, window.simState[courseCode]);
+    const curCa40 = subject.is_lab ? Math.min(60, curCA * 1.2) : Math.min(40, (curCA / 50) * 40);
+    const pInfo = isTh ? getSemPassDetails(curCa40) : null;
+
     return `
-    <div class="bg-gradient-to-br from-black/60 to-indigo-950/30 p-5 rounded-3xl border border-indigo-500/20 mt-4 relative shadow-inner" onclick="event.stopPropagation()">
-        <div class="flex items-center justify-between mb-5 border-b border-white/5 pb-3">
+    <div class="bg-black/45 p-4 rounded-3xl border border-indigo-500/20 relative" onclick="event.stopPropagation()">
+        <div class="flex items-center justify-between mb-3.5 border-b border-white/5 pb-2.5">
             <div class="flex items-center gap-2">
-                <i class="fas fa-calculator text-indigo-400 text-xs"></i>
-                <h4 class="text-xs font-bold text-indigo-300 uppercase tracking-widest">Master Simulator</h4>
+                <i class="fas fa-wand-magic-sparkles text-indigo-400 text-xs"></i>
+                <h4 class="text-xs font-black text-white uppercase tracking-wider">Interactive Marks Simulator</h4>
             </div>
-            <button onclick="resetSim('${courseCode}')" class="text-[10px] bg-white/10 hover:bg-white/20 text-gray-300 px-3 py-1.5 rounded-lg font-bold transition-colors active:scale-95">Reset</button>
+            <button type="button" onclick="resetSim('${courseCode}')" class="text-[10px] bg-white/10 hover:bg-white/15 text-gray-200 px-2.5 py-1 rounded-xl font-bold border border-white/10 transition active:scale-95 flex items-center gap-1">
+                <i class="fas fa-rotate-left text-[9px]"></i> Reset Official
+            </button>
         </div>
 
         ${internalsSimSection}
 
-        ${(() => {
-            const isTh = !subject.is_lab;
-            const simKeysForCA = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
-            const curCA = calcCATotal(subject.is_lab, simKeysForCA, window.simState[courseCode]);
-            const curCa40 = subject.is_lab ? Math.min(60, curCA * 1.2) : Math.min(40, (curCA / 50) * 40);
-            const pInfo = isTh ? getSemPassDetails(curCa40) : null;
-            if (!isTh || !pInfo) return '';
-
-            return `
-            <div class="mb-5 bg-gradient-to-br from-black/80 via-rose-950/20 to-purple-950/30 p-4 sm:p-5 rounded-2xl border border-rose-500/30 shadow-xl relative overflow-hidden">
-                <div class="flex items-center justify-between mb-3 border-b border-white/10 pb-2.5">
-                    <div class="flex items-center gap-2">
-                        <span class="w-2.5 h-2.5 rounded-full bg-rose-400 animate-pulse"></span>
-                        <span class="text-[10px] font-black uppercase tracking-widest text-white">PSG Pass Target (40 : 60 Rule)</span>
-                    </div>
-                    <button type="button" onclick="openPassMatrixModal('${courseCode}', ${curCa40.toFixed(1)})" class="text-[9px] font-bold text-rose-300 hover:text-white flex items-center gap-1.5 bg-rose-500/15 hover:bg-rose-500/25 px-2.5 py-1 rounded-lg border border-rose-500/30 transition active:scale-95">
-                        <i class="fas fa-table-cells text-[9px]"></i>
-                        <span>Full Matrix</span>
-                    </button>
+        <!-- Final Sem Exam Simulator with Stepper + Grade Targets -->
+        <div class="mb-4 bg-gradient-to-br from-purple-950/35 to-indigo-950/30 p-3.5 rounded-2xl border border-purple-500/25">
+            <div class="flex items-center justify-between mb-2.5">
+                <div>
+                    <span class="text-xs font-black text-white flex items-center gap-1.5">
+                        <i class="fas fa-graduation-cap text-purple-400 text-xs"></i>
+                        Final Sem Exam
+                    </span>
+                    <span class="text-[9px] text-gray-400 font-semibold">${isTh ? 'Scaled to 60% (Ceil Rounded)' : 'Scaled to 40% (Lab Exam)'}</span>
                 </div>
-
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-                    <div class="bg-black/50 p-2.5 rounded-xl border border-white/5 text-center">
-                        <div class="text-[8px] font-black uppercase text-gray-400">Your CA (For 40)</div>
-                        <div class="text-lg font-black text-indigo-300 mt-0.5" id="sim-pass-ca40-${courseCode}">${curCa40.toFixed(1)}</div>
-                        <div class="text-[7.5px] text-gray-500">Internal Score</div>
+                <div class="flex items-center gap-1.5">
+                    <button type="button" onclick="stepSimMark('${courseCode}', 'sem', -1)" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-black text-xs flex items-center justify-center active:scale-90 transition">-</button>
+                    <div class="min-w-[64px] text-center bg-black/60 px-2.5 py-1 rounded-xl border border-purple-500/30 tabular-nums">
+                        <span class="text-base font-black text-purple-300" id="val-${courseCode}-sem">${window.simState[courseCode].sem}</span>
+                        <span class="text-[9.5px] font-bold text-gray-500">/100</span>
                     </div>
-                    <div class="bg-rose-500/15 p-2.5 rounded-xl border border-rose-500/30 text-center shadow-lg shadow-rose-500/10">
-                        <div class="text-[8px] font-black uppercase text-rose-300">Need in Sem (For 100)</div>
-                        <div class="text-xl font-black text-white mt-0.5" id="sim-pass-sem100-${courseCode}">${pInfo.sem100} <span class="text-[9px] text-rose-400 font-bold">/ 100</span></div>
-                        <div class="text-[7.5px] text-rose-300 font-medium">Exam Target</div>
-                    </div>
-                    <div class="bg-black/50 p-2.5 rounded-xl border border-white/5 text-center">
-                        <div class="text-[8px] font-black uppercase text-gray-400">For 60 ➔ Round Up</div>
-                        <div class="text-lg font-black text-purple-300 mt-0.5" id="sim-pass-sem60-${courseCode}">${pInfo.sem60} ➔ <span class="text-white">${pInfo.roundUp}</span></div>
-                        <div class="text-[7.5px] text-gray-500">Scale &amp; Ceil</div>
-                    </div>
-                    <div class="bg-emerald-500/15 p-2.5 rounded-xl border border-emerald-500/30 text-center">
-                        <div class="text-[8px] font-black uppercase text-emerald-400">Final Mark</div>
-                        <div class="text-xl font-black text-emerald-300 mt-0.5" id="sim-pass-final-${courseCode}">${pInfo.final} <span class="text-[9px] text-gray-400 font-bold">/ 100</span></div>
-                        <div class="text-[7.5px] text-emerald-400 font-black">PASS (≥ 50) ✅</div>
-                    </div>
-                </div>
-
-                <div class="flex items-center justify-between gap-2 bg-black/40 p-2 rounded-xl border border-white/5">
-                    <span class="text-[10px] text-gray-300 font-medium pl-1">Apply minimum pass mark to slider:</span>
-                    <button type="button" id="sim-pass-apply-btn-${courseCode}" onclick="applyPassTargetToSim('${courseCode}', ${pInfo.sem100})" class="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-[10px] font-black uppercase tracking-wider transition flex items-center gap-1.5 shadow-md shadow-rose-600/30">
-                        <i class="fas fa-bullseye text-[9px]"></i> Set Sem to ${pInfo.sem100}
-                    </button>
-                </div>
-            </div>`;
-        })()}
-
-        <p class="text-[10px] text-gray-400 mb-3 uppercase tracking-widest font-bold">Simulate Final Exam</p>
-        <div class="mb-5 bg-gradient-to-r from-purple-900/20 to-indigo-900/20 p-5 rounded-2xl border border-purple-500/20">
-            <div class="flex justify-between items-end mb-4">
-                <div class="flex items-center gap-2">
-                    <i class="fas fa-graduation-cap text-purple-400 text-sm"></i>
-                    <span class="text-xs font-bold text-gray-200">Final Sem Exam</span>
-                </div>
-                <div class="flex items-baseline gap-1">
-                    <span class="text-2xl font-black text-purple-300" id="val-${courseCode}-sem">75</span>
-                    <span class="text-[10px] font-bold text-gray-500">/ 100</span>
+                    <button type="button" onclick="stepSimMark('${courseCode}', 'sem', 1)" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-black text-xs flex items-center justify-center active:scale-90 transition">+</button>
                 </div>
             </div>
-            <input type="range" min="0" max="100" value="75" id="slider-${courseCode}-sem"
+            <input type="range" min="0" max="100" value="${window.simState[courseCode].sem}" id="slider-${courseCode}-sem"
                 oninput="updateSim('${courseCode}', 'sem', this.value)"
-                class="w-full bg-black/50 rounded-lg appearance-none cursor-pointer accent-purple-500 acad-slider" style="height: 8px;" />
+                class="w-full bg-black/60 rounded-lg appearance-none cursor-pointer accent-purple-500 acad-slider mb-3" style="height: 8px;" />
+
+            <!-- 1-Tap Grade Target Buttons -->
+            <div class="pt-2 border-t border-white/10">
+                <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-[8.5px] font-black text-gray-400 uppercase tracking-widest">1-Tap Target Grade (Auto-sets Sem Exam)</span>
+                    ${isTh && pInfo ? `<button type="button" onclick="openPassMatrixModal('${courseCode}', ${curCa40.toFixed(1)})" class="text-[8.5px] font-black text-rose-300 underline">40:60 Proof</button>` : ''}
+                </div>
+                <div class="grid grid-cols-5 gap-1.5">
+                    ${(() => {
+                        const isAbs = isAbsoluteGradingSystem(state.rollNumber);
+                        const passMarkLabel = pInfo ? pInfo.sem100 : 50;
+                        const topGrade = isAbs ? { lbl: 'S', min: 91 } : { lbl: 'O', min: 90 };
+                        const apGrade  = isAbs ? { lbl: 'A+', min: 81 } : { lbl: 'A+', min: 80 };
+                        const aGrade   = isAbs ? { lbl: 'A', min: 71 } : { lbl: 'A', min: 70 };
+                        const bpGrade  = isAbs ? { lbl: 'B+', min: 66 } : { lbl: 'B+', min: 60 };
+                        return `
+                            <button type="button" onclick="targetGrade('${courseCode}', 50)" class="py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-200 active:scale-95 transition flex flex-col items-center">
+                                <span class="text-[9px] font-black uppercase">Pass</span>
+                                <span class="text-[10px] font-black text-rose-300 tabular-nums" id="sim-target-pass-sub-${courseCode}">${passMarkLabel}</span>
+                            </button>
+                            <button type="button" onclick="targetGrade('${courseCode}', ${bpGrade.min})" class="py-2 rounded-xl bg-teal-500/10 border border-teal-500/25 text-teal-200 active:scale-95 transition flex flex-col items-center">
+                                <span class="text-[9px] font-black uppercase">${bpGrade.lbl}</span>
+                                <span class="text-[10px] font-bold text-teal-300 tabular-nums">≥${bpGrade.min}%</span>
+                            </button>
+                            <button type="button" onclick="targetGrade('${courseCode}', ${aGrade.min})" class="py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-200 active:scale-95 transition flex flex-col items-center">
+                                <span class="text-[9px] font-black uppercase">${aGrade.lbl}</span>
+                                <span class="text-[10px] font-bold text-indigo-300 tabular-nums">≥${aGrade.min}%</span>
+                            </button>
+                            <button type="button" onclick="targetGrade('${courseCode}', ${apGrade.min})" class="py-2 rounded-xl bg-purple-500/10 border border-purple-500/25 text-purple-200 active:scale-95 transition flex flex-col items-center">
+                                <span class="text-[9px] font-black uppercase">${apGrade.lbl}</span>
+                                <span class="text-[10px] font-bold text-purple-300 tabular-nums">≥${apGrade.min}%</span>
+                            </button>
+                            <button type="button" onclick="targetGrade('${courseCode}', ${topGrade.min})" class="py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-200 active:scale-95 transition flex flex-col items-center">
+                                <span class="text-[9px] font-black uppercase">${topGrade.lbl}</span>
+                                <span class="text-[10px] font-bold text-amber-300 tabular-nums">≥${topGrade.min}%</span>
+                            </button>
+                        `;
+                    })()}
+                </div>
+            </div>
         </div>
 
-        <div class="flex items-stretch justify-between bg-black/40 p-2 rounded-2xl border border-white/5 mb-5 relative">
+        <!-- Live Result Strip -->
+        <div class="flex items-stretch justify-between bg-black/50 p-2 rounded-2xl border border-white/10 relative">
             <div class="flex-1 flex flex-col items-center justify-center p-2">
-                <span class="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-1">CA Weight</span>
-                <span class="text-xl font-black text-indigo-300" id="out-${courseCode}-ca">--</span>
-                <span class="text-[8px] text-gray-600 mt-1" id="out-${courseCode}-ca-raw">--</span>
+                <span class="text-[8.5px] text-gray-400 font-bold uppercase tracking-wider mb-0.5">CA (${isTh ? '40' : '60'})</span>
+                <span class="text-lg font-black text-indigo-300 tabular-nums" id="out-${courseCode}-ca">--</span>
+                <span class="text-[8px] text-gray-500 mt-0.5 tabular-nums" id="out-${courseCode}-ca-raw">--</span>
             </div>
-            <div class="w-px bg-white/5 my-2"></div>
+            <div class="w-px bg-white/10 my-2"></div>
             <div class="flex-1 flex flex-col items-center justify-center p-2">
-                <span class="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-1">Sem Weight</span>
-                <span class="text-xl font-black text-purple-300" id="out-${courseCode}-sem">--</span>
-                <span class="text-[8px] text-gray-600 mt-1" id="out-${courseCode}-sem-raw">--</span>
+                <span class="text-[8.5px] text-gray-400 font-bold uppercase tracking-wider mb-0.5">Sem (${isTh ? '60' : '40'})</span>
+                <span class="text-lg font-black text-purple-300 tabular-nums" id="out-${courseCode}-sem">--</span>
+                <span class="text-[8px] text-gray-500 mt-0.5 tabular-nums" id="out-${courseCode}-sem-raw">--</span>
             </div>
-            <div class="w-px bg-white/5 my-2"></div>
-            <div id="out-${courseCode}-box" class="flex-[1.2] flex flex-col items-center justify-center p-3 rounded-xl border">
-                <span class="text-[9px] text-gray-400 font-bold uppercase tracking-widest mb-1">Final Total</span>
-                <span class="text-3xl font-black" id="out-${courseCode}-total">--%</span>
-                <span id="out-${courseCode}-grade" class="text-[10px] font-bold mt-1.5 px-2 py-0.5 rounded bg-black/20 text-center leading-tight"></span>
-            </div>
-        </div>
-
-        <div>
-            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-3">Smart Target — Marks needed in final exam</span>
-            <div class="grid grid-cols-2 gap-3">
-                ${(() => {
-                    const isAbs = isAbsoluteGradingSystem(state.rollNumber);
-                    const simKeysForTarget = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
-                    const currentCAVal = calcCATotal(subject.is_lab, simKeysForTarget, window.simState[courseCode]);
-                    const currentCa40Val = subject.is_lab ? Math.min(60, currentCAVal * 1.2) : Math.min(40, (currentCAVal / 50) * 40);
-                    const passTargetInfo = !subject.is_lab ? getSemPassDetails(currentCa40Val) : null;
-                    const passMarkLabel = passTargetInfo ? `${passTargetInfo.sem100} / 100` : '50%';
-
-                    if (isAbs) {
-                        return `
-                            <button onclick="targetGrade('${courseCode}', 91)" class="active:scale-95 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 hover:bg-amber-500/20 transition">Aim Grade S (91)</button>
-                            <button onclick="targetGrade('${courseCode}', 81)" class="active:scale-95 py-3 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-bold text-purple-400 hover:bg-purple-500/20 transition">Aim A+ (81)</button>
-                            <button onclick="targetGrade('${courseCode}', 71)" class="active:scale-95 py-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-bold text-indigo-400 hover:bg-indigo-500/20 transition">Aim A (71)</button>
-                            <button onclick="targetGrade('${courseCode}', 50)" class="active:scale-95 py-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs font-bold text-rose-300 hover:bg-rose-500/25 transition flex flex-col items-center justify-center"><span>Just Pass (50%)</span><span class="text-[9.5px] font-black text-rose-400 mt-0.5" id="sim-target-pass-sub-${courseCode}">Need ${passMarkLabel} in Sem</span></button>
-                        `;
-                    } else {
-                        return `
-                            <button onclick="targetGrade('${courseCode}', 90)" class="active:scale-95 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 hover:bg-amber-500/20 transition">Aim Grade O (90)</button>
-                            <button onclick="targetGrade('${courseCode}', 80)" class="active:scale-95 py-3 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs font-bold text-purple-400 hover:bg-purple-500/20 transition">Aim A+ (80)</button>
-                            <button onclick="targetGrade('${courseCode}', 70)" class="active:scale-95 py-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-bold text-indigo-400 hover:bg-indigo-500/20 transition">Aim A (70)</button>
-                            <button onclick="targetGrade('${courseCode}', 50)" class="active:scale-95 py-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs font-bold text-rose-300 hover:bg-rose-500/25 transition flex flex-col items-center justify-center"><span>Just Pass (50%)</span><span class="text-[9.5px] font-black text-rose-400 mt-0.5" id="sim-target-pass-sub-${courseCode}">Need ${passMarkLabel} in Sem</span></button>
-                        `;
-                    }
-                })()}
+            <div class="w-px bg-white/10 my-2"></div>
+            <div id="out-${courseCode}-box" class="flex-[1.25] flex flex-col items-center justify-center p-2.5 rounded-xl border">
+                <span class="text-[8.5px] text-gray-300 font-bold uppercase tracking-wider mb-0.5">Final Total</span>
+                <span class="text-2xl font-black tabular-nums" id="out-${courseCode}-total">--%</span>
+                <span id="out-${courseCode}-grade" class="text-[9.5px] font-black mt-1 px-2 py-0.5 rounded bg-black/30 text-center leading-tight"></span>
             </div>
         </div>
     </div>`;
@@ -6288,19 +7238,59 @@ function toggleInternalCard(code) {
     if (!expand) return;
     
     expand.classList.toggle('expanded');
-    if(expand.classList.contains('expanded')) {
+    if (expand.classList.contains('expanded')) {
         card.classList.add('border-indigo-500/30', 'ring-1', 'ring-indigo-500/20');
-        if(bar) bar.style.display = 'none';
+        if (bar) bar.style.display = 'none';
     } else {
         card.classList.remove('border-indigo-500/30', 'ring-1', 'ring-indigo-500/20');
-        if(bar) bar.style.display = 'block';
+        if (bar) bar.style.display = 'block';
     }
 }
 
+function stepSimMark(courseCode, key, delta) {
+    if (!window.simState || !window.simState[courseCode]) return;
+    const max = key === 'sem' ? 100 : ((window.METADATA[key] || window.METADATA['c1']).max || 30);
+    const cur = Number(window.simState[courseCode][key] || 0);
+    const next = Math.max(0, Math.min(max, Number((cur + delta).toFixed(1))));
+    updateSim(courseCode, key, next);
+}
+window.stepSimMark = stepSimMark;
+
 function updateSim(courseCode, key, val) {
-    window.simState[courseCode][key] = Number(val);
-    document.getElementById(`val-${courseCode}-${key}`).innerText = val;
-    if(key === 'sem') document.getElementById(`slider-${courseCode}-sem`).value = val;
+    const numVal = Number(val);
+    if (!window.simState[courseCode]) window.simState[courseCode] = { sem: 75 };
+    window.simState[courseCode][key] = numVal;
+
+    const valEl = document.getElementById(`val-${courseCode}-${key}`);
+    if (valEl) valEl.innerText = numVal;
+
+    const sliderEl = document.getElementById(`slider-${courseCode}-${key}`);
+    if (sliderEl && Number(sliderEl.value) !== numVal) sliderEl.value = numVal;
+
+    const pillValEl = document.getElementById(`pill-val-${courseCode}-${key}`);
+    if (pillValEl) pillValEl.innerText = `~${numVal}`;
+
+    // Update Official vs Simulated badge if this component had an official mark
+    if (key !== 'sem' && state.academics && state.academics.internals) {
+        const sub = state.academics.internals.find(s => s.course_code === courseCode);
+        if (sub) {
+            const expectedKeys = getSchemaKeys(sub.is_lab, sub.row_data.length);
+            const idx = expectedKeys.indexOf(key);
+            const rawVal = idx >= 0 ? sub.row_data[idx] : null;
+            const actual = (!rawVal || rawVal === '*' || rawVal.trim() === '') ? null : parseFloat(rawVal);
+            const badgeEl = document.getElementById(`badge-${courseCode}-${key}`);
+            if (badgeEl && actual !== null) {
+                if (Math.abs(numVal - actual) > 0.01) {
+                    badgeEl.innerText = `Simulated (Official: ${actual})`;
+                    badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30';
+                } else {
+                    badgeEl.innerText = `Official: ${actual}`;
+                    badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25';
+                }
+            }
+        }
+    }
+
     calculateSimOutputs(courseCode);
 
     const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
@@ -6311,16 +7301,30 @@ function updateSim(courseCode, key, val) {
     }
 }
 
+function resetAllInternalsSim() {
+    const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
+    if (roll) {
+        try { localStorage.removeItem(`bunker_internals_sim_${roll}`); } catch {}
+    }
+    if (state.academics && Array.isArray(state.academics.internals)) {
+        window.simState = {};
+        renderInternals(state.academics.internals);
+        showToast('Reset all courses to official portal marks');
+    }
+}
+window.resetAllInternalsSim = resetAllInternalsSim;
+
 function resetSim(courseCode) {
     if (!courseCode) {
-        resetPredictionSim();
+        resetAllInternalsSim();
         return;
     }
     const subject = state.academics.internals.find(s => s.course_code === courseCode);
+    if (!subject) return;
     const rowData = subject.row_data;
     const numCols = rowData.length;
     const expectedKeys = getSchemaKeys(subject.is_lab, numCols);
-    const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total');
+    const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
     
     const d = {};
     expectedKeys.forEach((k, i) => {
@@ -6332,16 +7336,28 @@ function resetSim(courseCode) {
     simKeys.forEach(k => { 
         const actual = d[k];
         const meta = window.METADATA[k] || window.METADATA['c1'];
-        window.simState[courseCode][k] = actual !== null ? actual : Math.round(meta.max * 0.7); 
+        window.simState[courseCode][k] = actual !== null ? actual : Math.round(meta.max * 0.75); 
         
-        const slider = document.querySelector(`input[oninput="updateSim('${courseCode}', '${k}', this.value)"]`);
-        if(slider) slider.value = window.simState[courseCode][k];
+        const slider = document.getElementById(`slider-${courseCode}-${k}`);
+        if (slider) slider.value = window.simState[courseCode][k];
         const textVal = document.getElementById(`val-${courseCode}-${k}`);
-        if(textVal) textVal.innerText = window.simState[courseCode][k];
+        if (textVal) textVal.innerText = window.simState[courseCode][k];
+        const badgeEl = document.getElementById(`badge-${courseCode}-${k}`);
+        if (badgeEl) {
+            if (actual !== null) {
+                badgeEl.innerText = `Official: ${actual}`;
+                badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25';
+            } else {
+                badgeEl.innerText = 'Pending';
+                badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30';
+            }
+        }
     });
 
-    document.getElementById(`slider-${courseCode}-sem`).value = 75;
-    document.getElementById(`val-${courseCode}-sem`).innerText = 75;
+    const semSlider = document.getElementById(`slider-${courseCode}-sem`);
+    if (semSlider) semSlider.value = 75;
+    const semVal = document.getElementById(`val-${courseCode}-sem`);
+    if (semVal) semVal.innerText = 75;
 
     calculateSimOutputs(courseCode, subject);
 
@@ -6351,6 +7367,7 @@ function resetSim(courseCode) {
             localStorage.setItem(`bunker_internals_sim_${roll}`, JSON.stringify(window.simState));
         } catch {}
     }
+    showToast(`Reset ${courseCode} to official marks`);
 }
 
 /**
@@ -6451,31 +7468,43 @@ function calculateSimOutputs(courseCode, subjectObj) {
     const totalCA = calcCATotal(subject.is_lab, simKeys, window.simState[courseCode]);
     // Lab: CA max=50 scaled UP to 60 (×1.2); Theory: CA max=50 scaled DOWN to 40 (×0.8)
     const ca40 = subject.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
-    // Lab: FE max=50 marks scaled DOWN to 40 (×0.4 of 100); Theory: FE 100 marks scaled DOWN to 60 (×0.6 of 100)
-    const feFactor = subject.is_lab ? 0.4 : 0.6;
-    const sem60 = (window.simState[courseCode].sem / 100) * (subject.is_lab ? 40 : 60);
-    const grandTotal = ca40 + sem60;
+    // Lab: FE scaled to 40 (×0.4); Theory: FE scaled to 60 (×0.6) with PSG ceiling rounding
+    const semRaw = (window.simState[courseCode].sem / 100) * (subject.is_lab ? 40 : 60);
+    const sem60 = Math.ceil(Number(semRaw.toFixed(1)) - 1e-6);
+    const grandTotal = Math.min(100, Number((ca40 + sem60).toFixed(1)));
     const info = getGradeInfo(grandTotal);
 
     const caEl = document.getElementById(`out-${courseCode}-ca`);
     if(caEl) {
         caEl.innerText = ca40.toFixed(1);
         document.getElementById(`out-${courseCode}-ca-raw`).innerText = subject.is_lab ? `Lab: ${totalCA.toFixed(1)}→×1.2` : `Theory: ${totalCA.toFixed(1)}/50`;
-        document.getElementById(`out-${courseCode}-sem`).innerText = sem60.toFixed(1);
-        document.getElementById(`out-${courseCode}-sem-raw`).innerText = `Exam ${window.simState[courseCode].sem}/100 × 60%`;
+        document.getElementById(`out-${courseCode}-sem`).innerText = `${sem60}`;
+        document.getElementById(`out-${courseCode}-sem-raw`).innerText = `${window.simState[courseCode].sem}/100 (${semRaw.toFixed(1)}➔${sem60})`;
         
         document.getElementById(`out-${courseCode}-total`).innerText = grandTotal.toFixed(1) + '%';
-        document.getElementById(`out-${courseCode}-total`).className = `text-3xl font-black ${info.color}`;
+        document.getElementById(`out-${courseCode}-total`).className = `text-2xl font-black tabular-nums ${info.color}`;
         
         const box = document.getElementById(`out-${courseCode}-box`);
-        box.className = `flex-[1.2] flex flex-col items-center justify-center p-3 rounded-xl border ${info.bg} ${info.border}`;
+        if (box) box.className = `flex-[1.25] flex flex-col items-center justify-center p-2.5 rounded-xl border ${info.bg} ${info.border}`;
         
         const gradeBadge = document.getElementById(`out-${courseCode}-grade`);
-        gradeBadge.className = `text-[10px] font-bold mt-1.5 px-2 py-0.5 rounded ${info.color} bg-black/20 text-center leading-tight`;
-        gradeBadge.innerHTML = `Grade: ${info.grade}`;
+        if (gradeBadge) {
+            gradeBadge.className = `text-[9.5px] font-black mt-1 px-2 py-0.5 rounded ${info.color} bg-black/30 text-center leading-tight`;
+            gradeBadge.innerHTML = `Grade: ${info.grade} (${info.gp} GP)`;
+        }
     }
 
-    // Dynamic real-time update for the pass target card inside simulator
+    // Keep course card header CA score & progress bar live-synced while simulating
+    const cardCaScoreEl = document.getElementById(`card-ca-score-${courseCode}`);
+    if (cardCaScoreEl) cardCaScoreEl.innerText = ca40.toFixed(1);
+    const barFillEl = document.getElementById(`bar-fill-${courseCode}`);
+    if (barFillEl) {
+        const maxScale = subject.is_lab ? 60 : 40;
+        const pct = Math.min(100, Math.max(0, Math.round((ca40 / maxScale) * 100)));
+        barFillEl.style.width = `${pct}%`;
+    }
+
+    // Dynamic real-time update for the pass & grade target pills
     if (!subject.is_lab) {
         const passReq = getSemPassDetails(ca40);
         const pCa = document.getElementById(`sim-pass-ca40-${courseCode}`);
@@ -6494,14 +7523,22 @@ function calculateSimOutputs(courseCode, subjectObj) {
             pBtn.setAttribute('onclick', `applyPassTargetToSim('${courseCode}', ${passReq.sem100})`);
         }
         if (pTargetSub) {
-            pTargetSub.innerText = `Need ${passReq.sem100} in Sem`;
+            pTargetSub.innerText = `${passReq.sem100}`;
         }
 
-        // Keep card-front pass target badge synchronized
+        // Keep card-front pass & grade target badges synchronized using official PSG ceiling rule
         const cardPassReq = document.getElementById(`card-pass-req-${courseCode}`);
-        if (cardPassReq) {
-            cardPassReq.innerText = passReq.sem100;
-        }
+        if (cardPassReq) cardPassReq.innerText = passReq.sem100;
+
+        const reqB = getSemNeededForGrade(ca40, 61, subject.is_lab);
+        const reqA = getSemNeededForGrade(ca40, 71, subject.is_lab);
+        const reqAp = getSemNeededForGrade(ca40, 81, subject.is_lab);
+        const cardBReq = document.getElementById(`card-b-req-${courseCode}`);
+        const cardAReq = document.getElementById(`card-a-req-${courseCode}`);
+        const cardApReq = document.getElementById(`card-ap-req-${courseCode}`);
+        if (cardBReq) cardBReq.innerText = reqB !== null ? reqB : '—';
+        if (cardAReq) cardAReq.innerText = reqA !== null ? reqA : '—';
+        if (cardApReq) cardApReq.innerText = reqAp !== null ? reqAp : '—';
 
         // Keep pending simulator live bar synchronized
         const dynCaEl = document.getElementById(`dyn-sim-ca-${courseCode}`);
@@ -6537,12 +7574,13 @@ function recalculateCGPAPrediction() {
         if (window.simState && window.simState[courseCode]) {
             const numCols = sub.row_data.length;
             const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
-            const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total');
+            const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
             const totalCA = calcCATotal(sub.is_lab, simKeys, window.simState[courseCode]);
             const ca40 = sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
             const semExam = window.simState[courseCode].sem !== undefined ? window.simState[courseCode].sem : 75;
-            const sem60 = (semExam / 100) * (sub.is_lab ? 40 : 60);
-            const grandTotal = ca40 + sem60;
+            const semRaw = (semExam / 100) * (sub.is_lab ? 40 : 60);
+            const sem60 = Math.ceil(Number(semRaw.toFixed(1)) - 1e-6);
+            const grandTotal = Math.min(100, Number((ca40 + sem60).toFixed(1)));
             const info = getGradeInfo(grandTotal);
             gp = info.gp;
             grade = info.grade;
@@ -6552,13 +7590,23 @@ function recalculateCGPAPrediction() {
             grade = info.grade;
         }
 
-        // 2. Determine credits
+        // 2. Determine official credits (prefer scraped studying_courses / internals credits)
         let credits = creditsMap[courseCode];
         if (isZeroCreditCourse(courseCode)) {
             credits = 0;
             creditsMap[courseCode] = 0;
+        } else if (sub.credits !== undefined && !isNaN(Number(sub.credits))) {
+            credits = Number(sub.credits);
+            creditsMap[courseCode] = credits;
         } else if (credits === undefined) {
-            credits = sub.is_lab ? 2 : 3;
+            const studMatch = Array.isArray(state.academics?.gpa?.studying_courses)
+                ? state.academics.gpa.studying_courses.find(x => String(x.course).toUpperCase() === String(courseCode).toUpperCase())
+                : null;
+            if (studMatch && studMatch.credits !== undefined) {
+                credits = Number(studMatch.credits);
+            } else {
+                credits = sub.is_lab ? 2 : 3;
+            }
             creditsMap[courseCode] = credits;
         }
 
@@ -6613,8 +7661,11 @@ function recalculateCGPAPrediction() {
         const maxMarksObj = {};
         simKeys.forEach(k => {
             const meta = window.METADATA[k] || window.METADATA["c1"];
-            const actual = sub[k] !== undefined && sub[k] !== null && sub[k] !== "" && sub[k] !== "*" ? parseFloat(sub[k]) : null;
-            maxMarksObj[k] = (actual !== null && !isNaN(actual)) ? actual : (meta ? meta.max : 10);
+            const idx = expectedKeys.indexOf(k);
+            const rawCell = idx >= 0 && Array.isArray(sub.row_data) ? sub.row_data[idx] : null;
+            const parsedCell = (rawCell !== undefined && rawCell !== null && rawCell !== "" && rawCell !== "*") ? parseFloat(rawCell) : null;
+            const compVal = (sub.comp && sub.comp[k] !== undefined && sub.comp[k] !== null) ? parseFloat(sub.comp[k]) : parsedCell;
+            maxMarksObj[k] = (compVal !== null && !isNaN(compVal)) ? compVal : (meta ? meta.max : 10);
         });
         const maxCA = calcCATotal(sub.is_lab, simKeys, maxMarksObj);
         const maxCA40 = sub.is_lab ? Math.min(60, maxCA * 1.2) : Math.min(40, (maxCA / 50) * 40);
@@ -6675,6 +7726,7 @@ function recalculateCGPAPrediction() {
         if (badgeEl) {
             let gp = 0;
             let grade = 'U';
+            let info = getGradeInfo(75);
             if (window.simState && window.simState[sub.course_code]) {
                 const numCols = sub.row_data.length;
                 const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
@@ -6682,17 +7734,16 @@ function recalculateCGPAPrediction() {
                 const totalCA = calcCATotal(sub.is_lab, simKeys, window.simState[sub.course_code]);
                 const ca40 = sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
                 const semExam = window.simState[sub.course_code].sem !== undefined ? window.simState[sub.course_code].sem : 75;
-                const sem60 = (semExam / 100) * (sub.is_lab ? 40 : 60);
-                const grandTotal = ca40 + sem60;
-                const info = getGradeInfo(grandTotal);
+                const semRaw = (semExam / 100) * (sub.is_lab ? 40 : 60);
+                const sem60 = Math.ceil(Number(semRaw.toFixed(1)) - 1e-6);
+                const grandTotal = Math.min(100, Number((ca40 + sem60).toFixed(1)));
+                info = getGradeInfo(grandTotal);
                 gp = info.gp;
                 grade = info.grade;
             } else {
-                const info = getGradeInfo(75);
                 gp = info.gp;
                 grade = info.grade;
             }
-            const info = getGradeInfo(gp * 10);
             badgeEl.className = `text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md border ${info.bg} ${info.color} ${info.border}`;
             badgeEl.textContent = `${grade} (${gp} GP)`;
         }
@@ -6873,6 +7924,7 @@ function selectSemesterGPA(targetSem) {
     const valEl = document.getElementById('gpa-value');
     const titleEl = document.getElementById('gpa-hero-title');
     const creditsEl = document.getElementById('cgpa-credits');
+    const cgpaPill = document.getElementById('results-cgpa-pill');
 
     if (targetSem === 'all' || targetSem === 'overall') {
         const cgpa = (state.academics.cgpa && state.academics.cgpa.cgpa) || gpaData.overall_cgpa || gpaData.gpa;
@@ -6881,8 +7933,9 @@ function selectSemesterGPA(targetSem) {
             valEl.textContent = cgpa === 'RA' ? 'RA' : (cgpa || '--');
             valEl.style.color = cgpa === 'RA' ? '#EF4444' : cgpa >= 8.5 ? '#10B981' : cgpa >= 7 ? '#6366f1' : cgpa >= 5 ? '#F59E0B' : '#EF4444';
         }
+        if (cgpaPill) cgpaPill.textContent = `CGPA ${cgpa || '--'}`;
         if (creditsEl) creditsEl.textContent = `${gpaData.total_credits || 0} total credits earned`;
-        document.getElementById('gpa-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.querySelectorAll('[id^="sem-section-"]').forEach(sec => sec.classList.remove('hidden'));
     } else {
         const s = parseInt(targetSem);
         const sGPA = semwiseGPA[s] !== undefined ? semwiseGPA[s] : '--';
@@ -6894,8 +7947,15 @@ function selectSemesterGPA(targetSem) {
             const g = parseFloat(sGPA);
             valEl.style.color = sGPA === 'RA' || isNaN(g) ? '#EF4444' : g >= 8.5 ? '#10B981' : g >= 7 ? '#6366f1' : g >= 5 ? '#F59E0B' : '#EF4444';
         }
+        if (cgpaPill) cgpaPill.textContent = `Sem ${s}: ${sGPA}`;
         if (creditsEl) creditsEl.textContent = `${sCr} Credits • ${sCount} Courses`;
-        document.getElementById(`sem-section-${s}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.querySelectorAll('[id^="sem-section-"]').forEach(sec => {
+            if (sec.id === `sem-section-${s}`) {
+                sec.classList.remove('hidden');
+            } else {
+                sec.classList.add('hidden');
+            }
+        });
     }
 
     // Update active highlight on chips
@@ -6913,24 +7973,62 @@ window.selectSemesterGPA = selectSemesterGPA;
 function renderGPA(gpaData) {
     _currentGPAData = gpaData;
     const valEl = document.getElementById('gpa-value');
-    const tableEl = document.getElementById('gpa-table');
+    const tableEl = document.getElementById('results-sem-list') || document.getElementById('gpa-table');
     const titleEl = document.getElementById('gpa-hero-title');
     const creditsEl = document.getElementById('cgpa-credits');
     const resultsChipsWrapper = document.getElementById('results-sem-chips');
     const resultsChipsList = document.getElementById('results-sem-chips-list');
-    if (!valEl || !tableEl) return;
+    const cgpaPill = document.getElementById('results-cgpa-pill');
+    if (!tableEl) return;
 
     const gpa = gpaData.gpa;
-    valEl.textContent = gpa === 'RA' ? 'RA' : (gpa || '--');
-    valEl.style.color = gpa === 'RA' ? '#EF4444' : gpa >= 8.5 ? '#10B981' : gpa >= 7 ? '#6366f1' : gpa >= 5 ? '#F59E0B' : '#EF4444';
+    const overallCGPA = (state.academics.cgpa && state.academics.cgpa.cgpa) || gpaData.overall_cgpa || gpa;
+    if (cgpaPill && overallCGPA) {
+        cgpaPill.textContent = `CGPA ${overallCGPA}`;
+        cgpaPill.classList.remove('hidden');
+    }
+    if (valEl) {
+        valEl.textContent = gpa === 'RA' ? 'RA' : (gpa || '--');
+        valEl.style.color = gpa === 'RA' ? '#EF4444' : gpa >= 8.5 ? '#10B981' : gpa >= 7 ? '#6366f1' : gpa >= 5 ? '#F59E0B' : '#EF4444';
+    }
 
     if (titleEl) {
         titleEl.textContent = gpaData.latest_sem ? `Semester ${gpaData.latest_sem} GPA` : 'Semester GPA';
     }
 
     const courses = gpaData.table || [];
+    const studyingCourses = gpaData.studying_courses || [];
     if (courses.length === 0) {
-        tableEl.innerHTML = '<div class="text-center py-10 text-gray-600 text-xs">No semester data found</div>';
+        if (studyingCourses.length > 0) {
+            const curSem = studyingCourses[0].sem || 1;
+            const totCr = studyingCourses.reduce((acc, c) => acc + (parseInt(c.credits, 10) || 0), 0);
+            let studHtml = `
+            <div class="mb-4 p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-between gap-3">
+                <div>
+                    <h4 class="text-xs font-black text-white uppercase tracking-wider">Semester ${curSem} In Progress</h4>
+                    <p class="text-[10px] text-indigo-200/80 mt-0.5">Official end-semester results are not published yet. Showing ${studyingCourses.length} registered courses (${totCr} Credits).</p>
+                </div>
+                <button type="button" onclick="openPassMatrixModal()" class="shrink-0 px-3 py-2 rounded-xl bg-indigo-600 text-white text-[9px] font-black uppercase tracking-wider active:scale-95 transition">Predict SGPA</button>
+            </div>
+            <div class="bg-[#121216] rounded-[24px] p-2.5 border border-white/[0.07] space-y-2 shadow-lg">`;
+            studyingCourses.forEach(c => {
+                studHtml += `
+                <div class="flex items-center justify-between p-3 rounded-2xl bg-white/[0.02] border border-white/[0.04] gap-2.5">
+                    <div class="flex-1 min-w-0 pr-1">
+                        <p class="text-[12px] font-bold text-white mb-1 leading-snug break-words">${c.title}</p>
+                        <div class="flex items-center gap-1.5 flex-wrap">
+                            <span class="text-[9px] text-gray-400 font-bold uppercase tracking-wider">${c.course} • ${c.credits || 0} CR</span>
+                            ${c.category ? `<span class="text-[8px] font-black text-indigo-400/80 bg-indigo-500/10 border-indigo-500/20 px-1.5 py-0.5 rounded border">${c.category}</span>` : ''}
+                        </div>
+                    </div>
+                    <span class="text-[9px] font-black uppercase px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-300 border border-emerald-500/25 shrink-0">Studying</span>
+                </div>`;
+            });
+            studHtml += `</div>`;
+            tableEl.innerHTML = studHtml;
+        } else {
+            tableEl.innerHTML = '<div class="text-center py-10 text-gray-500 text-xs font-bold">No semester result data found yet</div>';
+        }
         if (resultsChipsWrapper) resultsChipsWrapper.classList.add('hidden');
         return;
     }
@@ -6985,14 +8083,10 @@ function renderGPA(gpaData) {
     // Render sem-wise GPA chips in Results panel
     if (resultsChipsWrapper && resultsChipsList) {
         if (sortedSems.length > 0) {
-            let chipsHtml = '';
-            const overallCGPA = (state.academics.cgpa && state.academics.cgpa.cgpa) || gpaData.overall_cgpa;
-            if (overallCGPA) {
-                chipsHtml += `<button type="button" data-sem="all" onclick="selectSemesterGPA('all')" class="results-sem-chip flex flex-col items-center px-3 py-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:scale-105 active:scale-95 transition-all cursor-pointer">
-                    <span class="text-[8px] font-black uppercase tracking-widest opacity-60">Overall</span>
-                    <span class="text-xs font-black leading-tight">${overallCGPA}</span>
-                </button>`;
-            }
+            let chipsHtml = `<button type="button" data-sem="all" onclick="selectSemesterGPA('all')" class="results-sem-chip flex-shrink-0 flex flex-col items-center px-3.5 py-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 active:scale-95 transition-all cursor-pointer ring-2 ring-indigo-400 scale-105">
+                <span class="text-[8px] font-black uppercase tracking-widest opacity-70">All Sems</span>
+                <span class="text-xs font-black leading-tight mt-0.5">${overallCGPA || '--'}</span>
+            </button>`;
             sortedSems.forEach(s => {
                 const sGPA = semwiseGPA[s] !== undefined ? semwiseGPA[s] : '--';
                 const g = parseFloat(sGPA);
@@ -7002,19 +8096,13 @@ function renderGPA(gpaData) {
                             : g >= 7   ? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20'
                             : g >= 5   ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
                             :            'text-rose-400 bg-rose-500/10 border-rose-500/20';
-                chipsHtml += `<button type="button" data-sem="${s}" onclick="selectSemesterGPA(${s})" class="results-sem-chip flex flex-col items-center px-3 py-1.5 rounded-xl border ${color} hover:scale-105 active:scale-95 transition-all cursor-pointer">
-                    <span class="text-[8px] font-black uppercase tracking-widest opacity-60">Sem ${s}</span>
-                    <span class="text-xs font-black leading-tight">${sGPA}</span>
+                chipsHtml += `<button type="button" data-sem="${s}" onclick="selectSemesterGPA(${s})" class="results-sem-chip flex-shrink-0 flex flex-col items-center px-3.5 py-2 rounded-2xl border ${color} active:scale-95 transition-all cursor-pointer">
+                    <span class="text-[8px] font-black uppercase tracking-widest opacity-70">Sem ${s}</span>
+                    <span class="text-xs font-black leading-tight mt-0.5">${sGPA}</span>
                 </button>`;
             });
             resultsChipsList.innerHTML = chipsHtml;
             resultsChipsWrapper.classList.remove('hidden');
-
-            // Set initial active ring
-            const activeBtn = resultsChipsList.querySelector(`[data-sem="${activeSem}"]`);
-            if (activeBtn) {
-                activeBtn.classList.add('ring-2', 'ring-indigo-400', 'scale-105', 'bg-indigo-500/25', 'border-indigo-400');
-            }
         } else {
             resultsChipsWrapper.classList.add('hidden');
         }
@@ -7034,17 +8122,17 @@ function renderGPA(gpaData) {
 
         html += `
         <div class="mb-5" id="sem-section-${sem}">
-            <div class="flex items-center justify-between px-1 mb-2">
+            <div class="flex items-center justify-between px-1 mb-2.5">
                 <div class="flex items-center gap-2">
-                    <p class="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Semester ${sem}</p>
-                    <span class="text-[9px] font-bold text-gray-500 bg-white/5 px-2 py-0.5 rounded-md border border-white/5">${sCr} Credits</span>
+                    <p class="text-[11px] font-black text-indigo-400 uppercase tracking-widest">Semester ${sem}</p>
+                    <span class="text-[9px] font-bold text-gray-400 bg-white/5 px-2 py-0.5 rounded-lg border border-white/10">${sCr} Credits • ${sems[sem].length} Courses</span>
                 </div>
                 <div class="flex items-center gap-1.5">
                     <span class="text-[8px] font-bold text-gray-500 uppercase tracking-wider">SGPA</span>
                     <span class="text-xs font-black ${badgeColor} px-2.5 py-0.5 rounded-xl border">${sGPA}</span>
                 </div>
             </div>
-            <div class="bg-black/20 rounded-3xl p-2 border border-white/5 space-y-1">`;
+            <div class="bg-[#121216] rounded-[24px] p-2.5 border border-white/[0.07] space-y-2 shadow-lg">`;
 
         sems[sem].forEach(c => {
             const gradeStr = c.grade || '--';
@@ -7061,28 +8149,24 @@ function renderGPA(gpaData) {
                 const gMap = { 'S': 10, 'O': 10, 'A+': 9, 'A': 8, 'B+': 7, 'B': 6.5, 'C+': 6, 'C': 5, 'D': 6, 'E': 5, 'P': 5 };
                 if (gMap[gClean] !== undefined) effectiveGP = gMap[gClean];
             }
-            const gpBadge = (effectiveGP !== null && effectiveGP !== undefined && !isNonCgpa) ? `<span class="text-[9px] text-gray-400 font-bold ml-1">(${effectiveGP} GP)</span>` : '';
+            const gpBadge = (effectiveGP !== null && effectiveGP !== undefined && !isNonCgpa) ? `<span class="text-[9px] text-gray-400 font-bold block mt-0.5">${effectiveGP} GP</span>` : '';
 
             html += `
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 rounded-2xl ${isArrear ? 'bg-rose-950/20 border border-rose-500/30' : 'hover:bg-white/5'} transition-colors gap-2">
-                <div class="flex-1 pr-2">
-                    <p class="text-[11px] sm:text-xs font-bold text-white mb-0.5 leading-snug">${c.title}</p>
+            <div class="flex items-center justify-between p-3 rounded-2xl ${isArrear ? 'bg-rose-950/25 border border-rose-500/30' : 'bg-white/[0.02] border border-white/[0.04]'} gap-2.5">
+                <div class="flex-1 min-w-0 pr-1">
+                    <p class="text-[12px] font-bold text-white mb-1 leading-snug break-words">${c.title}</p>
                     <div class="flex items-center gap-1.5 flex-wrap">
-                        <span class="text-[9px] text-gray-500 font-bold uppercase tracking-wider">${c.course} • ${c.credits || 0} CR</span>
+                        <span class="text-[9px] text-gray-400 font-bold uppercase tracking-wider">${c.course} • ${c.credits || 0} CR</span>
                         ${catBadge}
                         ${nonCgpaBadge}
                         ${arrearBadge}
                     </div>
                 </div>
-                <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end mt-1 sm:mt-0 pt-2 sm:pt-0 border-t border-white/5 sm:border-t-0">
-                    <div class="${isArrear ? 'bg-rose-500/20 border border-rose-500/30' : 'bg-white/5 border border-white/10'} px-3 py-1.5 rounded-lg min-w-[70px] text-center">
-                        <span class="text-xs font-black ${isArrear ? 'text-rose-400' : gradeStr === 'Completed' ? 'text-emerald-400' : 'text-indigo-300'}">${gradeStr}</span>
+                <div class="flex items-center gap-2 shrink-0">
+                    <div class="${isArrear ? 'bg-rose-500/20 border border-rose-500/30' : 'bg-indigo-500/10 border border-indigo-500/25'} px-3 py-1.5 rounded-xl min-w-[64px] text-center">
+                        <span class="text-sm font-black ${isArrear ? 'text-rose-400' : gradeStr === 'Completed' ? 'text-emerald-400' : 'text-indigo-300'} leading-none">${gradeStr}</span>
                         ${gpBadge}
                     </div>
-                    ${c.result ? `
-                    <div class="${isPass ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/20 border-rose-500/30'} px-3 py-1.5 rounded-lg border">
-                        <span class="text-[10px] font-bold ${isPass ? 'text-emerald-400' : 'text-rose-400'} uppercase tracking-wider">${c.result}</span>
-                    </div>` : ''}
                 </div>
             </div>`;
         });
@@ -7094,18 +8178,25 @@ function renderGPA(gpaData) {
 
 // ---- CGPA ----
 function renderCGPA(cgpaData) {
-    const valEl = document.getElementById('internals-cgpa-value');
+    if (!cgpaData) return;
+    const valEl = document.getElementById('others-cgpa-value') || document.getElementById('internals-cgpa-value');
     const credEl = document.getElementById('cgpa-credits');
     const chartEl = document.getElementById('cgpa-chart');
     const semList = document.getElementById('cgpa-semlist');
     const semChipsWrapper = document.getElementById('internals-sem-chips');
     const semChipsList = document.getElementById('internals-sem-chips-list');
-    if (!valEl) return;
+    const resultsCgpaPill = document.getElementById('results-cgpa-pill');
 
     const cgpa = cgpaData.cgpa;
     const isWithheld = cgpa === '***' || cgpa === 'RA';
-    valEl.textContent = isWithheld ? '***' : (cgpa || '--');
-    valEl.style.color = isWithheld ? '#EF4444' : cgpa >= 8.5 ? '#10B981' : cgpa >= 7 ? '#6366f1' : cgpa >= 5 ? '#F59E0B' : '#EF4444';
+    if (valEl) {
+        valEl.textContent = isWithheld ? '***' : (cgpa || '--');
+        valEl.style.color = isWithheld ? '#EF4444' : cgpa >= 8.5 ? '#10B981' : cgpa >= 7 ? '#6366f1' : cgpa >= 5 ? '#F59E0B' : '#EF4444';
+    }
+    if (resultsCgpaPill && cgpa) {
+        resultsCgpaPill.textContent = `CGPA ${isWithheld ? 'RA' : cgpa}`;
+        resultsCgpaPill.classList.remove('hidden');
+    }
 
     if (credEl) {
         if (isWithheld || cgpaData.cgpa_note) {
@@ -7118,7 +8209,7 @@ function renderCGPA(cgpaData) {
 
     const semData = cgpaData.semwise_data || [];
 
-    // Render all sem GPA chips inside the hero card
+    // Render all sem GPA chips inside the hero card if present
     if (semChipsList && semChipsWrapper) {
         if (semData.length > 0) {
             semChipsList.innerHTML = semData.map(d => {
@@ -7129,7 +8220,7 @@ function renderCGPA(cgpaData) {
                             : g >= 7   ? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20'
                             : g >= 5   ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
                             :            'text-rose-400 bg-rose-500/10 border-rose-500/20';
-                return `<button type="button" onclick="switchAcadTab('results'); setTimeout(() => selectSemesterGPA(${d.sem}), 120)" class="flex flex-col items-center px-3 py-1.5 rounded-xl border ${color} hover:scale-105 active:scale-95 transition-all cursor-pointer">
+                return `<button type="button" onclick="openOthersSubView('results'); setTimeout(() => selectSemesterGPA(${d.sem}), 120)" class="flex flex-col items-center px-3 py-1.5 rounded-xl border ${color} active:scale-95 transition-all cursor-pointer">
                     <span class="text-[8px] font-black uppercase tracking-widest opacity-60">S${d.sem}</span>
                     <span class="text-xs font-black leading-tight">${d.sgpa}</span>
                 </button>`;
@@ -7154,75 +8245,28 @@ function renderCGPA(cgpaData) {
             return padY + (1 - (val - minGPA) / (maxGPA - minGPA)) * innerH;
         };
 
-        // Build paths
         const sgpaPoints = semData.map((d, i) => `${toX(i)},${toY(d.sgpa_numeric !== undefined ? d.sgpa_numeric : d.sgpa)}`).join(' ');
         const cgpaPoints = semData.map((d, i) => `${toX(i)},${toY(d.cgpa_numeric !== undefined ? d.cgpa_numeric : d.cgpa)}`).join(' ');
 
-        // Grid lines at 6, 7, 8, 9, 10
         const gridLines = [6, 7, 8, 9, 10].map(g => {
             const y = toY(g);
-            return `<line x1="${padX}" y1="${y}" x2="${W - padX}" y2="${y}" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>
-                    <text x="${padX - 4}" y="${y + 4}" font-size="7" fill="rgba(255,255,255,0.2)" text-anchor="end">${g}</text>`;
+            return `<line x1="${padX}" y1="${y}" x2="${W - padX}" y2="${y}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+                    <text x="${padX - 6}" y="${y + 3}" font-size="7.5" fill="rgba(255,255,255,0.3)" text-anchor="end">${g}</text>`;
         }).join('');
 
-        // Dots
         const sgpaDots = semData.map((d, i) => `<circle cx="${toX(i)}" cy="${toY(d.sgpa_numeric !== undefined ? d.sgpa_numeric : d.sgpa)}" r="3.5" fill="#6366f1"/>`).join('');
         const cgpaDots = semData.map((d, i) => `<circle cx="${toX(i)}" cy="${toY(d.cgpa_numeric !== undefined ? d.cgpa_numeric : d.cgpa)}" r="3.5" fill="#10B981"/>`).join('');
-
-        // Sem labels
-        const semLabels = semData.map((d, i) => `<text x="${toX(i)}" y="${H - 2}" font-size="7" fill="rgba(255,255,255,0.25)" text-anchor="middle">S${d.sem}</text>`).join('');
+        const semLabels = semData.map((d, i) => `<text x="${toX(i)}" y="${H - 2}" font-size="7.5" font-weight="bold" fill="rgba(255,255,255,0.4)" text-anchor="middle">S${d.sem}</text>`).join('');
 
         chartEl.innerHTML = `
-        <svg viewBox="0 0 ${W} ${H}" class="cgpa-chart-svg">
+        <svg viewBox="0 0 ${W} ${H}" class="cgpa-chart-svg w-full">
             ${gridLines}
-            <!-- CGPA Line -->
-            <polyline points="${cgpaPoints}" fill="none" stroke="#10B981" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-            <!-- SGPA Line -->
-            <polyline points="${sgpaPoints}" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round" stroke-linecap="round"/>
+            <polyline points="${cgpaPoints}" fill="none" stroke="#10B981" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+            <polyline points="${sgpaPoints}" fill="none" stroke="#6366f1" stroke-width="1.8" stroke-dasharray="4 3" stroke-linejoin="round" stroke-linecap="round"/>
             ${cgpaDots}
             ${sgpaDots}
             ${semLabels}
-        </svg>
-        <div class="flex gap-4 mt-2 justify-center">
-            <div class="flex items-center gap-1.5"><div class="w-4 h-[2px] bg-emerald-500 rounded-full"></div><span class="text-[9px] font-bold text-gray-500">CGPA</span></div>
-            <div class="flex items-center gap-1.5"><div class="w-4 h-[2px] bg-indigo-500 rounded-full opacity-70" style="background: repeating-linear-gradient(90deg, #6366f1 0px, #6366f1 4px, transparent 4px, transparent 7px);"></div><span class="text-[9px] font-bold text-gray-500">SGPA</span></div>
-        </div>`;
-    }
-
-    // Sem-by-Sem breakdown
-    if (semList && semData.length > 0) {
-        semList.innerHTML = '';
-        semData.forEach(d => {
-            const isCgpaRA = d.cgpa === 'RA';
-            const isSgpaRA = d.sgpa === 'RA';
-            const cgpaVal = parseFloat(d.cgpa);
-            const gpaColor = isCgpaRA ? 'text-rose-400' : cgpaVal >= 8.5 ? 'text-emerald-400' : cgpaVal >= 7 ? 'text-indigo-400' : cgpaVal >= 5 ? 'text-amber-400' : 'text-rose-400';
-            const sgpaColor = isSgpaRA ? 'text-rose-400' : 'text-indigo-300';
-
-            semList.innerHTML += `
-            <div class="glass-panel rounded-[24px] p-5 flex items-center justify-between">
-                <div>
-                    <div class="flex items-center gap-2 mb-1">
-                        <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Semester ${d.sem}</p>
-                        ${d.credits ? `<span class="text-[8px] font-bold text-gray-500 bg-white/5 px-2 py-0.5 rounded-md border border-white/5">${d.credits} CR</span>` : ''}
-                    </div>
-                    <div class="flex gap-4 items-center mt-2">
-                        <div>
-                            <span class="text-[8px] font-black text-indigo-400/80 block uppercase tracking-wider">SGPA</span>
-                            <span class="text-lg font-black ${sgpaColor}">${d.sgpa}</span>
-                        </div>
-                        <div class="w-px h-7 bg-white/10"></div>
-                        <div>
-                            <span class="text-[8px] font-black text-emerald-400/80 block uppercase tracking-wider">CGPA</span>
-                            <span class="text-lg font-black ${gpaColor}">${d.cgpa}</span>
-                        </div>
-                    </div>
-                </div>
-                <button type="button" onclick="switchAcadTab('results'); setTimeout(() => selectSemesterGPA(${d.sem}), 120)" class="w-11 h-11 rounded-2xl bg-white/5 border border-white/5 hover:bg-indigo-500/20 hover:border-indigo-500/30 flex items-center justify-center text-gray-400 hover:text-indigo-300 text-xs font-black transition-all cursor-pointer" title="View Semester ${d.sem} Courses">S${d.sem}</button>
-            </div>`;
-        });
-    } else if (semList) {
-        semList.innerHTML = '<div class="text-center py-8 text-gray-600 text-xs">No semester data yet</div>';
+        </svg>`;
     }
 
     // --- Degree Classification Projection ---
@@ -7230,6 +8274,7 @@ function renderCGPA(cgpaData) {
     const subEl = document.getElementById('degree-class-sub');
     const iconEl = document.getElementById('degree-class-icon');
     const progressEl = document.getElementById('degree-class-progress');
+    const badgeEl = document.getElementById('degree-class-badge');
 
     if (labelEl && cgpaData) {
         const allSubs = cgpaData.all_subjects || [];
@@ -7242,60 +8287,58 @@ function renderCGPA(cgpaData) {
         const rawCgpaNum = parseFloat(cgpaData.overall_cgpa_numeric || (cgpa !== 'RA' ? cgpa : null));
         const cgpaNum = isNaN(rawCgpaNum) ? 0 : rawCgpaNum;
 
-        let label, sub, icon, progressMsg, borderColor;
+        let label, sub, icon, progressMsg, borderColor, badgeText;
 
         if (hasAnyRA) {
             label = 'Pending Arrear(s)';
             sub = `${activeArrears.length} course(s) pending examination clearance`;
             icon = '⚠️';
             borderColor = '#EF4444';
-            progressMsg = `<span class="text-rose-400 font-bold">Active Arrear Notice:</span> You have <b>${activeArrears.length} pending arrear(s)</b> (${activeArrears.map(a => `<b class="text-white">${a.course}</b>`).join(', ') || 'RA in past semester'}). Clear these courses in upcoming examination cycles to qualify for First Class degree classification.`;
+            badgeText = 'ARREAR';
+            progressMsg = `<span class="text-rose-400 font-bold">Active Arrear Notice:</span> You have <b>${activeArrears.length} pending arrear(s)</b> (${activeArrears.map(a => `<b class="text-white">${a.course}</b>`).join(', ') || 'RA in past semester'}). Clear these courses to qualify for First Class.`;
         } else if (cgpaNum >= 8.5) {
             label = 'First Class with Distinction';
-            sub = 'On track — Absolute CGPA ≥ 8.50, no arrears';
+            sub = 'Absolute CGPA ≥ 8.50 • Zero arrears';
             icon = '🏆';
             borderColor = '#10B981';
-            if (cgpaNum < 9) {
-                const gap = (9.0 - cgpaNum).toFixed(2);
-                progressMsg = `You are <b>${gap} CGPA points</b> below a 9.0 target. Maintain consistent absolute performance to graduate with Distinction.`;
-            } else {
-                progressMsg = `Outstanding performance! Distinction status maintained with no backlogs.`;
-            }
+            badgeText = 'DISTINCTION';
+            progressMsg = cgpaNum < 9
+                ? `You are <b>${(9.0 - cgpaNum).toFixed(2)} CGPA points</b> below a 9.0 milestone. Distinction status is active!`
+                : `Outstanding performance! Distinction status maintained with zero backlogs.`;
         } else if (cgpaNum >= 6.5) {
             label = 'First Class';
-            sub = 'On track — Absolute CGPA ≥ 6.50, no arrears';
+            sub = 'Absolute CGPA ≥ 6.50 • Zero arrears';
             icon = '⭐';
             borderColor = '#6366f1';
-            const gap = (8.5 - cgpaNum).toFixed(2);
-            progressMsg = `You need <b>${gap} more CGPA points</b> to reach First Class with Distinction (≥ 8.50).`;
+            badgeText = 'FIRST CLASS';
+            progressMsg = `You need <b>${(8.5 - cgpaNum).toFixed(2)} more CGPA points</b> to reach First Class with Distinction (≥ 8.50).`;
         } else if (cgpaNum >= 5.0) {
             label = 'Second Class';
-            sub = 'CGPA ≥ 5.00 — Minimum graduation standard met';
+            sub = 'CGPA ≥ 5.00 • Graduation standard met';
             icon = '📘';
             borderColor = '#F59E0B';
-            const gap = (6.5 - cgpaNum).toFixed(2);
-            progressMsg = `You need <b>${gap} more CGPA points</b> to cross into First Class (≥ 6.50).`;
+            badgeText = 'SECOND CLASS';
+            progressMsg = `You need <b>${(6.5 - cgpaNum).toFixed(2)} more CGPA points</b> to cross into First Class (≥ 6.50).`;
         } else {
             label = 'At Risk';
             sub = 'CGPA below minimum qualification threshold';
             icon = '⚠️';
             borderColor = '#EF4444';
+            badgeText = 'AT RISK';
             progressMsg = `CGPA is below 5.0. Focus on clearing courses in upcoming semester exams to raise your standing.`;
         }
 
         labelEl.textContent = label;
-        subEl.textContent = sub;
-        iconEl.textContent = icon;
-        progressEl.innerHTML = progressMsg;
+        if (subEl) subEl.textContent = sub;
+        if (iconEl) iconEl.textContent = icon;
+        if (progressEl) progressEl.innerHTML = progressMsg;
+        if (badgeEl) badgeEl.textContent = badgeText;
 
-        // Update card border color
         const card = document.getElementById('degree-classification-card');
         if (card) card.style.borderLeftColor = borderColor;
     }
 }
 
-// Hook into switchTab to auto-load academics
-// (Academics auto-load is handled in the existing switchTab function body above)
 // Call this to refresh academics data manually
 function refreshAcademics() {
     state.academics = { internals: null, gpa: null, cgpa: null, loaded: false };

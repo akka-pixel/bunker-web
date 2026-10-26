@@ -68,7 +68,7 @@
     // --- State ---
     const STATE = {
         currentRoll: '',
-        currentSemester: (new Date().getMonth() + 1 >= 1 && new Date().getMonth() + 1 <= 5) ? 'even' : 'odd',
+        currentSemester: ((typeof getToday === 'function' ? getToday() : new Date()).getMonth() + 1 >= 1 && (typeof getToday === 'function' ? getToday() : new Date()).getMonth() + 1 <= 5) ? 'even' : 'odd',
         academicYear: 2026,
         student: null,
         plannerData: null,
@@ -113,7 +113,8 @@
     function detectEcampusSemClient(roll) {
         try {
             roll = cleanRollNumber(roll);
-            const subjectsRaw = localStorage.getItem(`bunker_subjects_${roll}`) || localStorage.getItem('bunker_subjects');
+            const activeRoll = cleanRollNumber(localStorage.getItem('bunker_roll') || localStorage.getItem('bunker_calendar_roll'));
+            const subjectsRaw = localStorage.getItem(`bunker_subjects_${roll}`) || (activeRoll === roll ? localStorage.getItem('bunker_subjects') : null);
             if (subjectsRaw) {
                 const subs = JSON.parse(subjectsRaw);
                 if (Array.isArray(subs) && subs.length > 0) {
@@ -331,14 +332,104 @@
         return 0;
     }
 
+    function normalizePsgDateLocal(dateStr) {
+        if (window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.normalizePsgDate === 'function') {
+            return window.CALENDAR_TOKENS.normalizePsgDate(dateStr);
+        }
+        if (!dateStr || typeof dateStr !== 'string') return dateStr;
+        if (/^\d{4}-\d{2}-\d{2}T00:00:00$/.test(dateStr)) return dateStr;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr + 'T00:00:00';
+        try {
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return dateStr;
+            const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+            const yyyy = istTime.getUTCFullYear();
+            const mm = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(istTime.getUTCDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}T00:00:00`;
+        } catch (e) {
+            return dateStr;
+        }
+    }
+
+    const DEFAULT_HOLIDAYS_2026 = [
+        { date: "2026-08-15T00:00:00", name: "Independence Day" },
+        { date: "2026-08-26T00:00:00", name: "Milad-un-Nabi" },
+        { date: "2026-09-04T00:00:00", name: "Krishna Jayanthi" },
+        { date: "2026-09-14T00:00:00", name: "Vinayakar Chathurthi" },
+        { date: "2026-10-02T00:00:00", name: "Ganthi Jayanthi" },
+        { date: "2026-10-19T00:00:00", name: "Ayutha Pooja" },
+        { date: "2026-10-20T00:00:00", name: "Vijaya Dasami" },
+        { date: "2026-11-08T00:00:00", name: "Deepavali" },
+        { date: "2026-12-25T00:00:00", name: "Christmas" },
+        { date: "2027-01-01T00:00:00", name: "New year" },
+        { date: "2027-01-15T00:00:00", name: "Pongal" },
+        { date: "2027-01-16T00:00:00", name: "Pongal" },
+        { date: "2027-01-26T00:00:00", name: "Republic Day" },
+        { date: "2027-03-10T00:00:00", name: "Ramzon" },
+        { date: "2027-03-26T00:00:00", name: "Good Friday" },
+        { date: "2027-04-08T00:00:00", name: "Telugu New year" },
+        { date: "2027-04-14T00:00:00", name: "Tamil New year" },
+        { date: "2027-04-19T00:00:00", name: "Mahaveer Jayanthi" },
+        { date: "2027-05-17T00:00:00", name: "Bakrid" },
+        { date: "2027-06-15T00:00:00", name: "Muharram" }
+    ];
+
+    function normalizePlannerObject(payload, fallbackHolidays) {
+        if (!payload || typeof payload !== 'object') return payload;
+        const hols = (Array.isArray(fallbackHolidays) && fallbackHolidays.length) ? fallbackHolidays : DEFAULT_HOLIDAYS_2026;
+        if (window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.normalizePlannerPayload === 'function') {
+            return window.CALENDAR_TOKENS.normalizePlannerPayload(payload, hols);
+        }
+        if (payload.startDate) payload.startDate = normalizePsgDateLocal(payload.startDate);
+        if (payload.lastDate) payload.lastDate = normalizePsgDateLocal(payload.lastDate);
+        if (Array.isArray(payload.activities)) {
+            payload.activities.forEach(a => {
+                if (a && a.date) a.date = normalizePsgDateLocal(a.date);
+            });
+        }
+        if (!payload.calendar) payload.calendar = { year: 2026, holidays: [] };
+        if ((!payload.calendar.holidays || !payload.calendar.holidays.length) && Array.isArray(hols)) {
+            payload.calendar.holidays = hols.map(h => ({
+                name: h.name,
+                date: normalizePsgDateLocal(h.date)
+            }));
+        } else if (Array.isArray(payload.calendar.holidays)) {
+            payload.calendar.holidays.forEach(h => {
+                if (h && h.date) h.date = normalizePsgDateLocal(h.date);
+            });
+        }
+        return payload;
+    }
+
     function matchPlannerClient(planners, student, semester) {
         if (!planners || !planners.length) return null;
-        semester = (semester || 'odd').toLowerCase();
+
+        // Normalize semester whether passed as number (1, 2, 3, 4) or string ('odd', 'even', '3')
+        let semType = 'odd';
+        if (typeof semester === 'number') {
+            semType = (semester % 2 === 0) ? 'even' : 'odd';
+        } else if (typeof semester === 'string') {
+            const sClean = semester.trim().toLowerCase();
+            if (sClean === 'even') semType = 'even';
+            else if (sClean === 'odd') semType = 'odd';
+            else if (/^\d+$/.test(sClean)) semType = (parseInt(sClean, 10) % 2 === 0) ? 'even' : 'odd';
+        } else if (student && student.semesterType) {
+            semType = String(student.semesterType).toLowerCase() === 'even' ? 'even' : 'odd';
+        }
+
+        // First try automatic token resolver from CALENDAR_TOKENS if available
+        if (window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.autoResolvePlannerFromList === 'function') {
+            const resolved = window.CALENDAR_TOKENS.autoResolvePlannerFromList(planners, student, semType);
+            if (resolved) return resolved;
+        }
+
+        const oddTokens = (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.ODD_SEMESTER_TOKENS) || [32, 33, 34, 35, 39];
         const active = planners.filter(p => {
             const pid = parseInt(p.id, 10);
-            const start = String(p.startDate || '');
-            const isOdd = [32, 33, 34, 35, 39].includes(pid) || (start.includes('2026-0') && !start.includes('2026-12'));
-            return (semester === 'odd') ? isOdd : !isOdd;
+            const start = normalizePsgDateLocal(String(p.startDate || ''));
+            const isOdd = oddTokens.includes(pid) || (start.includes('2026-0') && !start.includes('2026-12'));
+            return (semType === 'odd') ? isOdd : !isOdd;
         });
 
         const list = active.length ? active : planners;
@@ -366,10 +457,10 @@
         if (n.includes('assessment tutorial') || n.includes('tutorial')) {
             return { type: 'tutorial', label: 'Tutorial', badgeClass: 'badge-at', icon: 'fa-book-open' };
         }
-        if (n.includes('ca test') || n.includes('ca 1') || n.includes('ca 2') || n.includes('ca 3') || n.includes('practice test')) {
+        if ((n.includes('ca test') || n.includes('ca 1') || n.includes('ca 2') || n.includes('ca 3') || n.includes('ca -') || n.includes('practice test')) && !n.includes('mark entry')) {
             return { type: 'catest', label: 'CA Test', badgeClass: 'badge-ca', icon: 'fa-pen-to-square' };
         }
-        if (n.includes('semester exam') || n.includes('end semester exam')) {
+        if (n.includes('semester exam') || n.includes('end semester exam') || n.includes('semester examinations')) {
             return { type: 'exam', label: 'Semester Exam', badgeClass: 'badge-sem', icon: 'fa-graduation-cap' };
         }
         if (n.includes('laboratory exam') || n.includes('lab exam')) {
@@ -384,7 +475,8 @@
     function formatDate(dateStr) {
         if (!dateStr) return 'TBA';
         try {
-            const d = new Date(dateStr);
+            const norm = normalizePsgDateLocal(dateStr);
+            const d = new Date(norm);
             if (isNaN(d.getTime())) return dateStr;
             return d.toLocaleDateString('en-IN', {
                 weekday: 'short',
@@ -400,7 +492,8 @@
     function getDaysDiff(targetDateStr) {
         if (!targetDateStr) return null;
         try {
-            const target = new Date(targetDateStr);
+            const norm = normalizePsgDateLocal(targetDateStr);
+            const target = new Date(norm);
             const now = new Date();
             target.setHours(0, 0, 0, 0);
             now.setHours(0, 0, 0, 0);
@@ -449,7 +542,7 @@
         let data = null;
 
         // Strategy 0: Check local phone cache first (valid for 30 days)
-        const storageKey = `bunker_calendar_data_${roll}_${semester || 'auto'}`;
+        const storageKey = `bunker_calendar_v2_${roll}_${semester || 'auto'}`;
         if (!forceDirectApi) {
             try {
                 const cachedRaw = localStorage.getItem(storageKey);
@@ -457,11 +550,13 @@
                     const parsed = JSON.parse(cachedRaw);
                     const pid = parsed.data ? (parsed.data.id || (parsed.data.matchedPlanner && parsed.data.matchedPlanner.id)) : null;
                     const st = parseStudentRoll(roll, 2026, semester);
-                    // Stale cache guard: If student is 2nd year but cache holds 3rd/4th year (ID 32/40), purge stale cache immediately!
-                    if (st && st.yearOfStudy === 2 && (pid === 32 || pid === 40 || String(pid) === '32' || String(pid) === '40')) {
+                    const expectedMatch = (window.CALENDAR_TOKENS && st)
+                        ? window.CALENDAR_TOKENS.autoResolvePlannerFromList(window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.planner, st, semester || st.semesterType)
+                        : null;
+                    if (expectedMatch && pid && parseInt(pid, 10) !== parseInt(expectedMatch.id, 10)) {
                         localStorage.removeItem(storageKey);
                     } else if (parsed.timestamp && (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) && parsed.data && (parsed.data.activities || parsed.data.name)) {
-                        data = parsed.data;
+                        data = normalizePlannerObject(parsed.data);
                     }
                 }
             } catch (e) {}
@@ -472,11 +567,18 @@
             try {
                 let allCalendars = STATE.allYearsIndex;
                 if (!allCalendars) {
-                    const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026');
-                    if (idxRes.ok) {
-                        const rawCal = await idxRes.json();
-                        allCalendars = Array.isArray(rawCal) ? rawCal : [rawCal];
-                        STATE.allYearsIndex = allCalendars;
+                    try {
+                        const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026');
+                        if (idxRes.ok) {
+                            const rawCal = await idxRes.json();
+                            allCalendars = Array.isArray(rawCal) ? rawCal : [rawCal];
+                            STATE.allYearsIndex = allCalendars;
+                        }
+                    } catch (e) {
+                        if (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026) {
+                            allCalendars = [window.CALENDAR_TOKENS.CALENDAR_INDEX_2026];
+                            STATE.allYearsIndex = allCalendars;
+                        }
                     }
                 }
 
@@ -491,6 +593,7 @@
 
                         const yearEntry = allCalendars.find(y => y.year === latestYear) || allCalendars[0];
                         const planners = yearEntry.planner || [];
+                        const yearHolidays = yearEntry.holidays || (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [];
                         STATE.availablePlanners = planners;
 
                         const matched = matchPlannerClient(planners, student, STATE.currentSemester);
@@ -498,6 +601,7 @@
                             const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matched.id}`);
                             if (pRes.ok) {
                                 data = await pRes.json();
+                                data = normalizePlannerObject(data, yearHolidays);
                                 data.student = student;
                                 data.matchedPlanner = matched;
                                 data.semester = STATE.currentSemester;
@@ -513,8 +617,35 @@
             }
         }
 
-        // Strategy 2: Fallback to our automated backend endpoint if direct fetch failed
-        if (!data && !forceDirectApi) {
+        // Strategy 2: Fallback to local cached static file (0 Vercel serverless invocations!)
+        if (!data || !data.activities) {
+            try {
+                const cacheRes = await fetch('/static/all_calendars_cache.json');
+                if (cacheRes.ok) {
+                    const cdata = await cacheRes.json();
+                    const student = parseStudentRoll(roll, 2026, semester);
+                    if (student) {
+                        STATE.student = student;
+                        if (student.semesterNo) STATE.currentSemesterNo = student.semesterNo;
+                        if (student.semesterType) STATE.currentSemester = student.semesterType;
+                    }
+                    const plannersList = Object.values(cdata);
+                    const matched = matchPlannerClient(plannersList, student, STATE.currentSemester);
+                    if (matched && cdata[String(matched.id)]) {
+                        data = normalizePlannerObject(cdata[String(matched.id)]);
+                        data.student = student;
+                        data.matchedPlanner = matched;
+                        data.semester = STATE.currentSemester;
+                        data.semesterNo = STATE.currentSemesterNo;
+                        data.academicYear = 2026;
+                        data.availablePlanners = plannersList;
+                    }
+                }
+            } catch (err) {}
+        }
+
+        // Strategy 3: Fallback to automated backend endpoint only if both direct & static cache fail
+        if ((!data || !data.activities) && !forceDirectApi) {
             try {
                 const querySem = (semester !== undefined && semester !== null) ? semester : (STATE.currentSemesterNo || STATE.currentSemester || '');
                 const semParam = querySem ? `?sem=${encodeURIComponent(querySem)}` : '';
@@ -525,7 +656,7 @@
                 } catch (e) {}
                 const res = await fetch(`/api/calendar/${encodeURIComponent(roll)}${semParam}`, { headers });
                 if (res.ok) {
-                    data = await res.json();
+                    data = normalizePlannerObject(await res.json());
                 } else {
                     const errData = await res.json().catch(() => null);
                     if (errData && errData.error) {
@@ -539,28 +670,10 @@
             }
         }
 
-        // Strategy 3: Fallback to local cached static file
-        if (!data || !data.activities) {
-            try {
-                const cacheRes = await fetch('/static/all_calendars_cache.json');
-                if (cacheRes.ok) {
-                    const cdata = await cacheRes.json();
-                    const student = parseStudentRoll(roll, 2026);
-                    STATE.student = student;
-                    const plannersList = Object.values(cdata);
-                    const matched = matchPlannerClient(plannersList, student, STATE.currentSemester);
-                    if (matched && cdata[String(matched.id)]) {
-                        data = cdata[String(matched.id)];
-                        data.student = student;
-                        data.matchedPlanner = matched;
-                    }
-                }
-            } catch (err) {}
-        }
-
         showLoading(false);
 
         if (data && (data.activities || data.name)) {
+            data = normalizePlannerObject(data);
             try {
                 localStorage.setItem(storageKey, JSON.stringify({
                     timestamp: Date.now(),
@@ -584,44 +697,49 @@
         showLoading(true);
         try {
             let data = null;
-            const storageKey = `bunker_planner_${plannerId}_${year}`;
+            const storageKey = `bunker_planner_v2_${plannerId}_${year}`;
             try {
                 const cachedRaw = localStorage.getItem(storageKey);
                 if (cachedRaw) {
                     const parsed = JSON.parse(cachedRaw);
                     if (parsed.timestamp && (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) && parsed.data) {
-                        data = parsed.data;
+                        data = normalizePlannerObject(parsed.data);
                     }
                 }
             } catch (e) {}
 
             if (!data) {
+                const fallbackHolidays = (STATE.allYearsIndex && STATE.allYearsIndex[0] && STATE.allYearsIndex[0].holidays) ||
+                    (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [];
+
                 // Direct phone query first (CORS enabled)
                 try {
                     const resDirect = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${year}/planner/${plannerId}`);
-                    if (resDirect.ok) data = await resDirect.json();
+                    if (resDirect.ok) {
+                        data = normalizePlannerObject(await resDirect.json(), fallbackHolidays);
+                    }
                 } catch (e) {}
 
-                // Fallback to proxy
-                if (!data) {
-                    try {
-                        const token = localStorage.getItem('bunker_session_token');
-                        const headers = token ? { 'X-Session-Token': token } : {};
-                        const resProxy = await fetch(`/api/calendar/${plannerId}?year=${year}`, { headers });
-                        if (resProxy.ok) data = await resProxy.json();
-                    } catch (e) {}
-                }
-
-                // Fallback to local static JSON bundle
+                // Fallback to local static JSON bundle (0 Vercel calls!)
                 if (!data) {
                     try {
                         const cacheRes = await fetch('/static/all_calendars_cache.json');
                         if (cacheRes.ok) {
                             const cdata = await cacheRes.json();
                             if (cdata && cdata[String(plannerId)]) {
-                                data = cdata[String(plannerId)];
+                                data = normalizePlannerObject(cdata[String(plannerId)], fallbackHolidays);
                             }
                         }
+                    } catch (e) {}
+                }
+
+                // Fallback to proxy only if both direct & static fail
+                if (!data) {
+                    try {
+                        const token = localStorage.getItem('bunker_session_token');
+                        const headers = token ? { 'X-Session-Token': token } : {};
+                        const resProxy = await fetch(`/api/calendar/${plannerId}?year=${year}`, { headers });
+                        if (resProxy.ok) data = normalizePlannerObject(await resProxy.json(), fallbackHolidays);
                     } catch (e) {}
                 }
 
@@ -855,9 +973,10 @@
 
     function renderActivities() {
         const d = STATE.plannerData;
-        const container = document.getElementById('activities-table-body');
+        const container = document.getElementById('activities-table-body') || document.getElementById('agenda-list-container');
         if (!container || !d) return;
 
+        const isAgendaCards = container.id === 'agenda-list-container';
         const activities = d.activities || [];
         const filter = STATE.activeCategoryFilter;
         const query = (STATE.searchQuery || '').toLowerCase();
@@ -870,9 +989,11 @@
         });
 
         if (!filtered.length) {
-            container.innerHTML = `
+            container.innerHTML = isAgendaCards
+                ? `<div class="cal-glass p-6 rounded-2xl text-center text-gray-400 text-xs">No activities match the current filter or search query.</div>`
+                : `
                 <tr>
-                    <td colspan="4" class="px-4 py-8 text-center text-gray-400 text-xs">
+                    <td colspan="3" class="px-4 py-8 text-center text-gray-400 text-xs">
                         <i class="fas fa-search mb-2 text-base text-gray-600"></i><br>
                         No activities match the current filter or search query.
                     </td>
@@ -884,57 +1005,59 @@
         let html = '';
         filtered.forEach((act, idx) => {
             const cat = categorize(act.name, false);
-            const diff = getDaysDiff(act.date);
             const dateFormatted = formatDate(act.date);
             const gcalUrl = makeGoogleCalendarUrl(act.name, act.date);
 
-            let statusBadge = '';
-            if (diff === null) {
-                statusBadge = '<span class="text-[10px] text-gray-500 font-bold">TBA</span>';
-            } else if (diff < 0) {
-                statusBadge = '<span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/5 text-gray-400 border border-white/10"><i class="fas fa-check mr-1 text-[9px] text-emerald-400"></i>Completed</span>';
-            } else if (diff === 0) {
-                statusBadge = '<span class="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse">TODAY</span>';
-            } else if (diff <= 7) {
-                statusBadge = `<span class="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/30">In ${diff} days</span>`;
-            } else {
-                statusBadge = `<span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/25">${diff} days left</span>`;
-            }
-
-            html += `
-                <tr class="border-b border-white/5 hover:bg-white/[0.03] transition-colors group">
-                    <td class="py-3 px-3 sm:px-4">
-                        <div class="flex items-start gap-2.5">
-                            <span class="w-6 h-6 rounded-lg ${cat.badgeClass} flex items-center justify-center flex-shrink-0 text-[11px] mt-0.5">
+            if (isAgendaCards) {
+                html += `
+                    <div class="cal-glass p-3.5 rounded-2xl border border-white/10 flex items-center justify-between gap-3">
+                        <div class="flex items-start gap-2.5 min-w-0">
+                            <span class="w-7 h-7 rounded-lg ${cat.badgeClass} flex items-center justify-center flex-shrink-0 text-xs mt-0.5">
                                 <i class="fas ${cat.icon}"></i>
                             </span>
-                            <div>
+                            <div class="min-w-0">
                                 <div class="font-bold text-xs sm:text-sm text-white flex items-center gap-1.5 flex-wrap">
                                     <span>${escapeHtml(act.name)}</span>
                                     <span class="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded ${cat.badgeClass} opacity-80">${cat.label}</span>
                                 </div>
-                                <div class="text-[10px] text-gray-400 mt-0.5 flex items-center gap-2">
-                                    <span>Working Day ${act.relativeToStart !== undefined ? act.relativeToStart : (idx + 1)}</span>
-                                    ${act.relativeDays ? `<span>&bull; +${act.relativeDays} days gap</span>` : ''}
-                                </div>
+                                <div class="text-[10px] text-gray-400 mt-0.5">${dateFormatted}</div>
                             </div>
                         </div>
-                    </td>
-                    <td class="py-3 px-3 sm:px-4 whitespace-nowrap text-xs text-gray-300 font-medium">
-                        ${dateFormatted}
-                    </td>
-                    <td class="py-3 px-3 sm:px-4 whitespace-nowrap text-right sm:text-left">
-                        ${statusBadge}
-                    </td>
-                    <td class="py-3 px-3 sm:px-4 whitespace-nowrap text-right">
-                        <a href="${gcalUrl}" target="_blank" rel="noopener noreferrer"
-                            class="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-gray-400 hover:text-indigo-300 transition text-xs inline-flex items-center gap-1"
-                            title="Add to Google Calendar">
-                            <i class="fas fa-calendar-plus text-[11px]"></i>
-                        </a>
-                    </td>
-                </tr>
-            `;
+                    </div>
+                `;
+            } else {
+                html += `
+                    <tr class="border-b border-white/5 hover:bg-white/[0.03] transition-colors group">
+                        <td class="py-3 px-3 sm:px-4">
+                            <div class="flex items-start gap-2.5">
+                                <span class="w-6 h-6 rounded-lg ${cat.badgeClass} flex items-center justify-center flex-shrink-0 text-[11px] mt-0.5">
+                                    <i class="fas ${cat.icon}"></i>
+                                </span>
+                                <div>
+                                    <div class="font-bold text-xs sm:text-sm text-white flex items-center gap-1.5 flex-wrap">
+                                        <span>${escapeHtml(act.name)}</span>
+                                        <span class="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded ${cat.badgeClass} opacity-80">${cat.label}</span>
+                                    </div>
+                                    <div class="text-[10px] text-gray-400 mt-0.5 flex items-center gap-2">
+                                        <span>Working Day ${act.relativeToStart !== undefined ? act.relativeToStart : (idx + 1)}</span>
+                                        ${act.relativeDays ? `<span>&bull; +${act.relativeDays} days gap</span>` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="py-3 px-3 sm:px-4 whitespace-nowrap text-xs text-gray-300 font-medium">
+                            ${dateFormatted}
+                        </td>
+                        <td class="py-3 px-3 sm:px-4 whitespace-nowrap text-right">
+                            <a href="${gcalUrl}" target="_blank" rel="noopener noreferrer"
+                                class="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-gray-400 hover:text-indigo-300 transition text-xs inline-flex items-center gap-1"
+                                title="Add to Google Calendar">
+                                <i class="fas fa-calendar-plus text-[11px]"></i>
+                            </a>
+                        </td>
+                    </tr>
+                `;
+            }
         });
 
         container.innerHTML = html;
@@ -1269,7 +1392,7 @@
     }
 
     function showLoading(show) {
-        const el = document.getElementById('cal-loader');
+        const el = document.getElementById('cal-loader') || document.getElementById('cal-global-loader');
         if (el) el.style.display = show ? 'flex' : 'none';
     }
 
@@ -1341,7 +1464,7 @@
             });
         }
 
-        const searchFilter = document.getElementById('activity-search-input');
+        const searchFilter = document.getElementById('activity-search-input') || document.getElementById('cal-search-input');
         if (searchFilter) {
             searchFilter.addEventListener('input', function () {
                 STATE.searchQuery = this.value;
@@ -1379,6 +1502,32 @@
         jumpToToday: jumpToToday,
         openDayModal: openDayModal,
         closeDayModal: closeDayModal,
+        closeDayDetail: closeDayModal,
+        openMonthPicker: function() {
+            const p = document.getElementById('cal-month-picker');
+            if (p && typeof p.showPicker === 'function') p.showPicker();
+            else if (p) p.click();
+        },
+        onMonthPickerChange: function(val) {
+            if (!val) return;
+            const parts = val.split('-');
+            if (parts.length === 2) {
+                STATE.calendarMonthDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, 1);
+                renderMonthGrid();
+            }
+        },
+        toggleEventMode: function(forceState) {
+            const panel = document.getElementById('event-mode-panel');
+            if (!panel) return;
+            if (typeof forceState === 'boolean') {
+                panel.classList.toggle('hidden', !forceState);
+            } else {
+                panel.classList.toggle('hidden');
+            }
+        },
+        changeAudience: function() {
+            renderMonthGrid();
+        },
         parseStudentRoll: parseStudentRoll,
         matchRollToPlanner: function(r, yr, s, pl) {
             const st = parseStudentRoll(r, yr, s);

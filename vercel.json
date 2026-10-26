@@ -5,7 +5,7 @@
     "bom1"
   ],
   "functions": {
-    "api/index.py": {
+    "api/index.js": {
       "maxDuration": 10,
       "memory": 256
     }
@@ -69,7 +69,7 @@
     },
     {
       "source": "/api/(.*)",
-      "destination": "/api/index.py?__vercel_path=api/$1"
+      "destination": "/api/index.js?__vercel_path=api/$1"
     }
   ],
   "headers": [
@@ -159,10 +159,6 @@
         {
           "key": "X-Content-Type-Options",
           "value": "nosniff"
-        },
-        {
-          "key": "X-Frame-Options",
-          "value": "DENY"
         },
         {
           "key": "X-XSS-Protection",
