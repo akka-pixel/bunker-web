@@ -3,51 +3,53 @@
 > Complete export of the PSG Bunker Web application source code, assets, configuration, and documentation for AI ingestion.
 
 - **Project Root Path**: `/home/basi/Pictures/bunker`
-- **Total Files**: 33
+- **Total Files**: 34
 
 ## 📁 File Index
 
 | # | Relative Path | Type | Size |
 |---|---|---|---|
-| 1 | [`DEPT_CODES.md`](#file-DEPT_CODES-md) | Source Code / Text | 2.31 KB |
-| 2 | [`README.md`](#file-README-md) | Source Code / Text | 2.15 KB |
-| 3 | [`api/index.js`](#file-api-index-js) | Source Code / Text | 53 B |
-| 4 | [`bun.lock`](#file-bun-lock) | Source Code / Text | 17.98 KB |
-| 5 | [`google824b5c1fd4aa93e7.html`](#file-google824b5c1fd4aa93e7-html) | Source Code / Text | 53 B |
-| 6 | [`metadata.json`](#file-metadata-json) | Source Code / Text | 178 B |
-| 7 | [`package.json`](#file-package-json) | Source Code / Text | 318 B |
-| 8 | [`public/assets/aistudio/Paste_October_25__2026_-_6_43AM_e2052e3d`](#file-public-assets-aistudio-Paste_October_25__2026_-_6_43AM_e2052e3d) | Source Code / Text | 46.27 KB |
-| 9 | [`public/calendar.html`](#file-public-calendar-html) | Source Code / Text | 21.40 KB |
-| 10 | [`public/feedback.html`](#file-public-feedback-html) | Source Code / Text | 11.08 KB |
-| 11 | [`public/google824b5c1fd4aa93e7.html`](#file-public-google824b5c1fd4aa93e7-html) | Source Code / Text | 53 B |
-| 12 | [`public/index.html`](#file-public-index-html) | Source Code / Text | 125.18 KB |
-| 13 | [`public/robots.txt`](#file-public-robots-txt) | Source Code / Text | 479 B |
-| 14 | [`public/sitemap.xml`](#file-public-sitemap-xml) | Source Code / Text | 978 B |
-| 15 | [`server.js`](#file-server-js) | Source Code / Text | 139.31 KB |
-| 16 | [`static/all_calendars_cache.json`](#file-static-all_calendars_cache-json) | Source Code / Text | 43.77 KB |
-| 17 | [`static/app.js`](#file-static-app-js) | Source Code / Text | 428.25 KB |
-| 18 | [`static/calendar.css`](#file-static-calendar-css) | Source Code / Text | 9.57 KB |
-| 19 | [`static/calendar.js`](#file-static-calendar-js) | Source Code / Text | 71.11 KB |
-| 20 | [`static/favicon.ico`](#file-static-favicon-ico) | Binary Asset | 42.63 KB |
-| 21 | [`static/favicon.png`](#file-static-favicon-png) | Binary Asset | 42.63 KB |
-| 22 | [`static/gform.js`](#file-static-gform-js) | Source Code / Text | 904 B |
-| 23 | [`static/icon-192.png`](#file-static-icon-192-png) | Binary Asset | 54.17 KB |
-| 24 | [`static/icon-512.png`](#file-static-icon-512-png) | Binary Asset | 322.24 KB |
-| 25 | [`static/icon.png`](#file-static-icon-png) | Binary Asset | 505.87 KB |
-| 26 | [`static/legal.js`](#file-static-legal-js) | Source Code / Text | 3.71 KB |
-| 27 | [`static/llms.txt`](#file-static-llms-txt) | Source Code / Text | 2.40 KB |
-| 28 | [`static/manifest.json`](#file-static-manifest-json) | Source Code / Text | 2.42 KB |
-| 29 | [`static/robots.txt`](#file-static-robots-txt) | Source Code / Text | 479 B |
-| 30 | [`static/sitemap.xml`](#file-static-sitemap-xml) | Source Code / Text | 978 B |
-| 31 | [`static/style.css`](#file-static-style-css) | Source Code / Text | 78.58 KB |
-| 32 | [`static/sw.js`](#file-static-sw-js) | Source Code / Text | 4.64 KB |
-| 33 | [`vercel.json`](#file-vercel-json) | Source Code / Text | 3.51 KB |
+| 1 | [`.gitignore`](#file--gitignore) | Source Code / Text | 117 B |
+| 2 | [`DEPT_CODES.md`](#file-DEPT_CODES-md) | Source Code / Text | 2.31 KB |
+| 3 | [`README.md`](#file-README-md) | Source Code / Text | 2.15 KB |
+| 4 | [`api/index.js`](#file-api-index-js) | Source Code / Text | 53 B |
+| 5 | [`bun.lock`](#file-bun-lock) | Source Code / Text | 17.98 KB |
+| 6 | [`google824b5c1fd4aa93e7.html`](#file-google824b5c1fd4aa93e7-html) | Source Code / Text | 53 B |
+| 7 | [`metadata.json`](#file-metadata-json) | Source Code / Text | 178 B |
+| 8 | [`package.json`](#file-package-json) | Source Code / Text | 318 B |
+| 9 | [`public/assets/aistudio/Paste_October_25__2026_-_6_43AM_e2052e3d`](#file-public-assets-aistudio-Paste_October_25__2026_-_6_43AM_e2052e3d) | Source Code / Text | 46.27 KB |
+| 10 | [`public/calendar.html`](#file-public-calendar-html) | Source Code / Text | 21.40 KB |
+| 11 | [`public/feedback.html`](#file-public-feedback-html) | Source Code / Text | 11.08 KB |
+| 12 | [`public/google824b5c1fd4aa93e7.html`](#file-public-google824b5c1fd4aa93e7-html) | Source Code / Text | 53 B |
+| 13 | [`public/index.html`](#file-public-index-html) | Source Code / Text | 125.18 KB |
+| 14 | [`public/robots.txt`](#file-public-robots-txt) | Source Code / Text | 479 B |
+| 15 | [`public/sitemap.xml`](#file-public-sitemap-xml) | Source Code / Text | 978 B |
+| 16 | [`server.js`](#file-server-js) | Source Code / Text | 139.31 KB |
+| 17 | [`static/all_calendars_cache.json`](#file-static-all_calendars_cache-json) | Source Code / Text | 43.77 KB |
+| 18 | [`static/app.js`](#file-static-app-js) | Source Code / Text | 428.25 KB |
+| 19 | [`static/calendar.css`](#file-static-calendar-css) | Source Code / Text | 9.57 KB |
+| 20 | [`static/calendar.js`](#file-static-calendar-js) | Source Code / Text | 71.11 KB |
+| 21 | [`static/favicon.ico`](#file-static-favicon-ico) | Binary Asset | 42.63 KB |
+| 22 | [`static/favicon.png`](#file-static-favicon-png) | Binary Asset | 42.63 KB |
+| 23 | [`static/gform.js`](#file-static-gform-js) | Source Code / Text | 904 B |
+| 24 | [`static/icon-192.png`](#file-static-icon-192-png) | Binary Asset | 54.17 KB |
+| 25 | [`static/icon-512.png`](#file-static-icon-512-png) | Binary Asset | 322.24 KB |
+| 26 | [`static/icon.png`](#file-static-icon-png) | Binary Asset | 505.87 KB |
+| 27 | [`static/legal.js`](#file-static-legal-js) | Source Code / Text | 3.71 KB |
+| 28 | [`static/llms.txt`](#file-static-llms-txt) | Source Code / Text | 2.40 KB |
+| 29 | [`static/manifest.json`](#file-static-manifest-json) | Source Code / Text | 2.42 KB |
+| 30 | [`static/robots.txt`](#file-static-robots-txt) | Source Code / Text | 479 B |
+| 31 | [`static/sitemap.xml`](#file-static-sitemap-xml) | Source Code / Text | 978 B |
+| 32 | [`static/style.css`](#file-static-style-css) | Source Code / Text | 78.58 KB |
+| 33 | [`static/sw.js`](#file-static-sw-js) | Source Code / Text | 4.64 KB |
+| 34 | [`vercel.json`](#file-vercel-json) | Source Code / Text | 3.51 KB |
 
 ---
 
 ## 🌳 Directory Tree
 
 ```text
+.gitignore
 DEPT_CODES.md
 README.md
 api/index.js
@@ -85,9 +87,35 @@ vercel.json
 
 ---
 
+<a id="file--gitignore"></a>
+
+## 1. File: `.gitignore`
+
+- **Absolute Path**: `/home/basi/Pictures/bunker/.gitignore`
+- **File Size**: 117 B
+- **Format**: `text`
+
+```text:.gitignore
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+github token.md
+*token*
+*.token
+*token*.md
+.DS_Store
+*.log
+.env
+.env.*
+```
+
+---
+
 <a id="file-DEPT_CODES-md"></a>
 
-## 1. File: `DEPT_CODES.md`
+## 2. File: `DEPT_CODES.md`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/DEPT_CODES.md`
 - **File Size**: 2.31 KB
@@ -174,7 +202,7 @@ The system auto-detects department from the roll number's middle letter(s).
 
 <a id="file-README-md"></a>
 
-## 2. File: `README.md`
+## 3. File: `README.md`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/README.md`
 - **File Size**: 2.15 KB
@@ -255,7 +283,7 @@ MIT License. Built with ❤️ for PSG Tech students.
 
 <a id="file-api-index-js"></a>
 
-## 3. File: `api/index.js`
+## 4. File: `api/index.js`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/api/index.js`
 - **File Size**: 53 B
@@ -271,7 +299,7 @@ export default app;
 
 <a id="file-bun-lock"></a>
 
-## 4. File: `bun.lock`
+## 5. File: `bun.lock`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/bun.lock`
 - **File Size**: 17.98 KB
@@ -474,7 +502,7 @@ export default app;
 
 <a id="file-google824b5c1fd4aa93e7-html"></a>
 
-## 5. File: `google824b5c1fd4aa93e7.html`
+## 6. File: `google824b5c1fd4aa93e7.html`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/google824b5c1fd4aa93e7.html`
 - **File Size**: 53 B
@@ -488,7 +516,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 
 <a id="file-metadata-json"></a>
 
-## 6. File: `metadata.json`
+## 7. File: `metadata.json`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/metadata.json`
 - **File Size**: 178 B
@@ -506,7 +534,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 
 <a id="file-package-json"></a>
 
-## 7. File: `package.json`
+## 8. File: `package.json`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/package.json`
 - **File Size**: 318 B
@@ -535,7 +563,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 
 <a id="file-public-assets-aistudio-Paste_October_25__2026_-_6_43AM_e2052e3d"></a>
 
-## 8. File: `public/assets/aistudio/Paste_October_25__2026_-_6_43AM_e2052e3d`
+## 9. File: `public/assets/aistudio/Paste_October_25__2026_-_6_43AM_e2052e3d`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/public/assets/aistudio/Paste_October_25__2026_-_6_43AM_e2052e3d`
 - **File Size**: 46.27 KB
@@ -1409,7 +1437,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 
 <a id="file-public-calendar-html"></a>
 
-## 9. File: `public/calendar.html`
+## 10. File: `public/calendar.html`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/public/calendar.html`
 - **File Size**: 21.40 KB
@@ -1766,7 +1794,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
     </div>
 
     <!-- Calendar JavaScript Engine -->
-    <script src="/static/calendar.js?v=3.8.7"></script>
+    <script src="/static/calendar.js?v=3.9.0"></script>
 </body>
 
 </html>
@@ -1776,7 +1804,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 
 <a id="file-public-feedback-html"></a>
 
-## 10. File: `public/feedback.html`
+## 11. File: `public/feedback.html`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/public/feedback.html`
 - **File Size**: 11.08 KB
@@ -2132,7 +2160,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 
 <a id="file-public-google824b5c1fd4aa93e7-html"></a>
 
-## 11. File: `public/google824b5c1fd4aa93e7.html`
+## 12. File: `public/google824b5c1fd4aa93e7.html`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/public/google824b5c1fd4aa93e7.html`
 - **File Size**: 53 B
@@ -2146,7 +2174,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 
 <a id="file-public-index-html"></a>
 
-## 12. File: `public/index.html`
+## 13. File: `public/index.html`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/public/index.html`
 - **File Size**: 125.18 KB
@@ -2392,8 +2420,8 @@ google-site-verification: google824b5c1fd4aa93e7.html
     </script>
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
-    <script defer src="/static/calendar.js?v=3.8.7"></script>
-    <script defer src="/static/app.js?v=3.8.7"></script>
+    <script defer src="/static/calendar.js?v=3.9.0"></script>
+    <script defer src="/static/app.js?v=3.9.0"></script>
     <script defer src="/static/legal.js?v=1.0.1"></script>
 
     <script>
@@ -2407,7 +2435,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
                 // Register Service Worker for total offline functionality
                 if ('serviceWorker' in navigator) {
                     window.addEventListener('load', () => {
-                        navigator.serviceWorker.register('/sw.js?v=13').then((reg) => {
+                        navigator.serviceWorker.register('/sw.js?v=14').then((reg) => {
                             console.log('PWA: Service Worker registered.', reg.scope);
                         }).catch((err) => {
                             console.log('PWA: Service Worker registration failed: ', err);
@@ -3910,7 +3938,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 
 <a id="file-public-robots-txt"></a>
 
-## 13. File: `public/robots.txt`
+## 14. File: `public/robots.txt`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/public/robots.txt`
 - **File Size**: 479 B
@@ -3959,7 +3987,7 @@ Sitemap: https://psg-bunk.vercel.app/sitemap.xml
 
 <a id="file-public-sitemap-xml"></a>
 
-## 14. File: `public/sitemap.xml`
+## 15. File: `public/sitemap.xml`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/public/sitemap.xml`
 - **File Size**: 978 B
@@ -3999,7 +4027,7 @@ Sitemap: https://psg-bunk.vercel.app/sitemap.xml
 
 <a id="file-server-js"></a>
 
-## 15. File: `server.js`
+## 16. File: `server.js`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/server.js`
 - **File Size**: 139.31 KB
@@ -7947,7 +7975,7 @@ export default app;
 
 <a id="file-static-all_calendars_cache-json"></a>
 
-## 16. File: `static/all_calendars_cache.json`
+## 17. File: `static/all_calendars_cache.json`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/all_calendars_cache.json`
 - **File Size**: 43.77 KB
@@ -7961,7 +7989,7 @@ export default app;
 
 <a id="file-static-app-js"></a>
 
-## 17. File: `static/app.js`
+## 18. File: `static/app.js`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/app.js`
 - **File Size**: 428.25 KB
@@ -16445,7 +16473,7 @@ window.handleTourApkDownload = handleTourApkDownload;
 
 <a id="file-static-calendar-css"></a>
 
-## 18. File: `static/calendar.css`
+## 19. File: `static/calendar.css`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/calendar.css`
 - **File Size**: 9.57 KB
@@ -16871,7 +16899,7 @@ select,
 
 <a id="file-static-calendar-js"></a>
 
-## 19. File: `static/calendar.js`
+## 20. File: `static/calendar.js`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/calendar.js`
 - **File Size**: 71.11 KB
@@ -18427,7 +18455,7 @@ select,
 
 <a id="file-static-favicon-ico"></a>
 
-## 20. File: `static/favicon.ico`
+## 21. File: `static/favicon.ico`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/favicon.ico`
 - **File Size**: 42.63 KB
@@ -18439,7 +18467,7 @@ select,
 
 <a id="file-static-favicon-png"></a>
 
-## 21. File: `static/favicon.png`
+## 22. File: `static/favicon.png`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/favicon.png`
 - **File Size**: 42.63 KB
@@ -18451,7 +18479,7 @@ select,
 
 <a id="file-static-gform-js"></a>
 
-## 22. File: `static/gform.js`
+## 23. File: `static/gform.js`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/gform.js`
 - **File Size**: 904 B
@@ -18491,7 +18519,7 @@ select,
 
 <a id="file-static-icon-192-png"></a>
 
-## 23. File: `static/icon-192.png`
+## 24. File: `static/icon-192.png`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/icon-192.png`
 - **File Size**: 54.17 KB
@@ -18503,7 +18531,7 @@ select,
 
 <a id="file-static-icon-512-png"></a>
 
-## 24. File: `static/icon-512.png`
+## 25. File: `static/icon-512.png`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/icon-512.png`
 - **File Size**: 322.24 KB
@@ -18515,7 +18543,7 @@ select,
 
 <a id="file-static-icon-png"></a>
 
-## 25. File: `static/icon.png`
+## 26. File: `static/icon.png`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/icon.png`
 - **File Size**: 505.87 KB
@@ -18527,7 +18555,7 @@ select,
 
 <a id="file-static-legal-js"></a>
 
-## 26. File: `static/legal.js`
+## 27. File: `static/legal.js`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/legal.js`
 - **File Size**: 3.71 KB
@@ -18617,7 +18645,7 @@ const LEGAL_TEXT = `
 
 <a id="file-static-llms-txt"></a>
 
-## 27. File: `static/llms.txt`
+## 28. File: `static/llms.txt`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/llms.txt`
 - **File Size**: 2.40 KB
@@ -18684,7 +18712,7 @@ A: Yes. Once your data is synced, the app works fully offline.
 
 <a id="file-static-manifest-json"></a>
 
-## 28. File: `static/manifest.json`
+## 29. File: `static/manifest.json`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/manifest.json`
 - **File Size**: 2.42 KB
@@ -18775,7 +18803,7 @@ A: Yes. Once your data is synced, the app works fully offline.
 
 <a id="file-static-robots-txt"></a>
 
-## 29. File: `static/robots.txt`
+## 30. File: `static/robots.txt`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/robots.txt`
 - **File Size**: 479 B
@@ -18824,7 +18852,7 @@ Sitemap: https://psg-bunk.vercel.app/sitemap.xml
 
 <a id="file-static-sitemap-xml"></a>
 
-## 30. File: `static/sitemap.xml`
+## 31. File: `static/sitemap.xml`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/sitemap.xml`
 - **File Size**: 978 B
@@ -18864,7 +18892,7 @@ Sitemap: https://psg-bunk.vercel.app/sitemap.xml
 
 <a id="file-static-style-css"></a>
 
-## 31. File: `static/style.css`
+## 32. File: `static/style.css`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/style.css`
 - **File Size**: 78.58 KB
@@ -21335,15 +21363,15 @@ html[data-perf="low"] .modal-backdrop-blur {
 
 <a id="file-static-sw-js"></a>
 
-## 32. File: `static/sw.js`
+## 33. File: `static/sw.js`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/sw.js`
 - **File Size**: 4.64 KB
 - **Format**: `javascript`
 
 ```javascript:static/sw.js
-const CACHE_NAME = 'bunker-cache-v47';
-const RUNTIME_CACHE = 'bunker-runtime-v47';
+const CACHE_NAME = 'bunker-cache-v48';
+const RUNTIME_CACHE = 'bunker-runtime-v48';
 
 // Precache core UI application shell assets (stored 100% on device for 0ms offline loads)
 const PRECACHE_ASSETS = [
@@ -21351,9 +21379,9 @@ const PRECACHE_ASSETS = [
     '/calendar',
     '/feedback',
     '/static/style.css?v=3.5.8',
-    '/static/app.js?v=3.8.7',
+    '/static/app.js?v=3.9.0',
     '/static/calendar.css?v=3.5.2',
-    '/static/calendar.js?v=3.8.7',
+    '/static/calendar.js?v=3.9.0',
     '/static/legal.js?v=1.0.1',
     '/static/gform.js',
     '/static/all_calendars_cache.json',
@@ -21468,7 +21496,7 @@ self.addEventListener('fetch', (event) => {
 
 <a id="file-vercel-json"></a>
 
-## 33. File: `vercel.json`
+## 34. File: `vercel.json`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/vercel.json`
 - **File Size**: 3.51 KB

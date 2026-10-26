@@ -1,5 +1,5 @@
-const CACHE_NAME = 'bunker-cache-v47';
-const RUNTIME_CACHE = 'bunker-runtime-v47';
+const CACHE_NAME = 'bunker-cache-v48';
+const RUNTIME_CACHE = 'bunker-runtime-v48';
 
 // Precache core UI application shell assets (stored 100% on device for 0ms offline loads)
 const PRECACHE_ASSETS = [
@@ -7,9 +7,9 @@ const PRECACHE_ASSETS = [
     '/calendar',
     '/feedback',
     '/static/style.css?v=3.5.8',
-    '/static/app.js?v=3.8.7',
+    '/static/app.js?v=3.9.0',
     '/static/calendar.css?v=3.5.2',
-    '/static/calendar.js?v=3.8.7',
+    '/static/calendar.js?v=3.9.0',
     '/static/legal.js?v=1.0.1',
     '/static/gform.js',
     '/static/all_calendars_cache.json',
