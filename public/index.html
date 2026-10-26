@@ -214,7 +214,7 @@
     
     <!-- CSS & Scripts -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=3.5.8">
+    <link rel="stylesheet" href="/static/style.css?v=3.9.0">
     <script>
         window.tailwind = {
             config: {
@@ -252,11 +252,19 @@
                 // Register Service Worker for total offline functionality
                 if ('serviceWorker' in navigator) {
                     window.addEventListener('load', () => {
-                        navigator.serviceWorker.register('/sw.js?v=14').then((reg) => {
+                        navigator.serviceWorker.register('/sw.js?v=15').then((reg) => {
                             console.log('PWA: Service Worker registered.', reg.scope);
+                            reg.update();
                         }).catch((err) => {
                             console.log('PWA: Service Worker registration failed: ', err);
                         });
+                    });
+                    let refreshing = false;
+                    navigator.serviceWorker.addEventListener('controllerchange', () => {
+                        if (!refreshing) {
+                            refreshing = true;
+                            window.location.reload();
+                        }
                     });
                 }
 

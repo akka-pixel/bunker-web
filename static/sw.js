@@ -1,14 +1,14 @@
-const CACHE_NAME = 'bunker-cache-v48';
-const RUNTIME_CACHE = 'bunker-runtime-v48';
+const CACHE_NAME = 'bunker-cache-v49';
+const RUNTIME_CACHE = 'bunker-runtime-v49';
 
 // Precache core UI application shell assets (stored 100% on device for 0ms offline loads)
 const PRECACHE_ASSETS = [
     '/',
     '/calendar',
     '/feedback',
-    '/static/style.css?v=3.5.8',
+    '/static/style.css?v=3.9.0',
     '/static/app.js?v=3.9.0',
-    '/static/calendar.css?v=3.5.2',
+    '/static/calendar.css?v=3.9.0',
     '/static/calendar.js?v=3.9.0',
     '/static/legal.js?v=1.0.1',
     '/static/gform.js',
@@ -84,22 +84,19 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // 3. Navigation requests: Cache-First for Instant Mobile UI Shell (0ms, 0 Vercel function calls)
+    // 3. Navigation requests: Network-First for Instant Update Propagation, Cache-Fallback for Offline
     if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/calendar' || url.pathname === '/feedback' || url.pathname === '/index.html' || url.pathname === '/calendar.html' || url.pathname === '/feedback.html') {
         const targetPath = (url.pathname === '/calendar' || url.pathname === '/calendar.html') ? '/calendar'
                          : (url.pathname === '/feedback' || url.pathname === '/feedback.html') ? '/feedback'
                          : '/';
         event.respondWith(
-            caches.match(targetPath).then(cached => {
-                if (cached) return cached;
-                return fetch(event.request).then(res => {
-                    if (res && res.status === 200) {
-                        const clone = res.clone();
-                        caches.open(CACHE_NAME).then(c => c.put(targetPath, clone));
-                    }
-                    return res;
-                }).catch(() => caches.match('/'));
-            })
+            fetch(event.request).then(res => {
+                if (res && res.status === 200) {
+                    const clone = res.clone();
+                    caches.open(CACHE_NAME).then(c => c.put(targetPath, clone));
+                }
+                return res;
+            }).catch(() => caches.match(targetPath).then(cached => cached || caches.match('/')))
         );
         return;
     }

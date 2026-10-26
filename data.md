@@ -21,7 +21,7 @@
 | 10 | [`public/calendar.html`](#file-public-calendar-html) | Source Code / Text | 21.40 KB |
 | 11 | [`public/feedback.html`](#file-public-feedback-html) | Source Code / Text | 11.08 KB |
 | 12 | [`public/google824b5c1fd4aa93e7.html`](#file-public-google824b5c1fd4aa93e7-html) | Source Code / Text | 53 B |
-| 13 | [`public/index.html`](#file-public-index-html) | Source Code / Text | 125.18 KB |
+| 13 | [`public/index.html`](#file-public-index-html) | Source Code / Text | 125.54 KB |
 | 14 | [`public/robots.txt`](#file-public-robots-txt) | Source Code / Text | 479 B |
 | 15 | [`public/sitemap.xml`](#file-public-sitemap-xml) | Source Code / Text | 978 B |
 | 16 | [`server.js`](#file-server-js) | Source Code / Text | 139.31 KB |
@@ -41,8 +41,8 @@
 | 30 | [`static/robots.txt`](#file-static-robots-txt) | Source Code / Text | 479 B |
 | 31 | [`static/sitemap.xml`](#file-static-sitemap-xml) | Source Code / Text | 978 B |
 | 32 | [`static/style.css`](#file-static-style-css) | Source Code / Text | 78.58 KB |
-| 33 | [`static/sw.js`](#file-static-sw-js) | Source Code / Text | 4.64 KB |
-| 34 | [`vercel.json`](#file-vercel-json) | Source Code / Text | 3.51 KB |
+| 33 | [`static/sw.js`](#file-static-sw-js) | Source Code / Text | 4.55 KB |
+| 34 | [`vercel.json`](#file-vercel-json) | Source Code / Text | 3.45 KB |
 
 ---
 
@@ -1485,7 +1485,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
 
     <!-- Custom Styles -->
-    <link rel="stylesheet" href="/static/calendar.css?v=3.5.2">
+    <link rel="stylesheet" href="/static/calendar.css?v=3.9.0">
 
     <!-- Performance Optimization Script (Instant 60fps on all phones) -->
     <script>
@@ -2177,7 +2177,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
 ## 13. File: `public/index.html`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/public/index.html`
-- **File Size**: 125.18 KB
+- **File Size**: 125.54 KB
 - **Format**: `html`
 
 ```html:public/index.html
@@ -2397,7 +2397,7 @@ google-site-verification: google824b5c1fd4aa93e7.html
     
     <!-- CSS & Scripts -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=3.5.8">
+    <link rel="stylesheet" href="/static/style.css?v=3.9.0">
     <script>
         window.tailwind = {
             config: {
@@ -2435,11 +2435,19 @@ google-site-verification: google824b5c1fd4aa93e7.html
                 // Register Service Worker for total offline functionality
                 if ('serviceWorker' in navigator) {
                     window.addEventListener('load', () => {
-                        navigator.serviceWorker.register('/sw.js?v=14').then((reg) => {
+                        navigator.serviceWorker.register('/sw.js?v=15').then((reg) => {
                             console.log('PWA: Service Worker registered.', reg.scope);
+                            reg.update();
                         }).catch((err) => {
                             console.log('PWA: Service Worker registration failed: ', err);
                         });
+                    });
+                    let refreshing = false;
+                    navigator.serviceWorker.addEventListener('controllerchange', () => {
+                        if (!refreshing) {
+                            refreshing = true;
+                            window.location.reload();
+                        }
                     });
                 }
 
@@ -21366,21 +21374,21 @@ html[data-perf="low"] .modal-backdrop-blur {
 ## 33. File: `static/sw.js`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/static/sw.js`
-- **File Size**: 4.64 KB
+- **File Size**: 4.55 KB
 - **Format**: `javascript`
 
 ```javascript:static/sw.js
-const CACHE_NAME = 'bunker-cache-v48';
-const RUNTIME_CACHE = 'bunker-runtime-v48';
+const CACHE_NAME = 'bunker-cache-v49';
+const RUNTIME_CACHE = 'bunker-runtime-v49';
 
 // Precache core UI application shell assets (stored 100% on device for 0ms offline loads)
 const PRECACHE_ASSETS = [
     '/',
     '/calendar',
     '/feedback',
-    '/static/style.css?v=3.5.8',
+    '/static/style.css?v=3.9.0',
     '/static/app.js?v=3.9.0',
-    '/static/calendar.css?v=3.5.2',
+    '/static/calendar.css?v=3.9.0',
     '/static/calendar.js?v=3.9.0',
     '/static/legal.js?v=1.0.1',
     '/static/gform.js',
@@ -21456,22 +21464,19 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // 3. Navigation requests: Cache-First for Instant Mobile UI Shell (0ms, 0 Vercel function calls)
+    // 3. Navigation requests: Network-First for Instant Update Propagation, Cache-Fallback for Offline
     if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/calendar' || url.pathname === '/feedback' || url.pathname === '/index.html' || url.pathname === '/calendar.html' || url.pathname === '/feedback.html') {
         const targetPath = (url.pathname === '/calendar' || url.pathname === '/calendar.html') ? '/calendar'
                          : (url.pathname === '/feedback' || url.pathname === '/feedback.html') ? '/feedback'
                          : '/';
         event.respondWith(
-            caches.match(targetPath).then(cached => {
-                if (cached) return cached;
-                return fetch(event.request).then(res => {
-                    if (res && res.status === 200) {
-                        const clone = res.clone();
-                        caches.open(CACHE_NAME).then(c => c.put(targetPath, clone));
-                    }
-                    return res;
-                }).catch(() => caches.match('/'));
-            })
+            fetch(event.request).then(res => {
+                if (res && res.status === 200) {
+                    const clone = res.clone();
+                    caches.open(CACHE_NAME).then(c => c.put(targetPath, clone));
+                }
+                return res;
+            }).catch(() => caches.match(targetPath).then(cached => cached || caches.match('/')))
         );
         return;
     }
@@ -21499,7 +21504,7 @@ self.addEventListener('fetch', (event) => {
 ## 34. File: `vercel.json`
 
 - **Absolute Path**: `/home/basi/Pictures/bunker/vercel.json`
-- **File Size**: 3.51 KB
+- **File Size**: 3.45 KB
 - **Format**: `json`
 
 ```json:vercel.json
@@ -21618,7 +21623,7 @@ self.addEventListener('fetch', (event) => {
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=0, s-maxage=86400, stale-while-revalidate=604800"
+          "value": "public, max-age=0, must-revalidate"
         }
       ]
     },
@@ -21627,7 +21632,7 @@ self.addEventListener('fetch', (event) => {
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=0, s-maxage=86400, stale-while-revalidate=604800"
+          "value": "public, max-age=0, must-revalidate"
         }
       ]
     },
