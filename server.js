@@ -1538,17 +1538,17 @@ app.get('/google824b5c1fd4aa93e7.html', (req, res) => {
 });
 
 app.get(['/', '/index.html'], (req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
 app.get(['/calendar', '/calendar.html'], (req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
   res.sendFile(path.join(PUBLIC_DIR, 'calendar.html'));
 });
 
 app.get(['/feedback', '/feedback.html'], (req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
   res.sendFile(path.join(PUBLIC_DIR, 'feedback.html'));
 });
 

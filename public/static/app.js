@@ -468,6 +468,10 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 
+window.addEventListener('pageshow', () => {
+    probeOwnerUIVersionOncePerSession();
+});
+
 function getSyncCooldownMs(forceRefresh = false) {
     // 15-minute automatic background sync cooldown protects Vercel Hobby plan for 3,000+ daily users;
     // manual tap on the sync pill allows refreshing after 30 seconds.

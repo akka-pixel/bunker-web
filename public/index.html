@@ -264,11 +264,16 @@
                         }
                     }).catch(() => {});
 
-                    window.addEventListener('load', () => {
+                    const registerSW = () => {
                         navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).then((reg) => {
                             reg.update().catch(() => {});
                         }).catch(() => {});
-                    });
+                    };
+                    if (document.readyState === 'complete') {
+                        registerSW();
+                    } else {
+                        window.addEventListener('load', registerSW);
+                    }
 
                     // When new Service Worker activates and claims control, reload cleanly to show new UI
                     let refreshing = false;
