@@ -191,21 +191,24 @@
     }
     </script>
 
-    <!-- PWA & Mobile Optimization -->
-    <meta name="theme-color" content="#030206">
+    <!-- PWA & Mobile Optimization (iOS Safari & All Android Browsers) -->
+    <meta name="theme-color" content="#05040d">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="PSG Bunker">
     <meta name="mobile-web-app-capable" content="yes">
+    <meta name="application-name" content="PSG Bunker">
     <meta name="format-detection" content="telephone=no">
-    <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
     <link rel="apple-touch-icon" sizes="192x192" href="/static/icon-192.png">
     <link rel="apple-touch-icon" sizes="512x512" href="/static/icon-512.png">
-    <link rel="manifest" href="/manifest.json?v=bunker7">
+    <link rel="manifest" href="/manifest.json?v=bunker8">
 
     <!-- Icons & Fonts -->
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <link rel="shortcut icon" href="/static/favicon.ico">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
@@ -214,7 +217,7 @@
     
     <!-- CSS & Scripts -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=3.9.0">
+    <link rel="stylesheet" href="/static/style.css?v=4.2.1">
     <script>
         window.tailwind = {
             config: {
@@ -237,28 +240,37 @@
     </script>
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
-    <script defer src="/static/calendar.js?v=3.9.0"></script>
-    <script defer src="/static/app.js?v=3.9.0"></script>
+    <script defer src="/static/calendar.js?v=4.0.0"></script>
+    <script defer src="/static/app.js?v=4.3.3"></script>
     <script defer src="/static/legal.js?v=1.0.1"></script>
 
     <script>
-        // PWA Manager
+        // Universal PWA Manager for All Android Phones & iPhones
         window.pwaManager = {
             deferredPrompt: null,
-            isIOS: /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream,
-            isStandalone: window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone,
-            isAppInstalled: false, // Will be updated after detection
+            isIOS: (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) && !window.MSStream,
+            isAndroid: /Android/i.test(navigator.userAgent),
+            isStandalone: window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: fullscreen)').matches || window.navigator.standalone === true,
+            isAppInstalled: false,
             init: function () {
-                // Register Service Worker for total offline functionality
                 if ('serviceWorker' in navigator) {
+                    // Unregister any obsolete query-string Service Workers from older bunker releases
+                    navigator.serviceWorker.getRegistrations().then((regs) => {
+                        for (const r of regs) {
+                            const url = (r.active && r.active.scriptURL) || (r.installing && r.installing.scriptURL) || (r.waiting && r.waiting.scriptURL) || '';
+                            if (url.includes('v=') || (url && !url.endsWith('/sw.js'))) {
+                                r.unregister();
+                            }
+                        }
+                    }).catch(() => {});
+
                     window.addEventListener('load', () => {
-                        navigator.serviceWorker.register('/sw.js?v=15').then((reg) => {
-                            console.log('PWA: Service Worker registered.', reg.scope);
-                            reg.update();
-                        }).catch((err) => {
-                            console.log('PWA: Service Worker registration failed: ', err);
-                        });
+                        navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).then((reg) => {
+                            reg.update().catch(() => {});
+                        }).catch(() => {});
                     });
+
+                    // When new Service Worker activates and claims control, reload cleanly to show new UI
                     let refreshing = false;
                     navigator.serviceWorker.addEventListener('controllerchange', () => {
                         if (!refreshing) {
@@ -268,88 +280,57 @@
                     });
                 }
 
-                // Check if app is already installed (even if user is in browser)
                 this.checkIfInstalled();
 
                 window.addEventListener('beforeinstallprompt', (e) => {
                     e.preventDefault();
                     this.deferredPrompt = e;
-                    this.isAppInstalled = false; // If this event fires, app is NOT installed
-                    console.log("PWA: Install prompt captured");
-                    // Trigger UI update if needed
+                    this.isAppInstalled = false;
                     if (typeof updateInstallUI === 'function') updateInstallUI();
                 });
 
                 window.addEventListener('appinstalled', () => {
                     this.deferredPrompt = null;
                     this.isAppInstalled = true;
-                    console.log("PWA: App installed");
+                    try { localStorage.setItem('bunker_pwa_installed', '1'); } catch {}
                     if (typeof updateInstallUI === 'function') updateInstallUI();
                 });
             },
 
             checkIfInstalled: async function () {
-                // Method 1: Check if running in standalone (already installed and opened)
                 if (this.isStandalone) {
                     this.isAppInstalled = true;
                     if (typeof updateInstallUI === 'function') updateInstallUI();
                     return;
                 }
 
-                // Method 2: Use getInstalledRelatedApps API (Chrome 80+)
                 if ('getInstalledRelatedApps' in navigator) {
                     try {
                         const relatedApps = await navigator.getInstalledRelatedApps();
-                        this.isAppInstalled = relatedApps.length > 0;
-                        if (this.isAppInstalled) {
-                            console.log('PWA: App is installed (detected via getInstalledRelatedApps)');
+                        if (Array.isArray(relatedApps) && relatedApps.length > 0) {
+                            this.isAppInstalled = true;
                             if (typeof updateInstallUI === 'function') updateInstallUI();
                         }
-                    } catch (e) {
-                        console.log('PWA: getInstalledRelatedApps failed', e);
-                    }
+                    } catch {}
                 }
-
-                // Method 3: Fallback - if beforeinstallprompt doesn't fire after 2 seconds,
-                // assume app might be installed (not 100% reliable but helps)
-                setTimeout(() => {
-                    if (!this.deferredPrompt && !this.isStandalone && !this.isAppInstalled) {
-                        // No prompt fired and not in standalone - might be installed
-                        // Check if Service Worker is registered (indicates previous install)
-                        if ('serviceWorker' in navigator) {
-                            navigator.serviceWorker.getRegistrations().then(regs => {
-                                if (regs.length > 0) {
-                                    this.isAppInstalled = true;
-                                    console.log('PWA: App likely installed (SW registered, no prompt)');
-                                    if (typeof updateInstallUI === 'function') updateInstallUI();
-                                }
-                            });
-                        }
-                    }
-                }, 2000);
             },
 
             install: async function () {
                 if (this.deferredPrompt) {
                     this.deferredPrompt.prompt();
                     const { outcome } = await this.deferredPrompt.userChoice;
-                    console.log(`PWA: User response to install prompt: ${outcome}`);
-                    this.deferredPrompt = null;
-                } else {
-                    // Fallback feedback
-                    if (window.showToast) {
-                        const isHttp = location.protocol === 'http:' && location.hostname !== 'localhost';
-                        if (isHttp) showToast("Install requires HTTPS or Localhost", "error");
-                        else showToast("App install not ready or already installed using browser menu");
-                    } else {
-                        alert("Install via browser menu (Add to Home Screen)");
+                    if (outcome === 'accepted') {
+                        this.isAppInstalled = true;
                     }
+                    this.deferredPrompt = null;
+                    if (typeof updateInstallUI === 'function') updateInstallUI();
+                } else if (typeof window.triggerInstall === 'function') {
+                    window.triggerInstall();
                 }
             }
         };
         window.pwaManager.init();
 
-        // Unregister the old stale /static/sw.js service worker (duplicate that was serving old cached assets)
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(regs => {
                 regs.forEach(reg => {
@@ -615,7 +596,6 @@
             <div class="px-5 pb-2 flex justify-between items-center z-30 sticky top-0 transition-all duration-300"
                 id="main-header" style="padding-top: max(1.25rem, env(safe-area-inset-top, 20px)); background:linear-gradient(to bottom, rgba(4,3,10,0.92) 0%, rgba(4,3,10,0.7) 70%, transparent 100%);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);">
                 <div>
-                    <span class="text-[9px] font-black uppercase tracking-[0.2em] block mb-1" style="color:rgba(139,92,246,0.8)" id="current-date">TODAY</span>
                     <h2 class="text-3xl font-extrabold text-white leading-none tracking-tight" id="greeting-text">Dashboard</h2>
                 </div>
             </div>
@@ -717,42 +697,68 @@
                     </div>
                 </div>
 
-                                <!-- TAB 3: SMART TRACKER (DATE-AWARE & MOBILE-OPTIMIZED) -->
-                <div id="tab-planner" class="tab-content space-y-4 pt-2">
-                    <!-- Date-Aware Tracker Header -->
-                    <div class="flex items-center justify-between px-1 stagger-item stagger-1">
-                        <div>
-                            <p class="text-xs sm:text-sm font-bold text-white tracking-wide" id="tracker-selected-date-label">Friday, Oct 23, 2026</p>
+                <!-- TAB 3: SMART TRACKER (DATE-AWARE, CALENDAR-INTEGRATED & MOBILE-OPTIMIZED) -->
+                <div id="tab-planner" class="tab-content space-y-3.5 pt-2">
+                    <!-- Unified Week Navigator & Date Header Card -->
+                    <div class="bento-card p-3.5 sm:p-4 space-y-3 stagger-item stagger-1">
+                        <!-- Top Row: Active Date Title + Today & Date Picker -->
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="min-w-0">
+                                <p class="text-sm sm:text-[15px] font-extrabold text-white tracking-tight truncate" id="tracker-selected-date-label">Friday, Oct 23, 2026</p>
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                <button type="button" id="tracker-clear-day-btn" onclick="clearSelectedDayTrackerLogs()" class="hidden h-8 px-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-[9px] font-black uppercase tracking-wider active:scale-95 transition flex items-center gap-1">
+                                    <i class="fas fa-rotate-left text-[8px]"></i>
+                                    <span>Reset</span>
+                                </button>
+                                <button type="button" onclick="jumpToTodayTracker()" class="h-8 px-3 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/35 text-indigo-300 text-[9.5px] font-black uppercase tracking-wider active:scale-95 transition flex items-center gap-1">
+                                    <i class="fas fa-location-crosshairs text-[9px]"></i>
+                                    <span>Today</span>
+                                </button>
+                                <label class="relative w-8 h-8 rounded-xl bg-white/[0.06] hover:bg-white/10 border border-white/10 flex items-center justify-center text-indigo-300 cursor-pointer active:scale-95 transition" title="Pick specific date">
+                                    <i class="fas fa-calendar-day text-xs"></i>
+                                    <input type="date" id="tracker-date-picker" onchange="onTrackerDateChange(this.value)" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full">
+                                </label>
+                            </div>
                         </div>
-                        <div class="flex items-center gap-1.5">
-                            <button type="button" onclick="jumpToTodayTracker()" class="px-2.5 py-1.5 rounded-xl bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-[9px] font-black uppercase tracking-wider active:scale-95 transition">Today</button>
-                            <label class="relative w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-indigo-300 cursor-pointer active:scale-95 transition" title="Pick specific date">
-                                <i class="fas fa-calendar-day text-xs"></i>
-                                <input type="date" id="tracker-date-picker" onchange="onTrackerDateChange(this.value)" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full">
-                            </label>
-                        </div>
-                    </div>
 
-                    <!-- Interactive Week Date Strip -->
-                    <div class="bento-card p-2 stagger-item stagger-2">
+                        <!-- Unified 4-Action Row: Prev Week, All Attended, All Bunked, Next Week -->
+                        <div class="grid grid-cols-4 gap-1.5 pt-2 border-t border-white/[0.07]">
+                            <button type="button" onclick="shiftTrackerWeek(-1)" class="h-9 px-1.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.09] text-gray-200 hover:text-white text-[9px] sm:text-[10px] font-extrabold uppercase tracking-tight flex items-center justify-center gap-1 active:scale-95 transition whitespace-nowrap">
+                                <i class="fas fa-chevron-left text-[8px] text-indigo-400"></i>
+                                <span>Prev Week</span>
+                            </button>
+                            <button type="button" onclick="markAllDayAttendance('Present')" class="h-9 px-1.5 rounded-xl bg-gradient-to-b from-emerald-500/20 to-emerald-600/10 hover:from-emerald-500/30 hover:to-emerald-600/20 border border-emerald-500/35 text-emerald-300 text-[9px] sm:text-[10px] font-black uppercase tracking-tight active:scale-95 transition flex items-center justify-center gap-1 shadow-sm whitespace-nowrap">
+                                <i class="fas fa-check text-[8px] text-emerald-400"></i>
+                                <span>All Attended</span>
+                            </button>
+                            <button type="button" onclick="markAllDayAttendance('Absent')" class="h-9 px-1.5 rounded-xl bg-gradient-to-b from-rose-500/20 to-rose-600/10 hover:from-rose-500/30 hover:to-rose-600/20 border border-rose-500/35 text-rose-300 text-[9px] sm:text-[10px] font-black uppercase tracking-tight active:scale-95 transition flex items-center justify-center gap-1 shadow-sm whitespace-nowrap">
+                                <i class="fas fa-times text-[8px] text-rose-400"></i>
+                                <span>All Bunked</span>
+                            </button>
+                            <button type="button" onclick="shiftTrackerWeek(1)" class="h-9 px-1.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.09] text-gray-200 hover:text-white text-[9px] sm:text-[10px] font-extrabold uppercase tracking-tight flex items-center justify-center gap-1 active:scale-95 transition whitespace-nowrap">
+                                <span>Next Week</span>
+                                <i class="fas fa-chevron-right text-[8px] text-indigo-400"></i>
+                            </button>
+                        </div>
+
+                        <!-- Interactive 5-Day Week Strip (with Holiday / Exam / Event badges) -->
                         <div class="grid grid-cols-5 gap-1.5" id="planner-days"></div>
                     </div>
 
-                    <div class="flex justify-between items-center px-3.5 py-2.5 bento-card stagger-item stagger-2">
-                        <button onclick="toggleSelectAllCards()" class="py-1.5 px-3 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[9px] font-black uppercase tracking-widest active:scale-95 transition">
-                            <i class="fas fa-check-double mr-1"></i>Mark All Attended
-                        </button>
-                        <span class="text-[9px] font-bold text-gray-400" id="tracker-day-summary">Tap ✓ or ✕ per period</span>
-                    </div>
+                    <!-- Calendar Event / Holiday / Exam Banner for Selected Day -->
+                    <div id="tracker-event-banner" class="hidden stagger-item stagger-2"></div>
 
-                    <div class="space-y-3 stagger-item stagger-3" id="planner-classes"></div>
+                    <!-- Period Cards List -->
+                    <div class="space-y-2.5 stagger-item stagger-3" id="planner-classes"></div>
 
-                    <div class="bento-card p-5 mt-4 stagger-item stagger-4">
+                    <!-- Tracked History Section -->
+                    <div class="bento-card p-4 sm:p-5 mt-3 stagger-item stagger-4">
                         <div class="flex justify-between items-center mb-3">
                             <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Tracked History</p>
-                            <div class="flex items-center gap-2">
-                                <span class="text-[9px] font-bold text-indigo-400" id="manual-count-badge">0 Logs</span>
-                                <button onclick="showFullHistory()" class="text-[9px] font-black text-indigo-400 uppercase tracking-widest hover:text-indigo-300 transition">View Full Log</button>
+                            <div class="flex items-center gap-2.5">
+                                <span class="text-[9px] font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20" id="manual-count-badge">0 Logs</span>
+                                <button onclick="showFullHistory()" class="text-[9px] font-black text-indigo-300 uppercase tracking-wider hover:text-white transition">View All</button>
                             </div>
                         </div>
                         <div id="manual-history" class="space-y-2"></div>
@@ -802,13 +808,41 @@
                     <!-- MAIN OTHERS HUB -->
                     <div id="others-hub" class="space-y-3.5 pb-6">
 
-                        <!-- 1. HERO ACADEMIC STANDING (CGPA + Horizontal Semester Pills) -->
-                        <div id="others-academic-card" class="bento-hero p-5 relative overflow-hidden stagger-item stagger-1">
+                        <!-- 1. HERO ACADEMIC STANDING (CGPA + Horizontal Semester Pills) - Shown ONLY after data arrives -->
+                        <div id="others-cgpa-loading" class="bento-hero p-5 relative overflow-hidden stagger-item stagger-1 flex items-center justify-between gap-3">
+                            <div class="flex items-center gap-3.5 min-w-0">
+                                <div class="w-11 h-11 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                                    <i class="fas fa-circle-notch fa-spin text-sm"></i>
+                                </div>
+                                <div class="min-w-0">
+                                    <h4 class="text-xs sm:text-sm font-black text-white uppercase tracking-wider truncate">Loading CGPA &amp; GPA...</h4>
+                                    <p class="text-[10.5px] text-gray-400 font-medium truncate mt-0.5">Fetching academic standing from eCampus</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="others-cgpa-error" class="hidden bento-hero p-5 relative overflow-hidden stagger-item stagger-1 border border-rose-500/30" style="background: linear-gradient(145deg, rgba(244,63,94,0.16) 0%, rgba(15,12,26,0.95) 100%);">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <div class="w-11 h-11 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                                        <i class="fas fa-exclamation-triangle text-sm"></i>
+                                    </div>
+                                    <div class="min-w-0">
+                                        <h4 class="text-xs sm:text-sm font-black text-white uppercase tracking-wider truncate">Failed to load CGPA</h4>
+                                        <p id="others-cgpa-error-msg" class="text-[10.5px] text-rose-200/80 font-medium truncate mt-0.5">Tap Retry to sync again</p>
+                                    </div>
+                                </div>
+                                <button type="button" onclick="refreshAcademics()" class="px-3.5 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/35 text-rose-200 text-[10px] font-black uppercase tracking-wider active:scale-95 transition shrink-0">
+                                    <i class="fas fa-redo mr-1"></i>Retry
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="others-academic-card" class="hidden bento-hero p-5 relative overflow-hidden stagger-item stagger-1">
                             <div class="absolute -right-8 -top-8 w-36 h-36 rounded-full bg-indigo-500/15 blur-3xl pointer-events-none"></div>
                             <div class="flex items-start justify-between gap-3 mb-4 relative z-10">
                                 <div class="min-w-0">
                                     <div class="flex items-center gap-2 mb-1.5 flex-wrap">
-                                        <span class="text-[9px] font-black text-indigo-300 uppercase tracking-[0.18em]">Academic Standing</span>
                                         <span id="others-cgpa-badge" class="text-[8px] font-black px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-400/30 uppercase tracking-wider">Overall</span>
                                     </div>
                                     <div class="flex items-baseline gap-1.5">
@@ -824,13 +858,6 @@
 
                             <!-- Horizontal Scrollable Sem Chips -->
                             <div class="pt-3 border-t border-white/10 relative z-10">
-                                <div class="flex items-center justify-between mb-2">
-                                    <span class="text-[8.5px] font-black text-gray-400 uppercase tracking-widest">Semester SGPA</span>
-                                    <button type="button" onclick="openOthersSubView('results')" class="text-[9px] font-bold text-indigo-300 hover:text-white flex items-center gap-1">
-                                        <span>Full Transcript</span>
-                                        <i class="fas fa-arrow-right text-[8px]"></i>
-                                    </button>
-                                </div>
                                 <div id="others-sem-chips-list" class="flex gap-2 overflow-x-auto no-scrollbar pb-0.5"></div>
                             </div>
                         </div>
@@ -841,38 +868,38 @@
                                 <span class="text-[9px] font-black text-gray-400 uppercase tracking-[0.16em]">Marks &amp; Grade Simulators</span>
                             </div>
 
-                            <div class="grid grid-cols-2 gap-2.5">
+                            <div class="grid grid-cols-2 gap-3">
                                 <!-- Internal Marks & Simulator Tile -->
-                                <button type="button" onclick="openOthersSubView('internals')" class="bento-tile p-4 text-left flex flex-col justify-between cursor-pointer group relative overflow-hidden min-h-[124px] active:scale-[0.98] transition">
-                                    <div class="flex items-center justify-between w-full mb-3">
-                                        <div class="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 text-base">
+                                <button type="button" onclick="openOthersSubView('internals')" class="bento-tile p-4 text-left flex flex-col justify-between cursor-pointer group relative overflow-hidden min-h-[120px] active:scale-[0.97] transition" style="background: linear-gradient(145deg, rgba(99,102,241,0.24) 0%, rgba(59,130,246,0.14) 52%, rgba(14,12,28,0.95) 100%); border: 1px solid rgba(99,102,241,0.4);">
+                                    <div class="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-indigo-500/20 blur-2xl pointer-events-none"></div>
+                                    <div class="flex items-center justify-between w-full mb-3 relative z-10">
+                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-indigo-600 via-violet-500 to-sky-400 flex items-center justify-center text-white text-lg shadow-lg shadow-indigo-500/35 shrink-0">
                                             <i class="fas fa-sliders"></i>
                                         </div>
-                                        <span class="text-[8px] font-black px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-300 border border-indigo-500/25 uppercase tracking-wider" id="others-internals-pill">CA + Sim</span>
+                                        <span class="text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-indigo-500/20 text-indigo-200 border border-indigo-400/40 shrink-0">CA + SIM</span>
                                     </div>
-                                    <div class="w-full">
-                                        <div class="flex items-center justify-between">
-                                            <h4 class="text-[13px] font-black text-white tracking-tight">Internal Marks</h4>
-                                            <i class="fas fa-chevron-right text-[9px] text-indigo-300"></i>
+                                    <div class="w-full relative z-10">
+                                        <div class="flex items-center justify-between gap-1">
+                                            <h4 class="text-[13px] sm:text-[14px] font-black text-white tracking-wide truncate">Internal Marks</h4>
+                                            <i class="fas fa-chevron-right text-[11px] text-indigo-300 group-hover:translate-x-0.5 transition-transform shrink-0"></i>
                                         </div>
-                                        <p class="text-[10px] text-gray-400 mt-0.5 leading-snug line-clamp-2" id="others-internals-desc">Simulate CA tests, tutorials &amp; SGPA</p>
                                     </div>
                                 </button>
 
                                 <!-- Semester Results Tile -->
-                                <button type="button" onclick="openOthersSubView('results')" class="bento-tile bento-emerald p-4 text-left flex flex-col justify-between cursor-pointer group relative overflow-hidden min-h-[124px] active:scale-[0.98] transition">
-                                    <div class="flex items-center justify-between w-full mb-3">
-                                        <div class="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-300 text-base">
+                                <button type="button" onclick="openOthersSubView('results')" class="bento-tile bento-emerald p-4 text-left flex flex-col justify-between cursor-pointer group relative overflow-hidden min-h-[120px] active:scale-[0.97] transition" style="background: linear-gradient(145deg, rgba(16,185,129,0.24) 0%, rgba(20,184,166,0.14) 52%, rgba(10,22,20,0.95) 100%); border: 1px solid rgba(16,185,129,0.4);">
+                                    <div class="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-emerald-500/20 blur-2xl pointer-events-none"></div>
+                                    <div class="flex items-center justify-between w-full mb-3 relative z-10">
+                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-emerald-600 via-teal-500 to-cyan-400 flex items-center justify-center text-white text-lg shadow-lg shadow-emerald-500/35 shrink-0">
                                             <i class="fas fa-award"></i>
                                         </div>
-                                        <span class="text-[8px] font-black px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/25 uppercase tracking-wider" id="others-results-pill">Grades</span>
+                                        <span class="text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-emerald-500/20 text-emerald-200 border border-emerald-400/40 shrink-0">GRADES</span>
                                     </div>
-                                    <div class="w-full">
-                                        <div class="flex items-center justify-between">
-                                            <h4 class="text-[13px] font-black text-white tracking-tight">Sem Marks</h4>
-                                            <i class="fas fa-chevron-right text-[9px] text-emerald-300"></i>
+                                    <div class="w-full relative z-10">
+                                        <div class="flex items-center justify-between gap-1">
+                                            <h4 class="text-[13px] sm:text-[14px] font-black text-white tracking-wide truncate">Sem Marks</h4>
+                                            <i class="fas fa-chevron-right text-[11px] text-emerald-300 group-hover:translate-x-0.5 transition-transform shrink-0"></i>
                                         </div>
-                                        <p class="text-[10px] text-gray-400 mt-0.5 leading-snug line-clamp-2" id="others-results-desc">SGPA chart, degree class &amp; grades</p>
                                     </div>
                                 </button>
                             </div>
@@ -887,70 +914,67 @@
 
                             <div class="grid grid-cols-2 gap-3">
                                 <!-- Card 1: Feedback Automation -->
-                                <button type="button" id="others-feedback-card" onclick="openFeedbackModal()" class="bento-tile bento-purple p-4 text-left flex flex-col justify-between cursor-pointer active:scale-[0.97] transition min-h-[150px] group">
-                                    <div class="flex items-center justify-between w-full mb-3">
-                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-rose-400 flex items-center justify-center text-white text-lg shadow-lg shadow-fuchsia-500/30 shrink-0">
+                                <button type="button" id="others-feedback-card" onclick="openFeedbackModal()" class="bento-tile bento-purple p-4 text-left flex flex-col justify-between cursor-pointer active:scale-[0.97] transition min-h-[120px] group relative overflow-hidden" style="background: linear-gradient(145deg, rgba(168,85,247,0.24) 0%, rgba(217,70,239,0.14) 52%, rgba(22,12,30,0.95) 100%); border: 1px solid rgba(192,132,252,0.4);">
+                                    <div class="flex items-center justify-between w-full mb-3 relative z-10">
+                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-rose-400 flex items-center justify-center text-white text-lg shadow-lg shadow-fuchsia-500/35 shrink-0">
                                             <i class="fas fa-bolt"></i>
                                         </div>
                                         <span class="text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-[#2a1b38] text-[#e9d5ff] border border-[#5b2d75] shrink-0">AUTO 5★</span>
                                     </div>
-                                    <div>
+                                    <div class="relative z-10">
                                         <div class="flex items-center justify-between gap-1">
                                             <h4 class="text-[13px] sm:text-[14px] font-black text-white tracking-wide truncate">Feedback Automation</h4>
                                             <i class="fas fa-chevron-right text-[11px] text-[#e879f9] group-hover:translate-x-0.5 transition-transform shrink-0"></i>
                                         </div>
-                                        <p class="text-[10px] sm:text-[11px] text-gray-400 font-medium mt-1 leading-snug">1-Click 5-Star automated entry bot</p>
                                     </div>
                                 </button>
 
                                 <!-- Card 2: Sem Pass Target Predictor -->
-                                <button type="button" id="others-pass-matrix-card" onclick="openPassMatrixModal()" class="bento-tile bento-rose p-4 text-left flex flex-col justify-between cursor-pointer active:scale-[0.97] transition min-h-[150px] group">
-                                    <div class="flex items-center justify-between w-full mb-3">
-                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-rose-600 via-red-500 to-orange-400 flex items-center justify-center text-white text-lg shadow-lg shadow-rose-500/30 shrink-0">
+                                <button type="button" id="others-pass-matrix-card" onclick="openPassMatrixModal()" class="bento-tile bento-rose p-4 text-left flex flex-col justify-between cursor-pointer active:scale-[0.97] transition min-h-[120px] group relative overflow-hidden" style="background: linear-gradient(145deg, rgba(244,63,94,0.24) 0%, rgba(249,115,22,0.14) 52%, rgba(26,11,18,0.95) 100%); border: 1px solid rgba(251,113,133,0.4);">
+                                    <div class="flex items-center justify-between w-full mb-3 relative z-10">
+                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-rose-600 via-red-500 to-orange-400 flex items-center justify-center text-white text-lg shadow-lg shadow-rose-500/35 shrink-0">
                                             <i class="fas fa-bullseye"></i>
                                         </div>
-                                        <span class="text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-[#351a24] text-[#fecdd3] border border-[#70263c] shrink-0">40:60 RULE</span>
+                                        <span class="text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-rose-500/20 text-rose-200 border border-rose-400/40 shrink-0">PASS MIN</span>
                                     </div>
-                                    <div>
+                                    <div class="relative z-10">
                                         <div class="flex items-center justify-between gap-1">
-                                            <h4 class="text-[13px] sm:text-[14px] font-black text-white tracking-wide truncate">Sem Pass Target Predictor</h4>
+                                            <h4 class="text-[13px] sm:text-[14px] font-black text-white tracking-wide truncate">Sem Pass Target</h4>
                                             <i class="fas fa-chevron-right text-[11px] text-[#fb7185] group-hover:translate-x-0.5 transition-transform shrink-0"></i>
                                         </div>
-                                        <p class="text-[10px] sm:text-[11px] text-gray-400 font-medium mt-1 leading-snug" id="others-predictor-sub">PSG Tech 40:60 formula &amp; pass math</p>
                                     </div>
                                 </button>
 
                                 <!-- Card 3: Compare Attendance -->
-                                <button type="button" id="others-attendance-compare-card" onclick="openAttendanceComparisonModal()" class="bento-tile bento-cyan p-4 text-left flex flex-col justify-between cursor-pointer active:scale-[0.97] transition min-h-[150px] group">
-                                    <div class="flex items-center justify-between w-full mb-3">
-                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-blue-600 via-sky-500 to-cyan-400 flex items-center justify-center text-white text-lg shadow-lg shadow-cyan-500/30 shrink-0">
+                                <button type="button" id="others-attendance-compare-card" onclick="openAttendanceComparisonModal()" class="bento-tile bento-cyan p-4 text-left flex flex-col justify-between cursor-pointer active:scale-[0.97] transition min-h-[120px] group relative overflow-hidden" style="background: linear-gradient(145deg, rgba(14,165,233,0.24) 0%, rgba(6,182,212,0.14) 52%, rgba(10,19,28,0.95) 100%); border: 1px solid rgba(56,189,248,0.4);">
+                                    <div class="flex items-center justify-between w-full mb-3 relative z-10">
+                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-blue-600 via-sky-500 to-cyan-400 flex items-center justify-center text-white text-lg shadow-lg shadow-cyan-500/35 shrink-0">
                                             <i class="fas fa-history"></i>
                                         </div>
                                         <span id="compare-change-badge" class="text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-[#362514] text-[#fde68a] border border-[#78481a] shrink-0">CURRENT ONLY</span>
                                     </div>
-                                    <div>
+                                    <div class="relative z-10">
                                         <div class="flex items-center justify-between gap-1">
                                             <h4 class="text-[13px] sm:text-[14px] font-black text-white tracking-wide truncate">Compare Attendance</h4>
                                             <i class="fas fa-chevron-right text-[11px] text-[#38bdf8] group-hover:translate-x-0.5 transition-transform shrink-0"></i>
                                         </div>
-                                        <p class="text-[10px] sm:text-[11px] text-amber-300/90 font-medium mt-1 leading-snug truncate" id="compare-dates-preview">No old attendance of yours stored</p>
                                     </div>
                                 </button>
 
-                                <!-- Card 4: Academic Calendar -->
-                                <button type="button" id="others-calendar-card" onclick="switchTab('calendar', 1)" class="bento-tile bento-amber p-4 text-left flex flex-col justify-between cursor-pointer active:scale-[0.97] transition min-h-[150px] group">
-                                    <div class="flex items-center justify-between w-full mb-3">
-                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-amber-500 via-orange-500 to-yellow-400 flex items-center justify-center text-white text-lg shadow-lg shadow-orange-500/30 shrink-0">
-                                            <i class="fas fa-calendar-alt"></i>
+                                <!-- Card 4: BunkAi -->
+                                <button type="button" id="others-bunkai-card" onclick="openBunkAiPage()" class="bento-tile p-4 text-left flex flex-col justify-between cursor-pointer active:scale-[0.97] transition min-h-[120px] group relative overflow-hidden" style="background: linear-gradient(145deg, rgba(99,102,241,0.24) 0%, rgba(168,85,247,0.15) 52%, rgba(15,12,29,0.95) 100%); border: 1px solid rgba(139,92,246,0.42);">
+                                    <div class="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-indigo-500/20 blur-2xl pointer-events-none"></div>
+                                    <div class="flex items-center justify-between w-full mb-3 relative z-10">
+                                        <div class="w-12 h-12 rounded-[18px] bg-gradient-to-tr from-indigo-600 via-violet-500 to-cyan-400 flex items-center justify-center text-white text-lg shadow-lg shadow-indigo-500/35 shrink-0">
+                                            <i class="fas fa-ghost"></i>
                                         </div>
-                                        <span class="text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-[#362514] text-[#fde68a] border border-[#78481a] shrink-0">2026 ODD</span>
+                                        <span class="text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-indigo-500/20 text-indigo-200 border border-indigo-400/40 shrink-0">BETA</span>
                                     </div>
-                                    <div>
+                                    <div class="relative z-10">
                                         <div class="flex items-center justify-between gap-1">
-                                            <h4 class="text-[13px] sm:text-[14px] font-black text-white tracking-wide truncate">Academic Calendar</h4>
-                                            <i class="fas fa-chevron-right text-[11px] text-[#fbbf24] group-hover:translate-x-0.5 transition-transform shrink-0"></i>
+                                            <h4 class="text-[13px] sm:text-[14px] font-black text-white tracking-wide truncate">BunkAi</h4>
+                                            <i class="fas fa-chevron-right text-[11px] text-indigo-300 group-hover:translate-x-0.5 transition-transform shrink-0"></i>
                                         </div>
-                                        <p class="text-[10px] sm:text-[11px] text-gray-400 font-medium mt-1 leading-snug">Cycle tests, exams &amp; holidays</p>
                                     </div>
                                 </button>
                             </div>
@@ -966,9 +990,7 @@
                                 <div class="min-w-0 flex-1">
                                     <div class="flex items-center gap-2">
                                         <h3 class="text-sm font-black text-white tracking-wide uppercase truncate" id="others-profile-roll">STUDENT</h3>
-                                        <span class="text-[8px] font-black text-emerald-400 bg-emerald-500/15 px-2 py-0.5 rounded-md border border-emerald-500/30 uppercase tracking-widest shrink-0">Active</span>
                                     </div>
-                                    <p class="text-[10.5px] text-indigo-300/80 font-medium truncate mt-0.5" id="others-profile-meta">PSG College of Technology</p>
                                 </div>
                             </div>
 
@@ -982,13 +1004,31 @@
                                         </div>
                                         <div>
                                             <div class="text-xs font-bold text-white">Include Tracker Entries</div>
-                                            <div class="text-[10px] text-gray-400">Apply manual attendance logs on Home</div>
                                         </div>
                                     </div>
                                     <label class="relative inline-flex items-center cursor-pointer shrink-0">
                                         <input type="checkbox" id="settings-include-manual" class="sr-only peer" onchange="toggleManualImpact(this)">
                                         <div class="w-11 h-6 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
                                     </label>
+                                </div>
+
+                                <!-- Row 1b: Feedback to the Bunker (Below Include Manual Entry) -->
+                                <div class="p-3.5 px-4 space-y-2.5">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/25 flex items-center justify-center text-purple-400 text-sm shrink-0">
+                                            <i class="fas fa-comment-dots"></i>
+                                        </div>
+                                        <div class="min-w-0">
+                                            <div class="text-xs font-bold text-white">Feedback to the Bunker</div>
+                                            <div class="text-[10px] text-gray-400 truncate">If you need to reach or work with Bunker, fill below</div>
+                                        </div>
+                                    </div>
+                                    <form onsubmit="submitBunkerDirectFeedback(event, 'settings')" class="flex items-center gap-2">
+                                        <input type="text" id="bunker-settings-feedback-input" placeholder="Write message or contact info..." autocomplete="off" class="flex-1 h-10 bg-white/[0.05] border border-white/10 rounded-xl px-3.5 text-xs font-semibold text-white placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/50 transition">
+                                        <button type="submit" id="bunker-settings-feedback-btn" class="h-10 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black text-[10.5px] uppercase tracking-wider active:scale-95 transition shrink-0">
+                                            Send
+                                        </button>
+                                    </form>
                                 </div>
 
                                 <!-- Row 2: Install Bunker App PWA -->
@@ -1002,7 +1042,6 @@
                                                 <span id="universal-install-title">Install Bunker App</span>
                                                 <span class="text-[8px] font-black text-indigo-300 bg-indigo-500/20 px-1.5 py-0.5 rounded border border-indigo-500/30 uppercase">PWA</span>
                                             </div>
-                                            <div class="text-[10px] text-gray-400">Add to Home Screen for instant offline load</div>
                                         </div>
                                     </div>
                                     <div class="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center text-indigo-400 shrink-0">
@@ -1020,7 +1059,6 @@
                                         </div>
                                         <div>
                                             <div class="text-xs font-bold text-white">Privacy &amp; Local Vault</div>
-                                            <div class="text-[10px] text-gray-400">Zero server storage • Encrypted on device</div>
                                         </div>
                                     </div>
                                     <i class="fas fa-chevron-right text-white/25 text-xs"></i>
@@ -1046,84 +1084,72 @@
                             </button>
                             <div class="text-center">
                                 <span class="text-xs font-black text-white uppercase tracking-wider block">Internal Marks</span>
-                                <span class="text-[9px] font-bold text-gray-400 block" id="internals-status">Tap any course to simulate</span>
                             </div>
-                            <button type="button" onclick="openPassMatrixModal()" class="min-h-[40px] px-3 py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-black uppercase active:scale-95 transition flex items-center gap-1.5">
-                                <i class="fas fa-bullseye text-[10px]"></i>
-                                <span>Predictor</span>
+                            <button type="button" onclick="resetAllInternalsSim()" class="min-h-[40px] px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 text-[10px] font-bold active:scale-95 transition flex items-center gap-1.5">
+                                <i class="fas fa-rotate-left text-[9px]"></i>
+                                <span>Reset</span>
                             </button>
                         </div>
 
-                        <!-- Live Simulated SGPA & CGPA Dashboard Card -->
-                        <div class="bento-hero p-4 sm:p-5 space-y-3.5">
+                        <!-- Top SGPA & CGPA Predictor (Shown ONLY after data arrives) -->
+                        <div id="internals-predictor-card" class="hidden bento-hero p-4 sm:p-5 space-y-3.5">
                             <div class="flex items-center justify-between gap-2">
                                 <div>
-                                    <span class="text-[8.5px] font-black text-indigo-300 uppercase tracking-[0.18em] block">Live Semester Simulator</span>
-                                    <h4 class="text-xs sm:text-sm font-black text-white mt-0.5">Predicted SGPA &amp; CGPA</h4>
+                                    <h4 class="text-sm font-extrabold text-white">SGPA &amp; CGPA Predictor</h4>
                                 </div>
-                                <button type="button" onclick="resetAllInternalsSim()" class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[9px] font-bold text-gray-300 active:scale-95 transition flex items-center gap-1">
-                                    <i class="fas fa-rotate-left text-[8px]"></i>
-                                    <span>Reset All</span>
+                                <button type="button" onclick="document.getElementById('predictor-credits-drawer').classList.toggle('hidden')" class="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-semibold text-indigo-200 active:scale-95 transition flex items-center gap-1.5">
+                                    <i class="fas fa-sliders text-[9px]"></i>
+                                    <span>Credits</span>
                                 </button>
                             </div>
 
-                            <!-- 2-Column Live Metrics: Simulated vs Max Ceiling -->
                             <div class="grid grid-cols-2 gap-2.5">
-                                <div class="bg-black/45 p-3 rounded-2xl border border-white/10 flex items-center justify-between">
+                                <!-- SGPA Card -->
+                                <div class="bg-black/45 p-3.5 rounded-2xl border border-white/10 flex items-center justify-between">
                                     <div>
-                                        <span class="text-[8px] font-black text-indigo-300 uppercase tracking-wider block">Sim SGPA</span>
+                                        <span class="text-[10px] font-medium text-gray-400 block">Pred. SGPA</span>
                                         <span class="text-2xl font-black text-white leading-tight tabular-nums" id="predicted-sgpa-value">--</span>
                                     </div>
-                                    <div class="text-right border-l border-white/10 pl-2.5">
-                                        <span class="text-[7.5px] font-black text-gray-400 uppercase tracking-wider block">Ceiling</span>
-                                        <span class="text-sm font-black text-amber-300 leading-tight tabular-nums" id="max-sgpa-value">--</span>
+                                    <div class="text-right border-l border-white/10 pl-3">
+                                        <span class="text-[9.5px] font-medium text-amber-300/90 block">Max SGPA</span>
+                                        <span class="text-base font-black text-amber-300 leading-tight tabular-nums" id="max-sgpa-value">--</span>
                                     </div>
                                 </div>
-                                <div class="bg-black/45 p-3 rounded-2xl border border-white/10 flex items-center justify-between">
+
+                                <!-- CGPA Card -->
+                                <div class="bg-black/45 p-3.5 rounded-2xl border border-white/10 flex items-center justify-between">
                                     <div>
-                                        <span class="text-[8px] font-black text-emerald-300 uppercase tracking-wider block">Sim CGPA</span>
+                                        <span class="text-[10px] font-medium text-gray-400 block">Pred. CGPA</span>
                                         <span class="text-2xl font-black text-emerald-400 leading-tight tabular-nums" id="predicted-cgpa-value">--</span>
                                     </div>
-                                    <div class="text-right border-l border-white/10 pl-2.5">
-                                        <span class="text-[7.5px] font-black text-gray-400 uppercase tracking-wider block">Ceiling</span>
-                                        <span class="text-sm font-black text-purple-300 leading-tight tabular-nums" id="max-cgpa-value">--</span>
+                                    <div class="text-right border-l border-white/10 pl-3">
+                                        <span class="text-[9.5px] font-medium text-purple-300/90 block">Max CGPA</span>
+                                        <span class="text-base font-black text-purple-300 leading-tight tabular-nums" id="max-cgpa-value">--</span>
                                     </div>
                                 </div>
                             </div>
 
-                            <!-- 8.5 Distinction Target Callout -->
-                            <div id="target-cgpa-container" class="hidden px-3 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between text-[10px]">
-                                <span class="text-gray-300 font-medium">SGPA needed for <b class="text-white">8.50 Distinction</b>:</span>
-                                <span id="required-sgpa-85" class="font-black text-indigo-300 text-xs">--</span>
-                            </div>
-
-                            <!-- 1-Tap Global Final Exam Scenario Presets -->
-                            <div>
-                                <div class="flex items-center justify-between mb-1.5">
-                                    <span class="text-[8px] font-black text-gray-400 uppercase tracking-widest">1-Tap Final Exam Scenario (All Subjects)</span>
-                                </div>
-                                <div class="grid grid-cols-4 gap-1.5">
-                                    <button type="button" onclick="applyGlobalExamPreset('pass')" class="min-h-[38px] py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[9.5px] font-black uppercase active:scale-95 transition">Just Pass</button>
-                                    <button type="button" onclick="applyGlobalExamPreset(70)" class="min-h-[38px] py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[9.5px] font-black uppercase active:scale-95 transition">70 / 100</button>
-                                    <button type="button" onclick="applyGlobalExamPreset(85)" class="min-h-[38px] py-1.5 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-300 text-[9.5px] font-black uppercase active:scale-95 transition">85 / 100</button>
-                                    <button type="button" onclick="applyGlobalExamPreset(95)" class="min-h-[38px] py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[9.5px] font-black uppercase active:scale-95 transition">95 / 100</button>
-                                </div>
-                            </div>
-
-                            <!-- Collapsible Course Credits & Grade Summary -->
-                            <div id="cgpa-predictor" class="hidden pt-2 border-t border-white/10">
-                                <button type="button" onclick="document.getElementById('predictor-credits-drawer').classList.toggle('hidden')" class="w-full flex items-center justify-between py-1 text-[9.5px] font-bold text-indigo-300 hover:text-white transition">
-                                    <span class="flex items-center gap-1.5"><i class="fas fa-sliders text-[9px]"></i> <span>Adjust Course Credits &amp; View Predicted Grades</span></span>
-                                    <i class="fas fa-chevron-down text-[9px]"></i>
-                                </button>
-                                <div id="predictor-credits-drawer" class="hidden mt-2.5 space-y-1.5 max-h-[240px] overflow-y-auto no-scrollbar">
-                                    <div id="predictor-subjects-list" class="space-y-1.5"></div>
-                                </div>
+                            <!-- Collapsible Course Credits Drawer -->
+                            <div id="predictor-credits-drawer" class="hidden pt-2.5 border-t border-white/10 space-y-1.5 max-h-[240px] overflow-y-auto no-scrollbar">
+                                <div id="predictor-subjects-list" class="space-y-1.5"></div>
                             </div>
                         </div>
 
-                        <!-- Subject Internal Marks & Simulator Cards -->
+                        <!-- Clean Subject Internal Marks Cards -->
                         <div id="internals-list" class="space-y-3"></div>
+                    </div>
+
+                    <!-- INTERNAL MARKS & SIMULATOR POP-UP MODAL -->
+                    <div id="internals-detail-modal" class="fixed inset-0 z-[76] hidden flex items-end sm:items-center justify-center p-0 sm:p-4">
+                        <div id="internals-detail-backdrop" onclick="closeInternalModal()" class="absolute inset-0 bg-black/80 backdrop-blur-md opacity-0 transition-opacity duration-200"></div>
+                        <div id="internals-detail-panel" class="relative z-10 w-full max-w-md max-h-[88vh] bg-[#0b0a18] border-t sm:border border-white/15 rounded-t-[28px] sm:rounded-[28px] flex flex-col overflow-hidden shadow-2xl opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95 transition-all duration-200">
+                            <div class="px-5 py-3 border-b border-white/10 flex items-center justify-end gap-3 bg-[#100e22]/90 shrink-0">
+                                <button type="button" onclick="closeInternalModal()" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-400 hover:text-white flex items-center justify-center shrink-0 active:scale-90 transition">
+                                    <i class="fas fa-times text-xs"></i>
+                                </button>
+                            </div>
+                            <div id="int-modal-body" class="p-5 overflow-y-auto no-scrollbar space-y-4"></div>
+                        </div>
                     </div>
 
                     <!-- SUBVIEW 2: SEMESTER RESULTS -->
@@ -1134,64 +1160,87 @@
                                 <span>Back</span>
                             </button>
                             <span class="text-xs font-black text-white uppercase tracking-wider">Semester Marks</span>
-                            <span class="text-[10px] font-black text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-xl border border-emerald-500/20 tabular-nums" id="results-cgpa-pill">-- CGPA</span>
+                            <span class="hidden text-[10px] font-black text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-xl border border-emerald-500/20 tabular-nums" id="results-cgpa-pill"></span>
                         </div>
 
                         <!-- Results Panel Content -->
                         <div id="acad-panel-results" class="space-y-3.5">
-                            <!-- Hero Statement of Grades -->
-                            <div class="bento-hero p-5">
-                                <div class="flex items-start justify-between gap-3">
-                                    <div>
-                                        <p class="text-[9px] font-black text-emerald-400 uppercase tracking-[0.18em] mb-1" id="gpa-hero-title">Semester GPA</p>
-                                        <div class="flex items-baseline gap-1.5">
-                                            <span class="text-4xl sm:text-5xl font-black text-white leading-none tabular-nums" id="gpa-value">--</span>
-                                            <span class="text-gray-400 text-xs font-bold">/ 10</span>
+                            <!-- Loading state before GPA/CGPA data arrives -->
+                            <div id="results-loading-state" class="bento-card p-8 text-center space-y-3">
+                                <div class="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mx-auto">
+                                    <i class="fas fa-circle-notch fa-spin text-sm"></i>
+                                </div>
+                                <p class="text-xs font-black text-white uppercase tracking-wider">Loading Semester Marks &amp; CGPA...</p>
+                                <p class="text-[10px] text-gray-400">Fetching official grades &amp; GPA from PSG eCampus</p>
+                            </div>
+
+                            <!-- Error state if GPA/CGPA fetch fails -->
+                            <div id="results-error-state" class="hidden bento-card p-6 text-center space-y-3 border border-rose-500/30">
+                                <div class="w-11 h-11 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mx-auto">
+                                    <i class="fas fa-exclamation-triangle text-sm"></i>
+                                </div>
+                                <p id="results-error-msg" class="text-xs font-black text-white">Failed to load Semester Marks</p>
+                                <button type="button" onclick="loadAcademics(true, false, 'results')" class="px-4 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 text-[11px] font-black uppercase tracking-wider active:scale-95 transition">
+                                    <i class="fas fa-sync-alt mr-1.5"></i>Retry
+                                </button>
+                            </div>
+
+                            <!-- Data Container: Shown ONLY after GPA/CGPA data arrives -->
+                            <div id="results-data-container" class="hidden space-y-3.5">
+                                <!-- Hero Statement of Grades -->
+                                <div id="results-hero-card" class="bento-hero p-5">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p class="text-[9px] font-black text-emerald-400 uppercase tracking-[0.18em] mb-1" id="gpa-hero-title">Semester GPA</p>
+                                            <div class="flex items-baseline gap-1.5">
+                                                <span class="text-4xl sm:text-5xl font-black text-white leading-none tabular-nums" id="gpa-value"></span>
+                                                <span class="text-gray-400 text-xs font-bold">/ 10</span>
+                                            </div>
+                                            <p class="text-[10.5px] text-gray-300/90 mt-1.5 font-medium" id="cgpa-credits"></p>
                                         </div>
-                                        <p class="text-[10.5px] text-gray-300/90 mt-1.5 font-medium" id="cgpa-credits">-- total credits</p>
+                                        <div class="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center shrink-0">
+                                            <i class="fas fa-award text-xl text-emerald-400"></i>
+                                        </div>
                                     </div>
-                                    <div class="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center shrink-0">
-                                        <i class="fas fa-award text-xl text-emerald-400"></i>
+
+                                    <!-- Sem-wise GPA Filter Chips -->
+                                    <div id="results-sem-chips" class="hidden pt-3.5 mt-3.5 border-t border-white/10">
+                                        <div class="flex items-center justify-between mb-2">
+                                            <p class="text-[8.5px] font-black text-gray-400 uppercase tracking-widest">Filter by Semester</p>
+                                            <span class="text-[8.5px] font-bold text-emerald-300">Tap any sem</span>
+                                        </div>
+                                        <div id="results-sem-chips-list" class="flex gap-2 overflow-x-auto no-scrollbar pb-0.5"></div>
                                     </div>
                                 </div>
 
-                                <!-- Sem-wise GPA Filter Chips -->
-                                <div id="results-sem-chips" class="hidden pt-3.5 mt-3.5 border-t border-white/10">
-                                    <div class="flex items-center justify-between mb-2">
-                                        <p class="text-[8.5px] font-black text-gray-400 uppercase tracking-widest">Filter by Semester</p>
-                                        <span class="text-[8.5px] font-bold text-emerald-300">Tap any sem</span>
+                                <!-- Degree Classification & Standing Card -->
+                                <div class="bento-card p-4 sm:p-5" id="degree-classification-card">
+                                    <div class="flex items-center justify-between mb-2.5">
+                                        <span class="text-[9px] font-black text-indigo-300 uppercase tracking-[0.16em]">Degree Classification</span>
+                                        <span id="degree-class-badge" class="text-[8px] font-black px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 uppercase">Standing</span>
                                     </div>
-                                    <div id="results-sem-chips-list" class="flex gap-2 overflow-x-auto no-scrollbar pb-0.5"></div>
+                                    <div class="flex items-center justify-between gap-3 mb-3">
+                                        <div class="min-w-0">
+                                            <p id="degree-class-label" class="text-base sm:text-lg font-black text-white truncate"></p>
+                                            <p id="degree-class-sub" class="text-[10.5px] text-gray-400 mt-0.5 font-medium"></p>
+                                        </div>
+                                        <div id="degree-class-icon" class="w-11 h-11 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-lg shrink-0">🎓</div>
+                                    </div>
+                                    <div id="degree-class-progress" class="bg-black/35 rounded-xl p-3 border border-white/5 text-[10.5px] text-gray-300 font-medium leading-relaxed"></div>
                                 </div>
+
+                                <!-- Progression Chart -->
+                                <div id="results-chart-card" class="bento-card p-4 sm:p-5">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest">SGPA &amp; CGPA Progression</p>
+                                        <span class="text-[8.5px] font-bold text-gray-500">Scale 5.0 – 10.0</span>
+                                    </div>
+                                    <div id="cgpa-chart" class="w-full overflow-x-auto"></div>
+                                </div>
+
+                                <!-- Semester Breakdown Marks List -->
+                                <div id="results-sem-list" class="space-y-3.5"></div>
                             </div>
-
-                            <!-- Degree Classification & Standing Card -->
-                            <div class="bento-card p-4 sm:p-5" id="degree-classification-card">
-                                <div class="flex items-center justify-between mb-2.5">
-                                    <span class="text-[9px] font-black text-indigo-300 uppercase tracking-[0.16em]">Degree Classification</span>
-                                    <span id="degree-class-badge" class="text-[8px] font-black px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 uppercase">Standing</span>
-                                </div>
-                                <div class="flex items-center justify-between gap-3 mb-3">
-                                    <div class="min-w-0">
-                                        <p id="degree-class-label" class="text-base sm:text-lg font-black text-white truncate">--</p>
-                                        <p id="degree-class-sub" class="text-[10.5px] text-gray-400 mt-0.5 font-medium">Syncing classification...</p>
-                                    </div>
-                                    <div id="degree-class-icon" class="w-11 h-11 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-lg shrink-0">🎓</div>
-                                </div>
-                                <div id="degree-class-progress" class="bg-black/35 rounded-xl p-3 border border-white/5 text-[10.5px] text-gray-300 font-medium leading-relaxed"></div>
-                            </div>
-
-                            <!-- Progression Chart -->
-                            <div class="bento-card p-4 sm:p-5">
-                                <div class="flex items-center justify-between mb-3">
-                                    <p class="text-[9px] font-black text-gray-400 uppercase tracking-widest">SGPA &amp; CGPA Progression</p>
-                                    <span class="text-[8.5px] font-bold text-gray-500">Scale 5.0 – 10.0</span>
-                                </div>
-                                <div id="cgpa-chart" class="w-full overflow-x-auto"></div>
-                            </div>
-
-                            <!-- Semester Breakdown Marks List -->
-                            <div id="results-sem-list" class="space-y-3.5"></div>
                         </div>
                     </div>
 
@@ -1229,238 +1278,121 @@
     </div>
     <!-- End of app -->
 
-    <!-- ULTRA-BEAUTIFUL SIMULATOR POP-UP MODAL -->
-    <div id="sim-modal" class="fixed inset-0 z-[60] hidden flex items-center justify-center p-4">
+    <!-- ULTRA-BEAUTIFUL & MOBILE-FRIENDLY SIMULATOR POP-UP MODAL -->
+    <div id="sim-modal" class="fixed inset-0 z-[60] hidden flex items-center justify-center p-3.5 sm:p-4">
         <div class="absolute inset-0 modal-backdrop-blur" id="sim-backdrop" onclick="closeSim()"></div>
-        <div class="w-full max-w-[355px] relative z-10 modal-spring-card p-6 overflow-hidden" id="sim-panel">
-            <div class="absolute -top-16 -right-16 w-36 h-36 rounded-full bg-indigo-500/25 blur-3xl pointer-events-none"></div>
-            <div class="absolute -bottom-16 -left-16 w-36 h-36 rounded-full bg-purple-500/20 blur-3xl pointer-events-none"></div>
+        <div class="w-full max-w-[340px] sm:max-w-[360px] relative z-10 modal-spring-card p-4 sm:p-5 overflow-hidden rounded-[28px] border border-white/12 bg-[#0b0a14]/95 shadow-[0_25px_70px_rgba(0,0,0,0.9)]" id="sim-panel">
+            <!-- Subtle Ambient Glow -->
+            <div class="absolute -top-20 -right-16 w-40 h-40 rounded-full bg-indigo-500/15 blur-3xl pointer-events-none"></div>
+            <div class="absolute -bottom-20 -left-16 w-40 h-40 rounded-full bg-purple-500/10 blur-3xl pointer-events-none"></div>
 
             <!-- Modal Header -->
-            <div class="flex justify-between items-start mb-3 relative z-10">
-                <div class="min-w-0 pr-3">
-                    <h3 class="text-base font-bold text-white leading-tight truncate" id="sim-subject">Subject</h3>
-                    <p class="text-[9px] text-indigo-400 font-bold uppercase tracking-widest mt-0.5" id="sim-sub-meta">75% Exam &amp; 65% Medical Engine</p>
-                </div>
-                <button onclick="closeSim()" class="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 flex items-center justify-center text-white/70 active:scale-90 transition shrink-0">
+            <div class="flex justify-end items-center relative z-10">
+                <button type="button" onclick="closeSim()" class="w-8 h-8 rounded-full bg-white/[0.06] hover:bg-white/12 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white active:scale-90 transition shrink-0">
                     <i class="fas fa-times text-xs"></i>
                 </button>
             </div>
 
-            <!-- Leave vs On-Duty (OD) Simulation Mode Toggle -->
-            <div class="bg-white/5 p-1 rounded-2xl border border-white/10 flex gap-1 mb-4 relative z-10">
-                <button type="button" id="sim-mode-leave" onclick="setSimAbsenceMode('leave')"
-                    class="flex-1 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider bg-indigo-600 text-white shadow transition">
-                    Regular Leave / Bunk
-                </button>
-                <button type="button" id="sim-mode-od" onclick="setSimAbsenceMode('od')"
-                    class="flex-1 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider text-gray-400 hover:text-white transition">
-                    On-Duty (OD) / Exemption
-                </button>
-            </div>
-
             <!-- Glowing SVG Gauge Ring -->
-            <div class="flex justify-center mb-4 relative z-10">
-                <div class="w-40 h-40 relative flex items-center justify-center">
-                    <svg class="w-full h-full transform -rotate-90" viewBox="0 0 208 208">
+            <div class="flex justify-center -mt-2 mb-1 relative z-10">
+                <div class="w-52 h-52 sm:w-56 sm:h-56 relative flex items-center justify-center">
+                    <svg class="w-full h-full transform -rotate-90 overflow-visible" viewBox="0 0 208 208">
+                        <!-- Background Track -->
                         <circle cx="104" cy="104" r="86" stroke="rgba(255,255,255,0.06)" stroke-width="14" fill="none"></circle>
-                        <circle id="sim-ring" cx="104" cy="104" r="86" stroke="#22C55E" stroke-width="14"
+                        <!-- Dynamic Progress Ring -->
+                        <circle id="sim-ring" cx="104" cy="104" r="86" stroke="#EAB308" stroke-width="14"
                             fill="none" stroke-dasharray="540" stroke-dashoffset="0" stroke-linecap="round"
-                            class="transition-all duration-500" style="filter: drop-shadow(0 0 12px rgba(34,197,94,0.45));"></circle>
+                            class="transition-all duration-500 ease-out" style="filter: drop-shadow(0 0 12px rgba(234,179,8,0.55));"></circle>
                     </svg>
-                    <div class="absolute inset-0 flex flex-col items-center justify-center text-center">
-                        <span id="sim-pct" class="text-4xl font-black text-white tracking-tighter leading-none">0%</span>
-                        <span id="sim-fraction" class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">0 / 0</span>
-                        <span id="sim-diff" class="text-[8.5px] font-black px-2.5 py-0.5 rounded-full bg-white/5 mt-1 uppercase border border-white/10 text-gray-300">Current</span>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center text-center px-3">
+                        <span id="sim-pct" class="text-[48px] sm:text-[52px] font-black text-white tracking-tighter leading-none tabular-nums">0%</span>
+                        <span id="sim-fraction" class="text-[10px] font-extrabold text-gray-400 tracking-[0.14em] mt-2 uppercase tabular-nums">0 / 0 PERIODS</span>
                     </div>
                 </div>
             </div>
 
             <!-- Live Safe Bunk Status Pill -->
-            <div id="sim-verdict-banner" class="mb-3 py-2 px-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center text-[10px] font-black text-emerald-300 uppercase tracking-wider relative z-10">
-                Safe to bunk
+            <div id="sim-verdict-banner" class="mt-1 mb-2.5 py-2 px-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center text-[10px] font-black text-emerald-400 uppercase tracking-wider relative z-10 flex items-center justify-center gap-2 shadow-sm">
+                <i class="fas fa-shield-alt text-xs"></i>
+                <span>Safe to bunk 0</span>
             </div>
 
-            <!-- Strict 75% Exam & 65% Medical Dual-Threshold Diagnostic Grid -->
-            <div id="sim-dual-thresholds" class="grid grid-cols-2 gap-2 mb-3 relative z-10">
-                <div class="p-2.5 rounded-2xl bg-white/[0.03] border border-white/10">
-                    <div class="text-[8px] font-black uppercase tracking-wider text-indigo-300">75% Exam Zone</div>
-                    <div id="sim-diag-75" class="text-xs font-black text-white mt-0.5">--</div>
-                    <div id="sim-eta-75" class="text-[8.5px] font-semibold text-gray-400 mt-0.5 truncate">--</div>
-                </div>
-                <div class="p-2.5 rounded-2xl bg-white/[0.03] border border-white/10">
-                    <div class="text-[8px] font-black uppercase tracking-wider text-amber-300">65% Medical Floor</div>
-                    <div id="sim-diag-65" class="text-xs font-black text-white mt-0.5">--</div>
-                    <div id="sim-eta-65" class="text-[8.5px] font-semibold text-gray-400 mt-0.5 truncate">--</div>
-                </div>
-            </div>
-
-            <!-- End-of-Semester Remaining Classes Projection -->
-            <div id="sim-semester-projection" class="mb-3 px-3 py-2 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between text-[9px] font-bold text-indigo-200 relative z-10">
-                <span id="sim-rem-classes-label">Est. Left in Sem: -- hrs</span>
-                <span id="sim-max-sem-pct" class="font-black text-white">Max Possible: --%</span>
-            </div>
-
-            <!-- Tactile Controls -->
-            <div class="space-y-2.5 relative z-10">
-                <div class="bg-white/5 rounded-3xl p-2 pr-3 flex items-center justify-between pl-4 border border-white/10">
-                    <div class="flex items-center gap-3">
-                        <div class="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-xs">
+            <!-- Tactile Mobile-Friendly Stepper Controls -->
+            <div class="space-y-2 relative z-10">
+                <!-- Attend Control Row -->
+                <div class="bg-white/[0.04] rounded-2xl p-2 pl-3 pr-2 flex items-center justify-between border border-white/[0.08]">
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <div class="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center text-emerald-400 text-xs shrink-0">
                             <i class="fas fa-check"></i>
                         </div>
-                        <span class="text-[11px] font-bold text-gray-200 uppercase tracking-wider" id="sim-attend-label">Attend</span>
+                        <div class="min-w-0">
+                            <span class="text-xs font-extrabold text-white uppercase tracking-wider block leading-tight" id="sim-attend-label">Attend</span>
+                        </div>
                     </div>
-                    <div class="flex items-center gap-1.5">
-                        <button onclick="updateBunkSim('attend', -1)" class="w-9 h-9 rounded-2xl bg-black/40 border border-white/10 text-white active:scale-90 transition"><i class="fas fa-minus text-[10px]"></i></button>
-                        <span id="val-attend" class="w-7 text-center font-black text-white text-base">0</span>
-                        <button onclick="updateBunkSim('attend', 1)" class="w-9 h-9 rounded-2xl bg-emerald-500 text-black font-black shadow-lg shadow-emerald-500/25 active:scale-90 transition"><i class="fas fa-plus text-[10px]"></i></button>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button type="button" onclick="updateBunkSim('attend', -1)" class="w-10 h-10 rounded-xl bg-black/60 hover:bg-black/80 border border-white/10 text-white flex items-center justify-center active:scale-90 transition" aria-label="Decrease attend">
+                            <i class="fas fa-minus text-[10px]"></i>
+                        </button>
+                        <span id="val-attend" class="w-6 text-center font-black text-white text-base tabular-nums">0</span>
+                        <button type="button" onclick="updateBunkSim('attend', 1)" class="w-10 h-10 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black shadow-lg shadow-emerald-500/25 flex items-center justify-center active:scale-90 transition" aria-label="Increase attend">
+                            <i class="fas fa-plus text-xs"></i>
+                        </button>
                     </div>
                 </div>
 
-                <div class="bg-white/5 rounded-3xl p-2 pr-3 flex items-center justify-between pl-4 border border-white/10">
-                    <div class="flex items-center gap-3">
-                        <div class="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 text-xs" id="sim-bunk-icon-wrap">
+                <!-- Bunk Control Row -->
+                <div class="bg-white/[0.04] rounded-2xl p-2 pl-3 pr-2 flex items-center justify-between border border-white/[0.08]">
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <div class="w-8 h-8 rounded-xl bg-rose-500/15 border border-rose-500/25 flex items-center justify-center text-rose-400 text-xs shrink-0" id="sim-bunk-icon-wrap">
                             <i class="fas fa-times" id="sim-bunk-icon"></i>
                         </div>
-                        <span class="text-[11px] font-bold text-gray-200 uppercase tracking-wider" id="sim-bunk-label">Bunk</span>
+                        <div class="min-w-0">
+                            <span class="text-xs font-extrabold text-white uppercase tracking-wider block leading-tight" id="sim-bunk-label">Bunk</span>
+                        </div>
                     </div>
-                    <div class="flex items-center gap-1.5">
-                        <button onclick="updateBunkSim('bunk', -1)" class="w-9 h-9 rounded-2xl bg-black/40 border border-white/10 text-white active:scale-90 transition"><i class="fas fa-minus text-[10px]"></i></button>
-                        <span id="val-bunk" class="w-7 text-center font-black text-white text-base">0</span>
-                        <button onclick="updateBunkSim('bunk', 1)" class="w-9 h-9 rounded-2xl bg-rose-500 text-black font-black shadow-lg shadow-rose-500/25 active:scale-90 transition"><i class="fas fa-plus text-[10px]"></i></button>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button type="button" onclick="updateBunkSim('bunk', -1)" class="w-10 h-10 rounded-xl bg-black/60 hover:bg-black/80 border border-white/10 text-white flex items-center justify-center active:scale-90 transition" aria-label="Decrease bunk">
+                            <i class="fas fa-minus text-[10px]"></i>
+                        </button>
+                        <span id="val-bunk" class="w-6 text-center font-black text-white text-base tabular-nums">0</span>
+                        <button type="button" onclick="updateBunkSim('bunk', 1)" class="w-10 h-10 rounded-xl bg-rose-500 hover:bg-rose-400 text-black font-black shadow-lg shadow-rose-500/25 flex items-center justify-center active:scale-90 transition" aria-label="Increase bunk">
+                            <i class="fas fa-plus text-xs"></i>
+                        </button>
                     </div>
                 </div>
             </div>
 
-            <div class="mt-4 text-center relative z-10">
-                <button type="button" onclick="resetSimModal()" class="text-[10px] font-bold uppercase tracking-widest text-gray-400 hover:text-white py-1.5 px-4 rounded-xl hover:bg-white/5 active:scale-95 transition inline-flex items-center gap-1.5">
-                    <i class="fas fa-rotate-left text-[9px]"></i>
+            <!-- Reset Footer -->
+            <div class="mt-3 flex justify-center relative z-10">
+                <button type="button" id="sim-reset-btn" onclick="resetSimModal()" class="py-1.5 px-3.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] text-[9px] font-bold uppercase tracking-wider text-gray-400 hover:text-white active:scale-95 transition inline-flex items-center justify-center gap-1.5">
+                    <i class="fas fa-rotate-left text-[8.5px]"></i>
                     <span>Reset Simulation</span>
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- SEM MARKS & PASS TARGET PREDICTOR POP-UP MODAL (40:60 RULE) -->
-    <div id="pass-matrix-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-4">
+    <!-- SEM MARKS & PASS TARGET PREDICTOR POP-UP MODAL -->
+    <div id="pass-matrix-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3.5 sm:p-4">
         <div class="absolute inset-0 modal-backdrop-blur" id="pass-matrix-backdrop" onclick="closePassMatrixModal()"></div>
-        <div class="w-full max-w-[420px] relative z-10 modal-spring-card p-5 space-y-4 max-h-[90vh] overflow-y-auto no-scrollbar" id="pass-matrix-panel">
+        <div class="w-full max-w-[390px] relative z-10 modal-spring-card p-4 sm:p-5 space-y-3.5 max-h-[85vh] overflow-y-auto no-scrollbar rounded-[28px] border border-white/12 bg-[#0b0a14]/95 shadow-2xl" id="pass-matrix-panel">
             <div class="absolute -top-16 -right-16 w-36 h-36 rounded-full bg-rose-500/20 blur-3xl pointer-events-none"></div>
 
             <!-- Header -->
             <div class="flex items-center justify-between relative z-10">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white text-sm shadow-lg shadow-rose-500/30">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-500 flex items-center justify-center text-white text-sm shadow-lg shadow-rose-500/30">
                         <i class="fas fa-bullseye"></i>
                     </div>
-                    <div>
-                        <h3 class="text-sm font-black text-white tracking-tight">Sem Marks Predictor</h3>
-                        <p class="text-[9px] text-rose-300 font-black uppercase tracking-widest">PSG Tech 40:60 Ceiling Calculator</p>
-                    </div>
+                    <h3 class="text-sm font-black text-white tracking-tight">Sem Marks Predictor</h3>
                 </div>
-                <button onclick="closePassMatrixModal()" class="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
+                <button onclick="closePassMatrixModal()" class="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
             </div>
 
-            <!-- Active Subject Badge (when selected) -->
-            <div id="pass-matrix-course-badge" class="hidden p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-between gap-2 relative z-10">
-                <div class="min-w-0">
-                    <span class="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 mr-1.5" id="pass-matrix-active-code">CODE</span>
-                    <span class="text-xs font-bold text-white truncate" id="pass-matrix-active-name">Subject Name</span>
-                </div>
-                <button type="button" onclick="applyPassMatrixToActiveSubject()" class="px-2.5 py-1 rounded-lg bg-rose-500 hover:bg-rose-400 text-white text-[9px] font-black uppercase tracking-wider shrink-0 active:scale-95 transition">
-                    Apply to Sim
-                </button>
-            </div>
+            <p class="text-[11px] font-bold text-rose-200/95 bg-gradient-to-r from-rose-500/15 via-pink-500/10 to-orange-500/10 border border-rose-500/25 rounded-xl px-3 py-2 text-center relative z-10">These are the min marks to get pass in the sem for you</p>
 
-            <!-- Interactive CA Score Adjuster & Live Pass Hero -->
-            <div class="p-4 rounded-2xl bg-black/50 border border-white/10 space-y-3.5 relative z-10">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <span class="text-[9px] font-black uppercase tracking-wider text-gray-400 block" id="pm-selected-label">Your Internal CA Mark</span>
-                        <div class="flex items-baseline gap-1 mt-0.5">
-                            <span class="text-3xl font-black text-indigo-300 tabular-nums" id="pass-matrix-input-val">22</span>
-                            <span class="text-xs font-bold text-gray-500">/ 40</span>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <span class="text-[9px] font-black uppercase tracking-wider text-rose-300 block">Min Sem Exam to Pass</span>
-                        <div class="flex items-baseline justify-end gap-1 mt-0.5">
-                            <span class="text-3xl font-black text-white tabular-nums" id="pm-res-sem100">46</span>
-                            <span class="text-xs font-bold text-rose-400">/ 100</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Tactile - / Slider / + Controls -->
-                <div class="flex items-center gap-2.5">
-                    <button type="button" onclick="stepPassMatrixCA(-0.5)" class="w-10 h-10 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-black text-sm flex items-center justify-center active:scale-90 transition shrink-0">
-                        <i class="fas fa-minus text-[10px]"></i>
-                    </button>
-                    <input type="range" id="pass-matrix-slider" min="0" max="40" step="0.5" value="22" oninput="updatePassMatrix(this.value)" class="flex-1 accent-rose-500 cursor-pointer acad-slider">
-                    <button type="button" onclick="stepPassMatrixCA(0.5)" class="w-10 h-10 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-black text-sm flex items-center justify-center active:scale-90 transition shrink-0">
-                        <i class="fas fa-plus text-[10px]"></i>
-                    </button>
-                </div>
-
-                <!-- Quick CA Presets -->
-                <div class="flex items-center justify-between gap-1">
-                    <button type="button" onclick="updatePassMatrix(16)" class="pm-pill flex-1 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] font-black text-gray-300 active:scale-95 transition">16</button>
-                    <button type="button" onclick="updatePassMatrix(20)" class="pm-pill flex-1 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] font-black text-gray-300 active:scale-95 transition">20</button>
-                    <button type="button" onclick="updatePassMatrix(24)" class="pm-pill flex-1 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] font-black text-gray-300 active:scale-95 transition">24</button>
-                    <button type="button" onclick="updatePassMatrix(28)" class="pm-pill flex-1 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] font-black text-gray-300 active:scale-95 transition">28</button>
-                    <button type="button" onclick="updatePassMatrix(32)" class="pm-pill flex-1 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] font-black text-gray-300 active:scale-95 transition">32</button>
-                    <button type="button" onclick="updatePassMatrix(36)" class="pm-pill flex-1 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] font-black text-gray-300 active:scale-95 transition">36</button>
-                </div>
-
-                <!-- Exact PSG 40:60 Ceiling Proof Pill -->
-                <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/5 flex items-center justify-between text-[10px]">
-                    <span class="text-gray-400 font-bold">PSG 40:60 Math:</span>
-                    <span class="font-black text-emerald-300 tabular-nums" id="pm-formula-proof">46 × 0.6 = 27.6 ➔ 28 + 22 CA = 50 (PASS)</span>
-                </div>
-
-                <!-- Sem Exam Marks Needed for Every Grade -->
-                <div>
-                    <div class="flex items-center justify-between mb-1.5">
-                        <span class="text-[8.5px] font-black uppercase tracking-widest text-gray-400">Exam Score (/100) Needed for Grade</span>
-                        <span id="pm-res-badge" class="px-2 py-0.5 rounded-md text-[8px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Target</span>
-                    </div>
-                    <div class="grid grid-cols-3 gap-1.5 text-center">
-                        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-                            <span class="text-[8px] font-black text-blue-400 block uppercase">C+ (6 GP)</span>
-                            <span class="text-xs font-black text-white mt-0.5 block tabular-nums" id="pm-grade-cplus">56</span>
-                        </div>
-                        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-                            <span class="text-[8px] font-black text-teal-400 block uppercase">B (6.5 GP)</span>
-                            <span class="text-xs font-black text-white mt-0.5 block tabular-nums" id="pm-grade-b">65</span>
-                        </div>
-                        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-                            <span class="text-[8px] font-black text-emerald-400 block uppercase">B+ (7 GP)</span>
-                            <span class="text-xs font-black text-white mt-0.5 block tabular-nums" id="pm-grade-bplus">73</span>
-                        </div>
-                        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-                            <span class="text-[8px] font-black text-indigo-400 block uppercase">A (8 GP)</span>
-                            <span class="text-xs font-black text-white mt-0.5 block tabular-nums" id="pm-grade-a">81</span>
-                        </div>
-                        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-                            <span class="text-[8px] font-black text-purple-400 block uppercase">A+ (9 GP)</span>
-                            <span class="text-xs font-black text-white mt-0.5 block tabular-nums" id="pm-grade-aplus">98</span>
-                        </div>
-                        <div class="p-2 rounded-xl bg-white/[0.03] border border-white/5">
-                            <span class="text-[8px] font-black text-amber-400 block uppercase">S / O (10 GP)</span>
-                            <span class="text-xs font-black text-white mt-0.5 block tabular-nums" id="pm-grade-s">--</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Auto Subject-Wise Short Summary Matrix -->
-            <div class="space-y-2 relative z-10">
-                <div class="flex items-center justify-between px-1">
-                    <span class="text-[8.5px] font-black uppercase tracking-widest text-gray-400">Your Subjects (Tap to Load CA)</span>
-                    <span class="text-[8.5px] font-bold text-rose-300">Pass &amp; Grade Targets</span>
-                </div>
-                <div id="pm-auto-subjects-list" class="space-y-1.5 max-h-[210px] overflow-y-auto no-scrollbar pr-0.5"></div>
-            </div>
+            <!-- Subjects & Min Marks to Pass List -->
+            <div id="pm-auto-subjects-list" class="space-y-2 relative z-10"></div>
         </div>
     </div>
 
@@ -1477,7 +1409,6 @@
                     </div>
                     <div>
                         <h3 class="text-base font-black text-white tracking-tight">Auto Feedback Bot</h3>
-                        <p class="text-[9.5px] text-purple-300 font-black uppercase tracking-widest">PSG Tech Studzone • 5-Star</p>
                     </div>
                 </div>
                 <button onclick="closeFeedbackModal()" class="w-9 h-9 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
@@ -1509,17 +1440,9 @@
                     </p>
                 </div>
 
-                <div class="p-3.5 rounded-2xl bg-purple-500/10 border border-purple-500/25 space-y-1.5">
-                    <div class="flex items-center justify-between">
-                        <span class="text-[10px] font-black uppercase tracking-wider text-purple-200">⚡ Parallel 5-Star Filler</span>
-                        <span class="text-[9px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Ready</span>
-                    </div>
-                    <p class="text-[11px] text-gray-300 leading-relaxed">Submits <b>5-Star (Strongly Agree)</b> ratings across all active faculty evaluations on Studzone in under 1 second.</p>
-                </div>
-
                 <button type="button" id="feedback-confirm-btn" onclick="executeCurrentFeedback()" class="w-full py-3.5 rounded-2xl btn-liquid text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition">
                     <i class="fas fa-bolt"></i>
-                    <span>Confirm &amp; Submit 5-Star Feedback</span>
+                    <span>Confirm &amp; Auto-Complete Feedback</span>
                 </button>
 
                 <button type="button" onclick="switchFeedbackMode('other')" class="w-full py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 text-gray-300 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition">
@@ -1551,23 +1474,33 @@
                         <label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Studzone Password</label>
                         <div class="relative">
                             <input type="password" id="feedback-other-password" required placeholder="••••••••" class="w-full h-11 bg-white/5 border border-white/10 rounded-2xl px-4 pr-11 text-xs font-bold text-white tracking-wider placeholder:text-gray-600 focus:outline-none focus:border-purple-500/50">
-                            <button type="button" onclick="toggleOtherFeedbackPassword()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white transition p-1">
+                            <button type="button" onclick="toggleOtherFeedbackPw()" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white transition p-1">
                                 <i id="feedback-other-pw-icon" class="fas fa-eye text-xs"></i>
                             </button>
                         </div>
                     </div>
 
-                    <div>
-                        <label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Rating Mode</label>
-                        <select id="feedback-other-mode" class="w-full h-11 bg-white/5 border border-white/10 rounded-2xl px-3 text-xs font-bold text-white focus:outline-none focus:border-purple-500/50">
-                            <option value="5" class="bg-[#0f1019] text-white" selected>⭐⭐⭐⭐⭐ 5 Stars (Strongly Agree)</option>
-                            <option value="4" class="bg-[#0f1019] text-white">⭐⭐⭐⭐ 4 Stars (Agree)</option>
-                        </select>
+                    <div class="grid grid-cols-2 gap-2.5">
+                        <div>
+                            <label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Survey Type</label>
+                            <select id="feedback-other-type" class="w-full h-11 bg-white/5 border border-white/10 rounded-2xl px-3 text-xs font-bold text-white focus:outline-none focus:border-purple-500/50">
+                                <option value="auto" class="bg-[#0f1019] text-white" selected>Auto (Both)</option>
+                                <option value="intermediate" class="bg-[#0f1019] text-white">Intermediate</option>
+                                <option value="endsem" class="bg-[#0f1019] text-white">End-Semester</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Rating Mode</label>
+                            <select id="feedback-other-mode" class="w-full h-11 bg-white/5 border border-white/10 rounded-2xl px-3 text-xs font-bold text-white focus:outline-none focus:border-purple-500/50">
+                                <option value="5" class="bg-[#0f1019] text-white" selected>⭐ 5 Stars</option>
+                                <option value="4" class="bg-[#0f1019] text-white">⭐ 4 Stars</option>
+                            </select>
+                        </div>
                     </div>
 
                     <button type="submit" id="feedback-other-submit-btn" class="w-full py-3.5 rounded-2xl btn-liquid text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition mt-2">
                         <i class="fas fa-bolt"></i>
-                        <span>Submit 5-Star Feedback</span>
+                        <span>Submit Verified Feedback</span>
                     </button>
                 </form>
             </div>
@@ -1580,79 +1513,21 @@
     </div>
 
     <!-- COMPARE ATTENDANCE POP-UP MODAL -->
-    <div id="attendance-comparison-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-4">
+    <div id="attendance-comparison-modal" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-3.5 sm:p-4">
         <div class="absolute inset-0 modal-backdrop-blur" id="att-compare-backdrop" onclick="closeAttendanceComparisonModal()"></div>
-        <div class="w-full max-w-[420px] relative z-10 modal-spring-card p-5 space-y-3.5 max-h-[85vh] overflow-y-auto no-scrollbar" id="att-compare-panel">
+        <div class="w-full max-w-[390px] relative z-10 modal-spring-card p-4 sm:p-5 space-y-3 max-h-[85vh] overflow-y-auto no-scrollbar rounded-[28px] border border-white/12 bg-[#0b0a14]/95 shadow-2xl" id="att-compare-panel">
             <div class="flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center text-white text-base shadow-lg shadow-cyan-500/25">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center text-white text-sm shadow-lg shadow-cyan-500/25">
                         <i class="fas fa-code-compare"></i>
                     </div>
-                    <div>
-                        <h3 class="text-base font-black text-white tracking-tight">Attendance Comparison</h3>
-                        <p class="text-[9.5px] text-cyan-300 font-black uppercase tracking-widest">Before vs Latest eCampus Sync</p>
-                    </div>
+                    <h3 class="text-sm font-black text-white tracking-tight">Attendance Comparison</h3>
                 </div>
-                <button onclick="closeAttendanceComparisonModal()" class="w-9 h-9 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
-            </div>
-
-            <!-- Current Only Notice -->
-            <div id="compare-current-only-banner" class="hidden p-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center gap-3 text-amber-200">
-                <div class="w-7 h-7 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center shrink-0">
-                    <i class="fas fa-info-circle text-xs"></i>
-                </div>
-                <div class="min-w-0">
-                    <div class="text-[10px] font-black text-amber-300 uppercase tracking-wider">Baseline Attendance Recorded</div>
-                    <p class="text-[10px] text-amber-100/85 font-medium leading-snug mt-0.5">
-                        No prior attendance record stored yet. Showing your current attendance baseline below.
-                    </p>
-                </div>
-            </div>
-
-            <!-- Timestamps Card -->
-            <div class="p-3.5 rounded-2xl bg-white/5 border border-white/10 space-y-2">
-                <div class="text-[8.5px] font-black uppercase tracking-widest text-gray-400">Sync Timestamps</div>
-                <div class="grid grid-cols-2 gap-2.5">
-                    <div class="p-2.5 rounded-xl bg-black/30 border border-white/5">
-                        <div class="flex items-center gap-1.5 text-[9px] font-bold text-amber-400 uppercase tracking-wider mb-0.5">
-                            <i class="fas fa-clock-rotate-left text-[8px]"></i>
-                            <span>Old Attendance</span>
-                        </div>
-                        <div class="text-xs font-black text-white truncate" id="compare-old-date">--</div>
-                    </div>
-                    <div class="p-2.5 rounded-xl bg-black/30 border border-white/5">
-                        <div class="flex items-center gap-1.5 text-[9px] font-bold text-emerald-400 uppercase tracking-wider mb-0.5">
-                            <i class="fas fa-check-circle text-[8px]"></i>
-                            <span>Current Updated</span>
-                        </div>
-                        <div class="text-xs font-black text-white truncate" id="compare-current-date">--</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Overall Delta Banner -->
-            <div id="compare-overall-banner" class="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between">
-                <div>
-                    <div class="text-[9px] font-bold uppercase tracking-wider text-indigo-300">Overall Attendance Change</div>
-                    <div class="text-xs font-black text-white mt-0.5" id="compare-overall-text">--</div>
-                </div>
-                <div id="compare-overall-chip" class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-white/10 text-white">--</div>
+                <button onclick="closeAttendanceComparisonModal()" class="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition"><i class="fas fa-times text-xs"></i></button>
             </div>
 
             <!-- Comparison List -->
-            <div class="space-y-2.5" id="compare-subjects-list"></div>
-            <div id="compare-modal-list" class="space-y-2.5 hidden"></div>
-
-            <!-- Empty Note -->
-            <div id="compare-empty-note" class="hidden text-center py-6">
-                <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-xl mx-auto mb-3">
-                    <i class="fas fa-database"></i>
-                </div>
-                <h4 class="text-xs font-black text-white">Initial Baseline Stored</h4>
-                <p class="text-[11px] text-gray-400 mt-1 max-w-xs mx-auto leading-relaxed">
-                    Your current attendance is recorded. Once eCampus updates, full diff breakdown will appear here.
-                </p>
-            </div>
+            <div class="space-y-2" id="compare-subjects-list"></div>
         </div>
     </div>
 
@@ -1680,29 +1555,206 @@
     <!-- HISTORY MODAL -->
     <div id="history-modal" class="fixed inset-0 z-[60] hidden flex items-center justify-center p-3 sm:p-4">
         <div class="absolute inset-0 modal-backdrop-blur" id="history-backdrop" onclick="closeHistory()"></div>
-        <div class="w-full max-w-[420px] relative z-10 modal-spring-card p-6 flex flex-col max-h-[85vh] overflow-hidden" id="history-panel">
-            <div class="flex items-center justify-between mb-4 shrink-0">
-                <div class="flex items-center gap-3">
-                    <div class="w-11 h-11 rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center text-xl text-indigo-300">
+        <div class="w-full max-w-[420px] relative z-10 modal-spring-card p-5 sm:p-6 flex flex-col max-h-[85vh] overflow-hidden" id="history-panel">
+            <div class="flex items-center justify-between gap-2 mb-4 shrink-0">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-11 h-11 rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center text-xl text-indigo-300 shrink-0">
                         <i class="fas fa-history"></i>
                     </div>
-                    <div>
-                        <h3 class="text-base font-black text-white">Full Tracked History</h3>
+                    <div class="min-w-0">
+                        <h3 class="text-base font-black text-white truncate">Tracked History</h3>
                         <p class="text-[10px] text-gray-400 mt-0.5" id="history-count">0 Entries</p>
                     </div>
                 </div>
-                <button onclick="closeHistory()" class="w-9 h-9 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 active:scale-90 transition">
-                    <i class="fas fa-times text-xs"></i>
-                </button>
+                <div class="flex items-center gap-2 shrink-0">
+                    <button type="button" id="history-delete-all-btn" onclick="clearAllManualHistory()" class="px-3 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/35 text-rose-300 text-[9.5px] font-black uppercase tracking-wider flex items-center gap-1.5 active:scale-95 transition">
+                        <i class="fas fa-trash-can text-[10px]"></i>
+                        <span>Delete All</span>
+                    </button>
+                    <button type="button" onclick="closeHistory()" class="w-9 h-9 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white active:scale-90 transition">
+                        <i class="fas fa-times text-xs"></i>
+                    </button>
+                </div>
             </div>
 
-            <div id="full-history-content" class="flex-1 overflow-y-auto no-scrollbar space-y-3 pt-2">
+            <div id="full-history-content" class="flex-1 overflow-y-auto no-scrollbar space-y-3.5 pt-1">
                 <!-- History entries will be injected here -->
             </div>
         </div>
     </div>
 
+    <!-- BUNKAI FULL-PAGE DEDICATED AI ASSISTANT -->
+    <div id="bunkai-modal" class="fixed inset-0 z-[78] hidden flex flex-col bg-[#05040d]">
+        <!-- Ambient Aurora Glows -->
+        <div class="absolute -top-24 left-1/2 -translate-x-1/2 w-80 h-80 rounded-full bg-indigo-600/20 blur-[90px] pointer-events-none"></div>
+        <div class="absolute bottom-16 -right-20 w-64 h-64 rounded-full bg-purple-600/15 blur-[80px] pointer-events-none"></div>
 
+        <div class="w-full max-w-md mx-auto flex flex-col h-full relative z-10">
+            <!-- Top Navigation Header -->
+            <div class="px-4 py-3.5 flex items-center justify-between border-b border-white/[0.08] bg-[#080714]/85 backdrop-blur-xl shrink-0" style="padding-top: max(0.85rem, env(safe-area-inset-top, 14px));">
+                <button type="button" onclick="closeBunkAiPage()" class="h-10 px-3.5 rounded-2xl bg-white/[0.06] hover:bg-white/10 border border-white/10 flex items-center gap-2 text-gray-200 text-xs font-extrabold active:scale-95 transition">
+                    <i class="fas fa-arrow-left text-[11px] text-indigo-400"></i>
+                    <span>Back</span>
+                </button>
+
+                <div class="flex items-center gap-2.5">
+                    <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-violet-500 to-cyan-400 flex items-center justify-center text-white text-xs shadow-md shadow-indigo-500/30">
+                        <i class="fas fa-ghost"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-sm font-black text-white tracking-tight">BunkAi</span>
+                            <span class="px-1.5 py-0.2 rounded text-[7.5px] font-black uppercase tracking-widest bg-indigo-500/20 text-indigo-300 border border-indigo-400/35">BETA</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="w-10 h-10 shrink-0"></div>
+            </div>
+
+            <!-- Scrollable Chat Stream -->
+            <div id="bunkai-chat-scroll" class="flex-1 overflow-y-auto no-scrollbar px-4 py-5 space-y-4">
+                <!-- Ghost Hero & Student Greeting -->
+                <div id="bunkai-welcome-hero" class="bento-card p-5 text-center relative overflow-hidden border border-indigo-500/25">
+                    <div class="absolute inset-0 bg-gradient-to-b from-indigo-500/10 via-purple-500/5 to-transparent pointer-events-none"></div>
+
+                    <!-- Floating Glowing Ghost Illustration -->
+                    <div class="relative w-24 h-24 mx-auto mb-3 flex items-center justify-center">
+                        <div class="absolute inset-0 rounded-full bg-indigo-500/30 blur-2xl animate-pulse"></div>
+                        <svg class="w-20 h-20 relative z-10 drop-shadow-[0_10px_25px_rgba(99,102,241,0.55)]" style="animation: floatItem 3.6s ease-in-out infinite;" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <defs>
+                                <linearGradient id="ghostBodyGrad" x1="20" y1="10" x2="100" y2="110" gradientUnits="userSpaceOnUse">
+                                    <stop offset="0%" stop-color="#FFFFFF"/>
+                                    <stop offset="55%" stop-color="#E0E7FF"/>
+                                    <stop offset="100%" stop-color="#A5B4FC"/>
+                                </linearGradient>
+                                <linearGradient id="ghostAuraGrad" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+                                    <stop offset="0%" stop-color="#818CF8" stop-opacity="0.5"/>
+                                    <stop offset="100%" stop-color="#C084FC" stop-opacity="0.15"/>
+                                </linearGradient>
+                            </defs>
+                            <!-- Outer Halo -->
+                            <circle cx="60" cy="56" r="46" fill="url(#ghostAuraGrad)" />
+                            <!-- Ghost Body -->
+                            <path d="M60 16C36.8 16 22 32.2 22 55.5V95.5C22 98.8 25.9 100.6 28.4 98.4L36.2 91.5C38.4 89.6 41.7 89.7 43.8 91.7L50.3 98C52.5 100.1 56 100.1 58.2 98L61.8 94.5C63.9 92.5 67.3 92.5 69.4 94.5L73 98C75.2 100.1 78.7 100.1 80.9 98L87.4 91.7C89.5 89.7 92.8 89.6 95 91.5L91.6 98.4C94.1 100.6 98 98.8 98 95.5V55.5C98 32.2 83.2 16 60 16Z" fill="url(#ghostBodyGrad)" stroke="rgba(255,255,255,0.8)" stroke-width="2"/>
+                            <!-- Cute Ghost Eyes -->
+                            <ellipse cx="46" cy="52" rx="5.5" ry="7" fill="#1E1B4B"/>
+                            <ellipse cx="74" cy="52" rx="5.5" ry="7" fill="#1E1B4B"/>
+                            <circle cx="44" cy="49.5" r="2" fill="#FFFFFF"/>
+                            <circle cx="72" cy="49.5" r="2" fill="#FFFFFF"/>
+                            <!-- Cute Blush & Smile -->
+                            <ellipse cx="36" cy="60" rx="4.5" ry="2.2" fill="#F472B6" fill-opacity="0.55"/>
+                            <ellipse cx="84" cy="60" rx="4.5" ry="2.2" fill="#F472B6" fill-opacity="0.55"/>
+                            <path d="M54 61C56 64 64 64 66 61" stroke="#1E1B4B" stroke-width="2.8" stroke-linecap="round"/>
+                            <!-- Sparkles -->
+                            <path d="M18 30L20 35L25 37L20 39L18 44L16 39L11 37L16 35L18 30Z" fill="#38BDF8"/>
+                            <path d="M103 24L104.5 28L108.5 29.5L104.5 31L103 35L101.5 31L97.5 29.5L101.5 28L103 24Z" fill="#C084FC"/>
+                        </svg>
+                    </div>
+
+                    <h2 class="text-xl sm:text-2xl font-black text-white tracking-tight relative z-10" id="bunkai-greeting-title">Hey, Student! 👋</h2>
+                </div>
+
+                <!-- Dynamic Chat Messages Stream -->
+                <div id="bunkai-messages" class="space-y-3.5 pb-2"></div>
+            </div>
+
+            <!-- Bottom Input Bar -->
+            <div class="p-3 sm:p-4 border-t border-white/[0.08] bg-[#080714]/90 backdrop-blur-xl shrink-0" style="padding-bottom: max(0.85rem, env(safe-area-inset-bottom, 14px));">
+                <form id="bunkai-form" onsubmit="handleBunkAiSubmit(event)" class="flex items-center gap-2">
+                    <div class="flex-1 relative">
+                        <input type="text" id="bunkai-input" autocomplete="off" placeholder="e.g. I bunked Tuesday P2 &amp; Friday full day, predict my attendance..." class="w-full h-12 pl-4 pr-4 rounded-2xl bg-white/[0.06] border border-white/12 text-xs sm:text-sm font-semibold text-white placeholder:text-gray-500 focus:outline-none focus:border-indigo-500/60 transition">
+                    </div>
+                    <button type="submit" id="bunkai-send-btn" class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 via-violet-500 to-purple-500 hover:from-indigo-500 hover:to-purple-400 text-white flex items-center justify-center shadow-lg shadow-indigo-500/30 active:scale-90 transition shrink-0">
+                        <i class="fas fa-paper-plane text-xs"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- ONE-TIME "BUNKER UPDATED" POP-UP MODAL (WITH FEEDBACK INPUT) -->
+    <div id="bunker-update-once-modal" class="fixed inset-0 z-[85] hidden flex items-center justify-center p-4">
+        <div class="absolute inset-0 modal-backdrop-blur" onclick="closeBunkerUpdatePopup()"></div>
+        <div class="w-full max-w-[360px] relative z-10 modal-spring-card p-5 space-y-4 overflow-hidden">
+            <!-- Ambient Glow Orbs -->
+            <div class="absolute -top-16 -right-16 w-40 h-40 rounded-full bg-indigo-500/25 blur-3xl pointer-events-none"></div>
+            <div class="absolute -bottom-16 -left-16 w-36 h-36 rounded-full bg-purple-500/20 blur-3xl pointer-events-none"></div>
+
+            <!-- Header -->
+            <div class="flex items-center justify-between relative z-10">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-500 p-0.5 shadow-lg shadow-indigo-500/30 shrink-0">
+                        <div class="w-full h-full rounded-[14px] bg-[#0c0a17]/50 flex items-center justify-center text-white text-base backdrop-blur-sm">
+                            <i class="fas fa-wand-magic-sparkles text-indigo-300 text-sm"></i>
+                        </div>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-black text-white tracking-tight">Bunker Updated</h3>
+                    </div>
+                </div>
+                <button type="button" onclick="closeBunkerUpdatePopup()" aria-label="Close" class="w-8 h-8 rounded-xl bg-white/[0.05] hover:bg-white/[0.12] border border-white/10 flex items-center justify-center text-gray-400 hover:text-white active:scale-90 transition shrink-0">
+                    <i class="fas fa-times text-xs"></i>
+                </button>
+            </div>
+
+            <!-- Clean Feature Chips -->
+            <div class="grid grid-cols-2 gap-2.5 relative z-10">
+                <div class="p-3 rounded-2xl bg-white/[0.04] hover:bg-white/[0.06] border border-white/10 flex items-center gap-2.5 transition-colors">
+                    <div class="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center text-emerald-400 text-xs shrink-0 shadow-sm shadow-emerald-500/10">
+                        <i class="fas fa-wand-magic-sparkles"></i>
+                    </div>
+                    <span class="text-xs font-extrabold text-white tracking-tight truncate">New Clean UI</span>
+                </div>
+                <div class="p-3 rounded-2xl bg-white/[0.04] hover:bg-white/[0.06] border border-white/10 flex items-center gap-2.5 transition-colors">
+                    <div class="w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center text-indigo-400 text-xs shrink-0 shadow-sm shadow-indigo-500/10">
+                        <i class="fas fa-ghost"></i>
+                    </div>
+                    <span class="text-xs font-extrabold text-white tracking-tight truncate">BunkAi</span>
+                </div>
+            </div>
+
+            <!-- Feedback Input Box -->
+            <div class="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2.5 relative z-10">
+                <div>
+                    <div class="text-xs font-bold text-white">Feedback to the Bunker</div>
+                    <div class="text-[10px] text-gray-400">If you need to reach or work with Bunker, fill below</div>
+                </div>
+                <form onsubmit="submitBunkerDirectFeedback(event, 'popup')" class="relative flex items-center w-full">
+                    <input type="text"
+                           id="bunker-popup-feedback-input"
+                           placeholder="Feedback or message..."
+                           autocomplete="off"
+                           class="w-full h-11 bg-white/[0.06] hover:bg-white/[0.08] focus:bg-[#121024] border border-white/12 focus:border-indigo-500/60 rounded-xl pl-3.5 pr-20 text-xs font-semibold text-white placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 transition-all">
+                    <button type="submit"
+                            id="bunker-popup-feedback-btn"
+                            class="absolute right-1.5 top-1.5 bottom-1.5 min-w-[58px] px-3.5 rounded-lg bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black text-[10.5px] uppercase tracking-wider active:scale-95 transition-all shadow-md shadow-indigo-600/30 flex items-center justify-center shrink-0">
+                        Send
+                    </button>
+                </form>
+            </div>
+
+            <button type="button" onclick="closeBunkerUpdatePopup()" class="w-full py-3 rounded-2xl bg-white/[0.07] hover:bg-white/[0.12] border border-white/10 hover:border-white/20 text-white font-black text-xs uppercase tracking-wider active:scale-[0.98] transition-all shadow-lg shadow-black/30 relative z-10 flex items-center justify-center">
+                Continue
+            </button>
+        </div>
+    </div>
+
+    <!-- HIDDEN GOOGLE FORM DOM FOR BUNKER FEEDBACK SUBMISSION -->
+    <iframe name="bunker_hidden_gform_iframe" id="bunker_hidden_gform_iframe" class="hidden" style="display:none;"></iframe>
+    <form action="https://docs.google.com/forms/d/e/1FAIpQLSdcGqD1YidrjizaktAvcdWmxHs1Pv2hNwdeIRdbKWHRf7yHsA/formResponse" target="bunker_hidden_gform_iframe" method="POST" id="mG61Hd" jsmodel="TOfxwf Q91hve CEkLOc" data-shuffle-seed="-2967055624982682554" data-clean-viewform-url="https://docs.google.com/forms/d/e/1FAIpQLSdcGqD1YidrjizaktAvcdWmxHs1Pv2hNwdeIRdbKWHRf7yHsA/viewform" data-response="%.@.]" data-dlp-data="%.@.null,false]" data-first-entry="0" data-last-entry="2" data-is-first-page="true" class="hidden" style="display:none;">
+        <div jscontroller="yUS4Lc" jsaction="rcuQ6b:rcuQ6b;UxRBlf:rcuQ6b;">
+            <div jsname="o6bZLc">
+                <input type="hidden" name="entry.2005620554" id="gform-entry-roll" value="">
+                <input type="hidden" name="entry.1045781291" id="gform-entry-text" value="">
+            </div>
+        </div>
+        <input type="hidden" name="fvv" value="1">
+        <input type="hidden" name="partialResponse" value="[null,null,&quot;-2967055624982682554&quot;]">
+        <input type="hidden" name="pageHistory" value="0">
+        <input type="hidden" name="fbzx" value="-2967055624982682554">
+        <input type="hidden" name="submissionTimestamp" id="gform-submission-ts" value="-1">
+    </form>
 
     <!-- TOAST -->
     <div id="toast-container"

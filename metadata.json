@@ -1,5 +1,8 @@
 {
   "name": "PSG Bunker",
-  "description": "Smart attendance tracker and safe bunk planner for PSG College of Technology (PSG Tech) students.",
-  "requestFramePermissions": []
+  "description": "Smart attendance tracker and safe bunk planner for PSG Tech students.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

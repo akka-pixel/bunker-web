@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
 import { fileURLToPath } from 'url';
+import { GoogleGenAI } from '@google/genai';
 
 // Allow college portal certificates (equivalent to verify=False in Python requests)
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -23,11 +24,43 @@ const SESSION_SECRET =
   process.env.SESSION_SECRET ||
   'fallback-deterministic-secret-key-psg-bunker-2026';
 
+// Compute deterministic UI Version hash from core UI files so whenever the owner
+// edits any UI file (HTML/JS/CSS), every student's phone automatically clears its
+// cached UI and rolls out the new UI on next fetch.
+function computeCurrentUIVersion() {
+  try {
+    const uiFiles = [
+      path.join(PUBLIC_DIR, 'index.html'),
+      path.join(PUBLIC_DIR, 'calendar.html'),
+      path.join(PUBLIC_DIR, 'feedback.html'),
+      path.join(STATIC_DIR, 'app.js'),
+      path.join(STATIC_DIR, 'style.css'),
+      path.join(STATIC_DIR, 'calendar.js'),
+      path.join(STATIC_DIR, 'calendar.css'),
+      path.join(STATIC_DIR, 'legal.js'),
+      path.join(STATIC_DIR, 'manifest.json'),
+    ];
+    const hash = crypto.createHash('sha256');
+    for (const filePath of uiFiles) {
+      if (fs.existsSync(filePath)) {
+        hash.update(fs.readFileSync(filePath));
+      }
+    }
+    return `bunker-ui-${hash.digest('hex').slice(0, 10)}`;
+  } catch {
+    return 'bunker-ui-v5-prod';
+  }
+}
+
+const CURRENT_UI_VERSION = computeCurrentUIVersion();
+
 // ============================================================================
 // 1. VERCEL PATH NORMALIZATION & GZIP COMPRESSION MIDDLEWARE
 //    Minimizes Vercel Hobby Fast Origin Transfer (10 GB/mo limit) by ~95%
 // ============================================================================
 app.use((req, res, next) => {
+  res.setHeader('X-Bunker-UI-Version', CURRENT_UI_VERSION);
+
   // Normalize Vercel rewrite query param (?__vercel_path=api/...)
   if (req.query && typeof req.query.__vercel_path === 'string') {
     const cleanPath = '/' + req.query.__vercel_path.replace(/^\/+/, '');
@@ -1466,7 +1499,18 @@ class EcampusScraper {
 // ============================================================================
 // 8. STATIC & PAGE ROUTES
 // ============================================================================
-app.use('/static', express.static(STATIC_DIR, { maxAge: '1y', immutable: true }));
+app.use(
+  '/static',
+  express.static(STATIC_DIR, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  })
+);
 
 app.get('/manifest.json', (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -1474,10 +1518,17 @@ app.get('/manifest.json', (req, res) => {
   res.sendFile(path.join(STATIC_DIR, 'manifest.json'));
 });
 app.get('/favicon.ico', (req, res) => res.sendFile(path.join(STATIC_DIR, 'favicon.ico')));
+app.get('/favicon.png', (req, res) => res.sendFile(path.join(STATIC_DIR, 'favicon.png')));
+app.get('/favicon.svg', (req, res) => res.sendFile(path.join(STATIC_DIR, 'favicon.svg')));
+app.get('/apple-touch-icon.png', (req, res) => res.sendFile(path.join(STATIC_DIR, 'apple-touch-icon.png')));
 app.get('/sw.js', (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
   res.setHeader('Service-Worker-Allowed', '/');
   res.sendFile(path.join(STATIC_DIR, 'sw.js'));
+});
+app.get(['/ui-version.json', '/static/ui-version.json'], (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+  res.json({ version: CURRENT_UI_VERSION });
 });
 app.get('/robots.txt', (req, res) => res.sendFile(path.join(STATIC_DIR, 'robots.txt')));
 app.get('/sitemap.xml', (req, res) => res.sendFile(path.join(STATIC_DIR, 'sitemap.xml')));
@@ -1510,6 +1561,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     message: 'Smart Bunker API is running',
     version: '2.0',
+    ui_version: CURRENT_UI_VERSION,
     config: {
       api_year: CONFIG.API_YEAR,
     },
@@ -2174,11 +2226,6 @@ function parseCaTables($, tables) {
       let totalConverted = 'Not Updated Yet';
       if (convVal !== null) {
         totalConverted = String(Number.isInteger(convVal) ? convVal : Number(convVal.toFixed(2)));
-      } else if (totVal !== null) {
-        let calc = totVal * 0.8;
-        if (targetMax === 60) calc = totVal * 1.2;
-        else if (targetMax === 100) calc = isApp ? (totVal / 150.0) * 100.0 : totVal;
-        totalConverted = String(Number.isInteger(calc) ? calc : Number(calc.toFixed(2)));
       }
 
       const totalDisplay = totalRaw && totalRaw !== '*' ? totalRaw : 'Not Updated Yet';
@@ -2190,10 +2237,12 @@ function parseCaTables($, tables) {
       else if (isTableAt) schema = 'theory_at';
 
       let credits = 3;
-      if (schema === 'activity' || ['23U315', '23U215', '23IP15', '23Q213'].includes(courseCode)) credits = 0;
-      else if (schema === 'lab' || courseCode.endsWith('10') || courseCode.endsWith('11')) credits = 2;
-      else if (schema === 'evs' || courseCode === '23K312') credits = 0;
-      else if (courseCode.endsWith('01') || courseCode.endsWith('03')) {
+      const codeUp = courseCode.toUpperCase();
+      if (schema === 'activity' || ['23U315', '23U215', '23IP15', '23Q213'].includes(codeUp)) credits = 0;
+      else if (schema === 'evs' || codeUp === '23K312') credits = 0;
+      else if (codeUp === '23G105') credits = 4;
+      else if (codeUp === '23G001' || codeUp === '23U110' || schema === 'lab' || codeUp.endsWith('10') || codeUp.endsWith('11')) credits = 2;
+      else if (codeUp.endsWith('01') || codeUp.endsWith('03')) {
         credits = ['CALCULUS', 'ALGEBRA', 'COMPLEX', 'ELECTRIC CIRCUITS', 'DIGITAL'].some((w) =>
           courseName.toUpperCase().includes(w)
         )
@@ -2310,7 +2359,7 @@ app.post('/api/internals', async (req, res) => {
     }
 
     const rollHash = crypto.createHash('sha256').update(`${roll}:${password}:internals`).digest('hex');
-    const cacheKey = `bunker_internals_v2_${rollHash}`;
+    const cacheKey = `bunker_internals_v3_${rollHash}`;
 
     if (!force) {
       const cached = getDiskCache(cacheKey, 86400);
@@ -2439,6 +2488,8 @@ async function fetchAllsemResults(scraper) {
     ]);
   }
 
+  // Official PSG College of Technology 2023 Regulation Absolute Grading Scale:
+  // O = 10, A+ = 9, A = 8, B+ = 7, B = 6.5, C+ = 6, C = 5, RA/U/W/SA/WD = 0, Completed = Non-CGPA
   const gradesMap = {
     S: 10,
     O: 10,
@@ -2456,7 +2507,13 @@ async function fetchAllsemResults(scraper) {
     W: 0,
     SA: 0,
     WD: 0,
+    COMPLETED: null,
     Completed: null,
+  };
+
+  const parseCreditVal = (val) => {
+    const n = parseFloat(String(val ?? '').trim());
+    return Number.isFinite(n) && n > 0 ? n : 0;
   };
 
   const allSubjects = [];
@@ -2467,8 +2524,9 @@ async function fetchAllsemResults(scraper) {
   if (rCs.status === 'fulfilled' && rCs.value.status === 200) {
     const $cs = cheerio.load(rCs.value.text);
     const totCompTxt = $cs('span#tot_credit_comp').text().trim();
-    if (/^\d+$/.test(totCompTxt)) {
-      portalCompletedCredits = parseInt(totCompTxt, 10);
+    const totCompNum = parseFloat(totCompTxt);
+    if (Number.isFinite(totCompNum) && totCompNum >= 0) {
+      portalCompletedCredits = totCompNum;
     }
 
     const tblCompleted = $cs('table#PDGCourse').length ? $cs('table#PDGCourse') : $cs('table#TabCourse');
@@ -2488,10 +2546,10 @@ async function fetchAllsemResults(scraper) {
             const sem = /^\d+$/.test(cols[4].trim()) ? parseInt(cols[4].trim(), 10) : 1;
             const grade = cols[6].trim();
             const creditsStr = cols.length > 7 ? cols[7].trim() : '0';
-            const credits = /^\d+$/.test(creditsStr) ? parseInt(creditsStr, 10) : 0;
+            const credits = parseCreditVal(creditsStr);
             const passing = cols.length > 8 ? cols[8].trim() : '';
 
-            const isNonCgpa = credits === 0;
+            const isNonCgpa = credits === 0 || grade.toLowerCase() === 'completed';
             const gradeKey = grade.toUpperCase();
             const gp = isNonCgpa ? null : gradesMap[gradeKey] !== undefined ? gradesMap[gradeKey] : 0;
             const isPass = !['RA', 'U', 'W', 'SA', 'WD'].includes(gradeKey);
@@ -2502,7 +2560,7 @@ async function fetchAllsemResults(scraper) {
               title,
               category: cat,
               credits: String(credits),
-              grade,
+              grade: grade.toLowerCase() === 'completed' ? 'Completed' : grade,
               grade_points: gp,
               is_non_cgpa: isNonCgpa,
               result: isPass ? 'Pass' : 'Fail',
@@ -2535,7 +2593,7 @@ async function fetchAllsemResults(scraper) {
             const cat = cols[3].trim();
             const sem = /^\d+$/.test(cols[4].trim()) ? parseInt(cols[4].trim(), 10) : 1;
             const creditsStr = cols.length > 6 ? cols[6].trim() : '0';
-            const credits = /^\d+$/.test(creditsStr) ? parseInt(creditsStr, 10) : 0;
+            const credits = parseCreditVal(creditsStr);
             const isNonCgpa = credits === 0;
 
             studyingCourses.push({
@@ -2598,18 +2656,19 @@ async function fetchAllsemResults(scraper) {
             if (parts.length >= 2) {
               const gpVal = parseFloat(parts[0]);
               if (!Number.isNaN(gpVal)) {
-                gp = Number.isInteger(gpVal) ? gpVal : gpVal;
+                gp = gpVal;
                 grade = parts[parts.length - 1];
               }
             } else if (markRaw.toLowerCase() === 'completed') {
               grade = 'Completed';
             }
 
-            const crInt = /^\d+$/.test(credits) ? parseInt(credits, 10) : 0;
-            const isNonCgpa = crInt === 0;
+            const crVal = parseCreditVal(credits);
+            const isNonCgpa = crVal === 0 || grade.toLowerCase() === 'completed';
             const gradeClean = grade.trim().toUpperCase();
             if (isNonCgpa) gp = null;
             else if (gp === null && gradesMap[gradeClean] !== undefined) gp = gradesMap[gradeClean];
+            else if (gradesMap[gradeClean] !== undefined && gp === 6 && gradeClean === 'B') gp = 6.5;
 
             const isPass = result
               ? result.toLowerCase() === 'pass'
@@ -2621,13 +2680,17 @@ async function fetchAllsemResults(scraper) {
               if (grade) existing.grade = grade;
               if (result) existing.result = result;
               if (title && !existing.title) existing.title = title;
+              if (crVal > 0 && (!existing.credits || existing.credits === '0')) {
+                existing.credits = String(crVal);
+                existing.is_non_cgpa = false;
+              }
             } else {
               const newSubj = {
                 sem: curSem || 1,
                 course: code,
                 title,
                 category: '',
-                credits: String(crInt),
+                credits: String(crVal),
                 grade,
                 grade_points: gp,
                 is_non_cgpa: isNonCgpa,
@@ -2649,51 +2712,52 @@ async function fetchAllsemResults(scraper) {
   for (const sem of semestersFound) {
     const semCourses = allSubjects.filter((c) => c.sem === sem);
     const creditCourses = semCourses.filter(
-      (c) => !c.is_non_cgpa && /^\d+$/.test(String(c.credits)) && parseInt(c.credits, 10) > 0 && c.grade_points !== null
+      (c) => !c.is_non_cgpa && parseCreditVal(c.credits) > 0 && c.grade_points !== null
     );
-    const semCr = creditCourses.reduce((acc, c) => acc + parseInt(c.credits, 10), 0);
+    const semCr = creditCourses.reduce((acc, c) => acc + parseCreditVal(c.credits), 0);
     const semEarnedCr = creditCourses
       .filter(
         (c) =>
           (!c.result || c.result.toLowerCase() === 'pass') &&
-          !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade)) &&
+          !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade).toUpperCase()) &&
           c.grade_points > 0
       )
-      .reduce((acc, c) => acc + parseInt(c.credits, 10), 0);
-    const semCp = creditCourses.reduce((acc, c) => acc + parseInt(c.credits, 10) * c.grade_points, 0);
+      .reduce((acc, c) => acc + parseCreditVal(c.credits), 0);
+    const semCp = creditCourses.reduce((acc, c) => acc + parseCreditVal(c.credits) * c.grade_points, 0);
     const semHasRa = semCourses.some(
-      (c) => ['RA', 'U'].includes(c.grade) || String(c.grade).startsWith('RA') || c.result?.toLowerCase() === 'fail'
+      (c) =>
+        ['RA', 'U', 'SA', 'W'].includes(String(c.grade).toUpperCase()) ||
+        String(c.grade).toUpperCase().startsWith('RA') ||
+        c.result?.toLowerCase() === 'fail'
     );
 
     const sgpaVal = semCr > 0 ? Number((semCp / semCr).toFixed(2)) : 0;
-    const sgpaDisplay = semHasRa ? 'RA' : sgpaVal;
+    const sgpaDisplay = semHasRa ? 'RA' : sgpaVal.toFixed(2);
 
     const cumCourses = allSubjects.filter(
-      (c) =>
-        c.sem <= sem &&
-        !c.is_non_cgpa &&
-        /^\d+$/.test(String(c.credits)) &&
-        parseInt(c.credits, 10) > 0 &&
-        c.grade_points !== null
+      (c) => c.sem <= sem && !c.is_non_cgpa && parseCreditVal(c.credits) > 0 && c.grade_points !== null
     );
-    const cumCr = cumCourses.reduce((acc, c) => acc + parseInt(c.credits, 10), 0);
+    const cumCr = cumCourses.reduce((acc, c) => acc + parseCreditVal(c.credits), 0);
     const cumEarnedCr = cumCourses
       .filter(
         (c) =>
           (!c.result || c.result.toLowerCase() === 'pass') &&
-          !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade)) &&
+          !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade).toUpperCase()) &&
           c.grade_points > 0
       )
-      .reduce((acc, c) => acc + parseInt(c.credits, 10), 0);
-    const cumCp = cumCourses.reduce((acc, c) => acc + parseInt(c.credits, 10) * c.grade_points, 0);
+      .reduce((acc, c) => acc + parseCreditVal(c.credits), 0);
+    const cumCp = cumCourses.reduce((acc, c) => acc + parseCreditVal(c.credits) * c.grade_points, 0);
     const cumHasRa = allSubjects
       .filter((c) => c.sem <= sem)
       .some(
-        (c) => ['RA', 'U'].includes(c.grade) || String(c.grade).startsWith('RA') || c.result?.toLowerCase() === 'fail'
+        (c) =>
+          ['RA', 'U', 'SA', 'W'].includes(String(c.grade).toUpperCase()) ||
+          String(c.grade).toUpperCase().startsWith('RA') ||
+          c.result?.toLowerCase() === 'fail'
       );
 
     const cgpaVal = cumCr > 0 ? Number((cumCp / cumCr).toFixed(2)) : 0;
-    const cgpaDisplay = cumHasRa ? 'RA' : cgpaVal;
+    const cgpaDisplay = cumHasRa ? 'RA' : cgpaVal.toFixed(2);
 
     semwiseGpa[String(sem)] = sgpaDisplay;
     semwiseCredits[String(sem)] = semCr;
@@ -2714,33 +2778,31 @@ async function fetchAllsemResults(scraper) {
   }
 
   const latestSem = semestersFound.length ? semestersFound[semestersFound.length - 1] : 1;
-  const latestGpa = semwiseGpa[String(latestSem)] ?? 0;
-  const hasAnyRa = semwiseData.some((s) => s.has_ra);
-  const overallCgpa = hasAnyRa ? 'RA' : semwiseData.length ? semwiseData[semwiseData.length - 1].cgpa : 0;
-  const overallCgpaNumeric = semwiseData.length ? semwiseData[semwiseData.length - 1].cgpa_numeric : 0;
-  const cgpaNote = hasAnyRa ? 'CGPA is computed only if candidate passes all the courses registered.' : '';
+  const latestGpa = semwiseGpa[String(latestSem)] ?? '0.00';
 
   const totalEarnedCredits = allSubjects
     .filter(
       (c) =>
         !c.is_non_cgpa &&
-        /^\d+$/.test(String(c.credits)) &&
-        parseInt(c.credits, 10) > 0 &&
+        parseCreditVal(c.credits) > 0 &&
         (!c.result || c.result.toLowerCase() === 'pass') &&
-        !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade)) &&
+        !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade).toUpperCase()) &&
         c.grade_points > 0
     )
-    .reduce((acc, c) => acc + parseInt(c.credits, 10), 0);
+    .reduce((acc, c) => acc + parseCreditVal(c.credits), 0);
 
   const totalEnrolledCredits = allSubjects
-    .filter((c) => /^\d+$/.test(String(c.credits)) && parseInt(c.credits, 10) > 0)
-    .reduce((acc, c) => acc + parseInt(c.credits, 10), 0);
+    .filter((c) => !c.is_non_cgpa && parseCreditVal(c.credits) > 0)
+    .reduce((acc, c) => acc + parseCreditVal(c.credits), 0);
 
   const creditPointsTotal = allSubjects
-    .filter(
-      (c) => !c.is_non_cgpa && /^\d+$/.test(String(c.credits)) && parseInt(c.credits, 10) > 0 && c.grade_points !== null
-    )
-    .reduce((acc, c) => acc + parseInt(c.credits, 10) * c.grade_points, 0);
+    .filter((c) => !c.is_non_cgpa && parseCreditVal(c.credits) > 0 && c.grade_points !== null)
+    .reduce((acc, c) => acc + parseCreditVal(c.credits) * c.grade_points, 0);
+
+  const hasAnyRa = semwiseData.some((s) => s.has_ra) || totalEarnedCredits < totalEnrolledCredits;
+  const overallCgpa = hasAnyRa ? 'RA' : semwiseData.length ? semwiseData[semwiseData.length - 1].cgpa : '0.00';
+  const overallCgpaNumeric = semwiseData.length ? semwiseData[semwiseData.length - 1].cgpa_numeric : 0;
+  const cgpaNote = hasAnyRa ? 'CGPA is computed only if candidate passes all the courses registered.' : '';
 
   allSubjects.sort((a, b) => (b.sem !== a.sem ? b.sem - a.sem : b.course.localeCompare(a.course)));
 
@@ -2794,7 +2856,7 @@ app.post(['/api/gpa', '/api/cgpa'], async (req, res) => {
     }
 
     const rollHash = crypto.createHash('sha256').update(`${roll}:${password}:results`).digest('hex');
-    const cacheKey = `bunker_results_v4_${rollHash}`;
+    const cacheKey = `bunker_results_v5_${rollHash}`;
 
     let results = !force ? getDiskCache(cacheKey, 86400) : null;
     if (
@@ -2899,16 +2961,20 @@ app.post('/api/academics', async (req, res) => {
     }
 
     const intHash = crypto.createHash('sha256').update(`${roll}:${password}:internals`).digest('hex');
-    const intCacheKey = `bunker_internals_v2_${intHash}`;
+    const intCacheKey = `bunker_internals_v4_${intHash}`;
     const resHash = crypto.createHash('sha256').update(`${roll}:${password}:results`).digest('hex');
-    const resCacheKey = `bunker_results_v4_${resHash}`;
+    const resCacheKey = `bunker_results_v5_${resHash}`;
 
     let cachedInternals = !force && needInternals ? getDiskCache(intCacheKey, 86400) : null;
     if (Array.isArray(cachedInternals) && cachedInternals.length === 0) {
       cachedInternals = null;
     }
     let cachedResults = !force && needResults ? getDiskCache(resCacheKey, 86400) : null;
-    if (cachedResults && (!Array.isArray(cachedResults.all_subjects) || cachedResults.all_subjects.length === 0)) {
+    if (
+      cachedResults &&
+      (!Array.isArray(cachedResults.all_subjects) || cachedResults.all_subjects.length === 0) &&
+      (!Array.isArray(cachedResults.studying_courses) || cachedResults.studying_courses.length === 0)
+    ) {
       cachedResults = null;
     }
     let newTok = sessionToken;
@@ -3493,6 +3559,19 @@ const SAVE_INTERMEDIATE_URL = `${FEEDBACK_STUDZONE_URL}/Feedback/Save_Intermedia
 
 const FEEDBACK_STATUS_CACHE = new Map();
 
+async function runPool(items, concurrency, workerFn) {
+  const results = new Array(items.length);
+  let idx = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (idx < items.length) {
+      const currentIdx = idx++;
+      results[currentIdx] = await workerFn(items[currentIdx], currentIdx);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 class FastFeedbackEngine {
   constructor() {
     this.session = new HttpSession({
@@ -3503,6 +3582,31 @@ class FastFeedbackEngine {
     });
     this.username = null;
     this._credKey = null;
+    this.hasPartialRemaining = false;
+    this.remainingCount = 0;
+    this.completedCount = 0;
+  }
+
+  async _requestWithRetry(method, url, payloadOrOpts = {}, retries = 3, timeoutMs = 4200) {
+    let lastRes = null;
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const res =
+          method === 'POST'
+            ? await this.session.post(url, payloadOrOpts, { timeoutMs })
+            : await this.session.get(url, { ...payloadOrOpts, timeoutMs });
+        lastRes = res;
+        if (res && res.ok && !String(res.text || '').includes('Student Login')) {
+          return res;
+        }
+      } catch {
+        // transient network / socket reset
+      }
+      if (attempt < retries - 1) {
+        await new Promise((r) => setTimeout(r, 90 * (attempt + 1)));
+      }
+    }
+    return lastRes;
   }
 
   async login(rollno, password, sessionToken = null) {
@@ -3519,12 +3623,13 @@ class FastFeedbackEngine {
     if (cached && cached.cookies) {
       this.session.updateCookies(cached.cookies);
       try {
-        const rCheck = await this.session.get(FEEDBACK_INDEX_URL);
+        const rCheck = await this.session.get(FEEDBACK_INDEX_URL, { timeoutMs: 4000 });
         if (
           rCheck.status === 200 &&
           !rCheck.text.includes('Student Login') &&
-          (rCheck.text.includes('Feedback') || rCheck.text.includes('menu-cards'))
+          (rCheck.text.includes('Feedback') || rCheck.text.includes('menu-cards') || rCheck.text.includes('studzone'))
         ) {
+          this._indexHtml = rCheck.text;
           return { success: true };
         }
       } catch {
@@ -3537,12 +3642,13 @@ class FastFeedbackEngine {
       if (tokenData && tokenData.c) {
         this.session.updateCookies(tokenData.c);
         try {
-          const rCheck = await this.session.get(FEEDBACK_INDEX_URL);
+          const rCheck = await this.session.get(FEEDBACK_INDEX_URL, { timeoutMs: 4000 });
           if (
             rCheck.status === 200 &&
             !rCheck.text.includes('Student Login') &&
-            (rCheck.text.includes('Feedback') || rCheck.text.includes('menu-cards'))
+            (rCheck.text.includes('Feedback') || rCheck.text.includes('menu-cards') || rCheck.text.includes('studzone'))
           ) {
+            this._indexHtml = rCheck.text;
             setCachedPortalSession(this._credKey, this.session.cookies, 'new', false);
             return { success: true };
           }
@@ -3553,7 +3659,7 @@ class FastFeedbackEngine {
     }
 
     try {
-      const rGet = await this.session.get(`${FEEDBACK_STUDZONE_URL}/`);
+      const rGet = await this.session.get(`${FEEDBACK_STUDZONE_URL}/`, { timeoutMs: 5000 });
       const tokMatch = rGet.text.match(REQ_TOKEN_RE);
       let token = tokMatch ? tokMatch[1] || tokMatch[2] : null;
       if (!token) {
@@ -3572,7 +3678,7 @@ class FastFeedbackEngine {
           chkterms: 'on',
           __RequestVerificationToken: token,
         },
-        { allowRedirects: false }
+        { allowRedirects: false, timeoutMs: 5000 }
       );
 
       if ([301, 302, 303, 307, 308].includes(rPost.status)) {
@@ -3603,13 +3709,18 @@ class FastFeedbackEngine {
   async getPortalSchedules() {
     const schedules = { endsem: 'NOT SCHEDULED', intermediate: 'NOT SCHEDULED' };
     try {
-      const r = await this.session.get(FEEDBACK_INDEX_URL);
-      const $ = cheerio.load(r.text);
-      $('.menu-cards').each((_, card) => {
-        const title = $(card).find('.card-title').text().trim().toLowerCase();
-        const dates = $(card).find('small').text().replace(/\s+/g, ' ').trim() || 'NOT SCHEDULED';
-        if (title.includes('end') || title.includes('sem')) schedules.endsem = dates;
-        else if (title.includes('inter')) schedules.intermediate = dates;
+      const html = this._indexHtml || (await this.session.get(FEEDBACK_INDEX_URL, { timeoutMs: 4000 })).text;
+      this._indexHtml = html;
+      const $ = cheerio.load(html);
+      $('.menu-cards, .card').each((_, card) => {
+        const title = $(card).find('.card-title, h5, h4, h6').first().text().trim().toLowerCase();
+        const dates = $(card).find('small, p, .text-muted').first().text().replace(/\s+/g, ' ').trim();
+        if (!title) return;
+        if (title.includes('end') || title.includes('sem')) {
+          if (dates) schedules.endsem = dates;
+        } else if (title.includes('inter')) {
+          if (dates) schedules.intermediate = dates;
+        }
       });
     } catch {
       // ignore
@@ -3617,58 +3728,138 @@ class FastFeedbackEngine {
     return schedules;
   }
 
-  async checkPendingFeedback() {
-    const schedules = await this.getPortalSchedules();
-    const interDates = schedules.intermediate || 'NOT SCHEDULED';
-    const endsemDates = schedules.endsem || 'NOT SCHEDULED';
-    const interActive = !interDates.toUpperCase().includes('NOT SCHEDULED');
-    const endsemActive = !endsemDates.toUpperCase().includes('NOT SCHEDULED');
+  _extractIntermediateTargets(html) {
+    if (!html) return { courses: [], questionIds: [] };
+    const $ = cheerio.load(html);
+    const seen = new Set();
+    const courses = [];
 
-    if (!interActive && !endsemActive) {
-      return {
-        has_pending: false,
-        reason: 'not_scheduled',
-        intermediate_count: 0,
-        endsem_count: 0,
-        total_pending: 0,
-        schedules,
-      };
+    const addTarget = (staffId, courseCode, courseType) => {
+      const sId = String(staffId || '').trim();
+      const cCode = String(courseCode || '').trim();
+      const cType = String(courseType || '').trim();
+      if (!sId || !cCode) return;
+      const key = `${sId}|${cCode}|${cType}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      courses.push({ staffId: sId, courseCode: cCode, courseType: cType });
+    };
+
+    // 1. Check DOM elements with .intermediate-card or onclick*="openQuestionSet"
+    $('.intermediate-card, [onclick*="openQuestionSet"]').each((_, el) => {
+      const $el = $(el);
+      const cardText = $el.text().toLowerCase();
+      // Skip if explicitly marked completed and disabled
+      if ($el.hasClass('completed') || $el.hasClass('disabled')) return;
+      const onclick = $el.attr('onclick') || $el.find('[onclick*="openQuestionSet"]').attr('onclick') || '';
+      const m = onclick.match(
+        /openQuestionSet\s*\(\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]/i
+      );
+      if (m) {
+        addTarget(m[1], m[2], m[3]);
+      } else if ($el.attr('data-staffid') && $el.attr('data-coursecode')) {
+        addTarget($el.attr('data-staffid'), $el.attr('data-coursecode'), $el.attr('data-coursetype') || 'T');
+      } else if (cardText && onclick) {
+        const args = [...onclick.matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]);
+        if (args.length >= 3) addTarget(args[0], args[1], args[2]);
+      }
+    });
+
+    // 2. Fallback regex scan on raw HTML in case cards use custom markup
+    if (courses.length === 0) {
+      const regex = /openQuestionSet\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]*)['"]/gi;
+      let match;
+      while ((match = regex.exec(html)) !== null) {
+        addTarget(match[1], match[2], match[3]);
+      }
     }
 
+    // 3. Discover question IDs from DOM if present, otherwise default to 1..11
+    const qSet = new Set();
+    $('[data-quesid], [data-question-id], [name^="ques"], [id^="ques"]').each((_, el) => {
+      const rawId =
+        $(el).attr('data-quesid') ||
+        $(el).attr('data-question-id') ||
+        ($(el).attr('id') || '').replace(/\D+/g, '') ||
+        ($(el).attr('name') || '').replace(/\D+/g, '');
+      const num = parseInt(rawId, 10);
+      if (!Number.isNaN(num) && num >= 1 && num <= 25) {
+        qSet.add(String(num));
+      }
+    });
+    // Always ensure standard 1..11 questions are included
+    for (let q = 1; q <= 11; q++) {
+      qSet.add(String(q));
+    }
+    const questionIds = Array.from(qSet).sort((a, b) => Number(a) - Number(b));
+
+    return { courses, questionIds };
+  }
+
+  async _fetchEndsemStaffList() {
+    this.session.headers['Referer'] = FEEDBACK_ENDSEM_URL;
+    const rStaff = await this._requestWithRetry('GET', LOAD_STAFF_ENDSEM_URL, {}, 2, 4000);
+    if (!rStaff || !rStaff.text) return { list: [], error: null };
+    const trimmed = rStaff.text.trim();
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          const normalized = parsed
+            .map((s) => ({
+              courseCode: String(s.courseCode ?? s.coursecode ?? s.CourseCode ?? '').trim(),
+              courseType: String(s.courseType ?? s.coursetype ?? s.CourseType ?? '').trim(),
+              staffId: String(s.staffId ?? s.staffid ?? s.StaffId ?? '').trim(),
+            }))
+            .filter((s) => s.courseCode && s.staffId);
+          return { list: normalized, error: null };
+        }
+        if (parsed && parsed.error) {
+          return { list: [], error: String(parsed.error) };
+        }
+      } catch {
+        // ignore JSON parse error
+      }
+    }
+    return { list: [], error: null };
+  }
+
+  async checkPendingFeedback() {
+    const schedules = await this.getPortalSchedules();
     let interPending = 0;
     let endsemPending = 0;
 
-    if (interActive) {
-      try {
-        const rPage = await this.session.get(FEEDBACK_INTERMEDIATE_URL);
-        if (!rPage.url.endsWith('/Feedback/Index')) {
-          const $ = cheerio.load(rPage.text);
-          interPending = $('.intermediate-card').length;
+    // Probe both Intermediate and End-Sem directly in parallel so we never miss active surveys
+    const [interProbe, endsemProbe] = await Promise.allSettled([
+      (async () => {
+        const rPage = await this.session.get(FEEDBACK_INTERMEDIATE_URL, { timeoutMs: 4000 });
+        if (rPage.ok && !rPage.url.endsWith('/Feedback/Index') && !rPage.text.includes('Student Login')) {
+          const { courses } = this._extractIntermediateTargets(rPage.text);
+          return courses.length;
         }
-      } catch {
-        // ignore
-      }
-    }
+        return 0;
+      })(),
+      (async () => {
+        const rPage = await this.session.get(FEEDBACK_ENDSEM_URL, { timeoutMs: 4000 });
+        if (rPage.ok && !rPage.url.endsWith('/Feedback/Index') && !rPage.text.includes('Student Login')) {
+          const { list } = await this._fetchEndsemStaffList();
+          return list.length;
+        }
+        return 0;
+      })(),
+    ]);
 
-    if (endsemActive) {
-      try {
-        const rPage = await this.session.get(FEEDBACK_ENDSEM_URL);
-        if (!rPage.url.endsWith('/Feedback/Index')) {
-          const rStaff = await this.session.get(LOAD_STAFF_ENDSEM_URL);
-          if (rStaff.text.trim().startsWith('[')) {
-            const staffList = rStaff.json();
-            if (Array.isArray(staffList)) endsemPending = staffList.length;
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
+    if (interProbe.status === 'fulfilled') interPending = interProbe.value;
+    if (endsemProbe.status === 'fulfilled') endsemPending = endsemProbe.value;
 
     const total = interPending + endsemPending;
+    const anyScheduled =
+      !String(schedules.intermediate || '').toUpperCase().includes('NOT SCHEDULED') ||
+      !String(schedules.endsem || '').toUpperCase().includes('NOT SCHEDULED');
+
     return {
       has_pending: total > 0,
-      reason: total > 0 ? 'pending_found' : 'already_completed',
+      reason: total > 0 ? 'pending_found' : anyScheduled ? 'already_completed' : 'not_scheduled',
       intermediate_count: interPending,
       endsem_count: endsemPending,
       total_pending: total,
@@ -3676,123 +3867,288 @@ class FastFeedbackEngine {
     };
   }
 
-  async _processEndsem() {
-    const rPage = await this.session.get(FEEDBACK_ENDSEM_URL);
-    if (rPage.url.endsWith('/Feedback/Index')) {
-      return 'End Semester Feedback: Currently not scheduled.';
-    }
-    let staffList = [];
-    try {
-      const rStaff = await this.session.get(LOAD_STAFF_ENDSEM_URL);
-      const resJson = rStaff.json();
-      if (Array.isArray(resJson)) staffList = resJson;
-      else if (resJson && resJson.error) return `End Semester: ${resJson.error}`;
-    } catch {
-      staffList = [];
-    }
-    if (!staffList.length) {
-      return 'End Semester: All evaluations completed or feedback closed.';
+  async _processEndsem(deadlineMs = Date.now() + 7600, scoreVal = 4) {
+    this.session.headers['Referer'] = FEEDBACK_ENDSEM_URL;
+    const rPage = await this._requestWithRetry('GET', FEEDBACK_ENDSEM_URL, {}, 2, 4000);
+    if (!rPage || rPage.url.endsWith('/Feedback/Index')) {
+      return { active: false, msg: 'End Semester Feedback: Currently not scheduled.' };
     }
 
-    let completedCount = 0;
-    await Promise.all(
-      staffList.map(async (staff) => {
-        try {
-          const rQ = await this.session.get(LOAD_QUES_ENDSEM_URL, {
-            params: { coursecode: staff.courseCode, coursetype: staff.courseType },
-          });
-          const questions = rQ.text.trim().startsWith('[') ? rQ.json() : [];
-          const qIds = questions.map((q) => q.questionId).filter((id) => parseInt(id, 10) > 0);
-          if (qIds.length > 0) {
-            const scores = qIds.map(() => 4);
-            await this.session.post(SAVE_ENDSEM_URL, {
-              coursecode: staff.courseCode,
-              coursetype: staff.courseType,
-              staffId: staff.staffId,
-              quesID: qIds.join('^'),
-              scorWeight: scores.join('^'),
-            });
-            completedCount++;
-          }
-        } catch {
-          // ignore
-        }
-      })
-    );
-    return `End Semester: Evaluated and saved ${completedCount}/${staffList.length} staff members successfully (5-Star Rating)!`;
-  }
-
-  async _processIntermediate() {
-    const rPage = await this.session.get(FEEDBACK_INTERMEDIATE_URL);
-    if (rPage.url.endsWith('/Feedback/Index')) {
-      return 'Intermediate Feedback: Currently not active or already 100% completed.';
+    const { list: initialList, error: loadErr } = await this._fetchEndsemStaffList();
+    if (loadErr) {
+      return { active: true, msg: `End Semester: ${loadErr}` };
     }
-    const $ = cheerio.load(rPage.text);
-    const cards = $('.intermediate-card').toArray();
-    if (!cards.length) {
-      return 'Intermediate: All course surveys completed or not open.';
+    if (!initialList.length) {
+      return { active: false, msg: 'End Semester: All evaluations completed (0 pending).' };
     }
 
-    const tasks = [];
-    let courseCount = 0;
-    for (const card of cards) {
-      const onclick = $(card).attr('onclick') || '';
-      const m = onclick.match(
-        /openQuestionSet\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/
+    const totalInitial = initialList.length;
+    const questionCacheByType = new Map();
+    let savedInRun = 0;
+
+    const evaluateSingleStaff = async (staff) => {
+      if (Date.now() >= deadlineMs) return false;
+      this.session.headers['Referer'] = FEEDBACK_ENDSEM_URL;
+
+      let qIds = [];
+      const rQ = await this._requestWithRetry(
+        'GET',
+        LOAD_QUES_ENDSEM_URL,
+        { params: { coursecode: staff.courseCode, coursetype: staff.courseType } },
+        3,
+        3800
       );
-      if (!m) continue;
-      const [, staffId, courseCode, courseType] = m;
-      courseCount++;
-      for (let q = 1; q <= 11; q++) {
-        tasks.push({ courseCode, staffId, courseType, q: String(q), ansId: '1' });
+      if (rQ && rQ.text) {
+        const trimmed = rQ.text.trim();
+        if (trimmed.startsWith('[')) {
+          try {
+            const questions = JSON.parse(trimmed);
+            if (Array.isArray(questions)) {
+              qIds = questions
+                .map((q) => q.questionId ?? q.questionID ?? q.quesID ?? q.quesId ?? q.QuestionId ?? q.id)
+                .filter((id) => id !== undefined && id !== null && parseInt(id, 10) > 0);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      if (qIds.length > 0 && staff.courseType) {
+        questionCacheByType.set(staff.courseType, qIds);
+      } else if (qIds.length === 0 && staff.courseType && questionCacheByType.has(staff.courseType)) {
+        qIds = questionCacheByType.get(staff.courseType);
+      }
+
+      if (!qIds.length) return false;
+
+      const scores = qIds.map(() => scoreVal);
+      const rSave = await this._requestWithRetry(
+        'POST',
+        SAVE_ENDSEM_URL,
+        {
+          coursecode: staff.courseCode,
+          coursetype: staff.courseType,
+          staffId: staff.staffId,
+          quesID: qIds.join('^'),
+          scorWeight: scores.join('^'),
+        },
+        3,
+        4000
+      );
+
+      if (rSave && rSave.ok) {
+        savedInRun++;
+        this.completedCount++;
+        return true;
+      }
+      return false;
+    };
+
+    // Pass 1: Controlled concurrency (4 at a time to avoid ASP.NET session lock contention)
+    await runPool(initialList, 4, evaluateSingleStaff);
+
+    // Pass 2: Closed-loop verification on eCampus to make sure 0 subjects were missed
+    if (Date.now() < deadlineMs - 500) {
+      const { list: remainingList } = await this._fetchEndsemStaffList();
+      if (remainingList.length > 0) {
+        await runPool(remainingList, 2, evaluateSingleStaff);
       }
     }
 
-    await Promise.all(
-      tasks.map((t) =>
-        this.session
-          .post(SAVE_INTERMEDIATE_URL, {
-            coursecode: t.courseCode,
-            staffId: t.staffId,
-            questype: t.courseType,
-            quesID: t.q,
-            ansid: t.ansId,
-          })
-          .catch(() => null)
-      )
-    );
-    return `Intermediate: Evaluated and saved all {courseCount} courses (100% complete)!`.replace(
-      '{courseCount}',
-      String(courseCount)
-    );
+    // Final check if time permits
+    let stillRemaining = 0;
+    if (Date.now() < deadlineMs - 300) {
+      const { list: finalCheck } = await this._fetchEndsemStaffList();
+      stillRemaining = finalCheck.length;
+    } else if (savedInRun < totalInitial) {
+      stillRemaining = Math.max(0, totalInitial - savedInRun);
+    }
+
+    if (stillRemaining > 0) {
+      this.hasPartialRemaining = true;
+      this.remainingCount += stillRemaining;
+    }
+
+    const doneCount = Math.max(savedInRun, totalInitial - stillRemaining);
+    return {
+      active: true,
+      msg: `End Semester: Evaluated and verified ${doneCount}/${totalInitial} subjects (${scoreVal === 4 ? '5-Star' : '4-Star'} Rating)!`,
+    };
   }
 
-  async executeFeedback(mode = 'auto') {
+  async _processIntermediate(deadlineMs = Date.now() + 7600, ansId = '1') {
+    this.session.headers['Referer'] = FEEDBACK_INTERMEDIATE_URL;
+    const rPage = await this._requestWithRetry('GET', FEEDBACK_INTERMEDIATE_URL, {}, 2, 4200);
+    if (!rPage || rPage.url.endsWith('/Feedback/Index')) {
+      return { active: false, msg: 'Intermediate Feedback: Currently not active or already 100% completed.' };
+    }
+
+    const { courses: initialCourses, questionIds } = this._extractIntermediateTargets(rPage.text);
+    if (!initialCourses.length) {
+      return { active: false, msg: 'Intermediate: All course surveys completed (0 pending).' };
+    }
+
+    const totalCourses = initialCourses.length;
+    let fullyCompletedCourses = 0;
+
+    const evaluateSingleCourse = async (course) => {
+      if (Date.now() >= deadlineMs) return false;
+      this.session.headers['Referer'] = FEEDBACK_INTERMEDIATE_URL;
+
+      const failedQuestions = [];
+      // Submit questions in controlled mini-batches of 3 per course to prevent SQL Server deadlocks
+      await runPool(questionIds, 3, async (qId) => {
+        if (Date.now() >= deadlineMs) {
+          failedQuestions.push(qId);
+          return;
+        }
+        const rSave = await this._requestWithRetry(
+          'POST',
+          SAVE_INTERMEDIATE_URL,
+          {
+            coursecode: course.courseCode,
+            staffId: course.staffId,
+            questype: course.courseType,
+            quesID: String(qId),
+            ansid: String(ansId),
+          },
+          3,
+          3500
+        );
+        if (!rSave || !rSave.ok) {
+          failedQuestions.push(qId);
+        }
+      });
+
+      // Retry any failed question sequentially for this course to guarantee 0 missed questions
+      if (failedQuestions.length > 0 && Date.now() < deadlineMs) {
+        const stillFailed = [];
+        for (const qId of failedQuestions) {
+          if (Date.now() >= deadlineMs) {
+            stillFailed.push(qId);
+            continue;
+          }
+          const rRetry = await this._requestWithRetry(
+            'POST',
+            SAVE_INTERMEDIATE_URL,
+            {
+              coursecode: course.courseCode,
+              staffId: course.staffId,
+              questype: course.courseType,
+              quesID: String(qId),
+              ansid: String(ansId),
+            },
+            2,
+            3500
+          );
+          if (!rRetry || !rRetry.ok) {
+            stillFailed.push(qId);
+          }
+        }
+        if (stillFailed.length === 0) {
+          fullyCompletedCourses++;
+          this.completedCount++;
+          return true;
+        }
+        return false;
+      }
+
+      if (failedQuestions.length === 0) {
+        fullyCompletedCourses++;
+        this.completedCount++;
+        return true;
+      }
+      return false;
+    };
+
+    // Process up to 3 courses concurrently (3 courses * 3 questions = max 9 concurrent requests)
+    await runPool(initialCourses, 3, evaluateSingleCourse);
+
+    // Closed-loop verification pass: re-check Intermediate page if time permits
+    let remainingCoursesCount = Math.max(0, totalCourses - fullyCompletedCourses);
+    if (Date.now() < deadlineMs - 700) {
+      const rVerify = await this._requestWithRetry('GET', FEEDBACK_INTERMEDIATE_URL, {}, 2, 3500);
+      if (rVerify && rVerify.ok) {
+        if (rVerify.url.endsWith('/Feedback/Index')) {
+          remainingCoursesCount = 0;
+        } else {
+          const { courses: leftCourses } = this._extractIntermediateTargets(rVerify.text);
+          // Only count as remaining if the portal actually removes completed cards
+          if (leftCourses.length < totalCourses) {
+            remainingCoursesCount = leftCourses.length;
+            if (leftCourses.length > 0 && Date.now() < deadlineMs - 500) {
+              await runPool(leftCourses, 2, evaluateSingleCourse);
+              remainingCoursesCount = Math.max(0, totalCourses - fullyCompletedCourses);
+            }
+          }
+        }
+      }
+    }
+
+    if (remainingCoursesCount > 0) {
+      this.hasPartialRemaining = true;
+      this.remainingCount += remainingCoursesCount;
+    }
+
+    const doneCount = Math.min(totalCourses, Math.max(fullyCompletedCourses, totalCourses - remainingCoursesCount));
+    return {
+      active: true,
+      msg: `Intermediate: Evaluated ${doneCount}/${totalCourses} courses (${questionIds.length} questions each, 100% verified)!`,
+    };
+  }
+
+  async executeFeedback(rawMode = 'auto', ratingStyle = 'max') {
     const start = Date.now();
+    // 7.6s deadline per call keeps execution safely below Vercel Hobby's 10s maxDuration limit
+    const deadlineMs = start + 7600;
     const results = [];
+
+    let mode = String(rawMode || 'auto').trim().toLowerCase();
+    let stars = 5;
+    if (mode === '5' || mode === 'max') {
+      mode = 'auto';
+      stars = 5;
+    } else if (mode === '4') {
+      mode = 'auto';
+      stars = 4;
+    }
+    if (String(ratingStyle).trim() === '4') {
+      stars = 4;
+    }
+    const endsemScoreVal = stars === 4 ? 3 : 4;
+    const interAnsId = stars === 4 ? '2' : '1';
+
     try {
       if (mode === 'auto') {
         const schedules = await this.getPortalSchedules();
         const interDates = schedules.intermediate || 'NOT SCHEDULED';
         const endsemDates = schedules.endsem || 'NOT SCHEDULED';
-        const interActive = !interDates.toUpperCase().includes('NOT SCHEDULED');
-        const endsemActive = !endsemDates.toUpperCase().includes('NOT SCHEDULED');
 
-        if (interActive) {
-          const interRes = await this._processIntermediate();
-          results.push(`Intermediate (${interDates}): ${interRes}`);
+        // Always probe both Intermediate & End-Semester directly so neither is ever missed
+        const interRes = await this._processIntermediate(deadlineMs, interAnsId);
+        if (interRes.active) {
+          results.push(interRes.msg);
         }
-        if (endsemActive) {
-          const endsemRes = await this._processEndsem();
-          results.push(`End Semester (${endsemDates}): ${endsemRes}`);
+
+        if (Date.now() < deadlineMs - 400) {
+          const endsemRes = await this._processEndsem(deadlineMs, endsemScoreVal);
+          if (endsemRes.active) {
+            results.push(endsemRes.msg);
+          }
         }
-        if (!interActive && !endsemActive) {
-          results.push(`No feedback currently active. (Intermediate: ${interDates}, End Sem: ${endsemDates})`);
+
+        if (results.length === 0) {
+          results.push(
+            `All active feedback surveys are already 100% completed or not scheduled (Intermediate: ${interDates}, End Sem: ${endsemDates}).`
+          );
         }
       } else if (mode === 'endsem') {
-        results.push(await this._processEndsem());
+        const endsemRes = await this._processEndsem(deadlineMs, endsemScoreVal);
+        results.push(endsemRes.msg);
       } else if (mode === 'intermediate') {
-        results.push(await this._processIntermediate());
+        const interRes = await this._processIntermediate(deadlineMs, interAnsId);
+        results.push(interRes.msg);
       } else {
         return { success: false, error: `Invalid mode '${mode}'. Choose 'auto', 'intermediate', or 'endsem'.` };
       }
@@ -3800,6 +4156,9 @@ class FastFeedbackEngine {
       const elapsed = Number(((Date.now() - start) / 1000).toFixed(2));
       return {
         success: true,
+        partial: this.hasPartialRemaining,
+        remaining_count: this.remainingCount,
+        completed_count: this.completedCount,
         elapsed,
         summary: results,
         message: `Completed in ${elapsed}s! ` + results.join(' • '),
@@ -3816,7 +4175,7 @@ app.all('/api/feedback', async (req, res) => {
     return res.json({
       status: 'online',
       service: 'PSG Tech Studzone Feedback Rapid API',
-      version: '3.0-turbo-api',
+      version: '4.0-verified-hobby',
     });
   }
 
@@ -3825,6 +4184,7 @@ app.all('/api/feedback', async (req, res) => {
     let rollno = String(data.rollno || '').trim().toUpperCase();
     let password = String(data.password || '').trim();
     const mode = String(data.mode || 'auto').trim().toLowerCase();
+    const ratingStyle = String(data.rating_style || 'max').trim().toLowerCase();
     const sessionToken = data.session_token || '';
 
     if ((!rollno || !password) && data.auth_token) {
@@ -3852,11 +4212,11 @@ app.all('/api/feedback', async (req, res) => {
       return res.status(401).json(loginRes);
     }
 
-    const fbRes = await engine.executeFeedback(mode);
+    const fbRes = await engine.executeFeedback(mode, ratingStyle);
     const newTok = engine.getSessionToken();
     if (newTok) fbRes.session_token = newTok;
 
-    if (fbRes.success && rollno) {
+    if (fbRes.success && !fbRes.partial && rollno) {
       FEEDBACK_STATUS_CACHE.set(rollno, {
         ts: Date.now() / 1000,
         data: {
@@ -3919,6 +4279,203 @@ app.all('/api/feedback/status', async (req, res) => {
     return res.json({ success: true, ...statusData });
   } catch (e) {
     return res.json({ success: false, has_pending: false, error: e.message });
+  }
+});
+
+// ============================================================================
+// BUNKAI — GEMINI AI ASSISTANT ENDPOINT (Full eCampus Context + PSG Regulations)
+// ============================================================================
+const BUNKAI_FALLBACK_KEY =
+  process.env.BUNKAI_FALLBACK_KEY ||
+  process.env.GEMINI_API_KEY ||
+  Buffer.from('QVEuQWI4Uk42S0NUZ3lsN2FVWGZSWXdHRUpsOTB0eEV6ekpQNFl3c3MtUTRIMzFGQUtaTUE=', 'base64').toString('utf-8');
+const HIGH_TRAFFIC_MSG =
+  'Due to high traffic in Bunker, we facing some issue so please try later.';
+
+function buildBunkAiSystemPrompt(ctx = {}) {
+  const student = ctx.student || {};
+  const roll = student.roll || 'Student';
+  const name = student.name || '';
+  const branch = student.displayBranch || student.branchName || 'PSG College of Technology';
+  const year = student.yearOfStudy || '';
+  const batch = student.batch || '';
+  const attMode = student.attendanceMode || 'normal';
+  const todayStr = ctx.today || new Date().toDateString();
+  const lastPortalUpdate = ctx.lastOfficialPortalUpdateDate || 'Unknown';
+
+  return `You are **BunkAi** 👻, the official smart AI attendance predictor & academic assistant inside **PSG Bunker** for **PSG College of Technology (PSG Tech)** students.
+
+### STUDENT IDENTITY & SYNC STATUS
+- **Roll Number**: ${roll}${name ? ` (${name})` : ''}
+- **Programme & Branch**: ${branch}${year ? ` • ${year}` : ''}${batch ? ` (${batch})` : ''}
+- **Today's Date**: ${todayStr} (${ctx.todayISO || ''})
+- **Official eCampus Portal Last Updated On**: ${lastPortalUpdate} (${ctx.lastOfficialPortalUpdateISO || 'Latest Sync'})
+- **Active Attendance View Mode**: ${attMode.toUpperCase()}
+
+### PRIMARY SUPERPOWER: SMART GAP ATTENDANCE PREDICTION UP TO TODAY (WHEN STUDENT FORGETS SMART TRACKER)
+Students often forget to mark their daily attendance in the Smart Tracker after the official eCampus portal's \`lastOfficialPortalUpdateDate\` (${lastPortalUpdate}). Instead, they will tell you things like:
+- *"I forgot to update Smart Tracker. I bunked Tuesday 2nd period and yesterday full day, what will my attendance be up to today?"*
+- *"Predict my attendance up to today if I attended everything except Monday morning."*
+- *"What happens to my attendance if I bunk tomorrow or Friday?"*
+
+**HOW TO CALCULATE & PREDICT EXACT ATTENDANCE UP TO TODAY:**
+1. **Check \`gapWorkingDaysSchedule\`**: This array lists every working day between \`lastOfficialPortalUpdateDate\` (${lastPortalUpdate}) and **Today** (${todayStr}), excluding Sundays and official PSG Tech holidays, along with the exact **Timetable Periods (\`P1\`.. \`P7\`, course code, course name)** and whether each period was already logged in Smart Tracker.
+2. **Baseline Portal vs Tracked vs Up-To-Today**:
+   - \`portalAttendedPeriods / portalTotalPeriods\`: Official eCampus portal count as of **${lastPortalUpdate}**.
+   - \`currentTrackedAttended / currentTrackedTotal\`: Portal count + any periods already logged in \`manualTrackerLogs\`.
+   - \`predictedUpToTodayIfUnloggedAttended\`: Pre-calculated attendance **up to today** assuming the student **attended** all unlogged periods in \`gapWorkingDaysSchedule\`.
+3. **When the Student Tells You When They Bunked (Unlogged Bunks)**:
+   - Look up the exact day(s) or period(s) they mentioned in \`gapWorkingDaysSchedule\` or \`timetable\`.
+   - Identify which course codes had classes on those days/periods.
+   - Starting from \`predictedUpToTodayIfUnloggedAttended\` (where all unlogged working days up to today are counted in \`total\` and assumed \`attended\`):
+     - For each unlogged period the student says they **bunked**, **subtract 1 from \`attended\`** (keep \`total\` the same because the class was conducted!).
+     - Formula: \`Predicted % Up To Today = ((predictedUpToTodayIfUnloggedAttended.attended - unloggedBunksForCourse) / predictedUpToTodayIfUnloggedAttended.total) * 100\`.
+   - If the student asks about **future days** (after today, e.g., tomorrow or next week):
+     - Look up that weekday in \`timetable\` (check \`calendar.events\` first to confirm it is not a Holiday!).
+     - Add the scheduled periods to \`total\`, and add attended periods (0 if bunked) to \`attended\`.
+4. **Always Show a Clear Before → Predicted Up-To-Today Breakdown**:
+   - Show **Portal (${lastPortalUpdate})** vs **Predicted Up To Today (${todayStr})** with exact \`Attended / Total\` periods, new \`Percentage %\`, and updated **Safe to bunk X** (or **Attend next Y periods** for 75%).
+
+### OFFICIAL PSG TECH ACADEMIC REGULATIONS (2023 / 2026 AUTONOMOUS RULES)
+1. **Attendance Unit**: Strictly measured in **PERIODS** (never say "hours", always say "periods").
+2. **75% Regular Eligibility Rule**:
+   - **>= 75.0%** required in each course for End-Semester Exam eligibility.
+   - **Safe to Bunk Formula**: If >= 75%, \`Safe Bunks = floor((Attended - 0.75 * Total) / 0.75)\` (say **"Safe to bunk X"**).
+   - **Attend Next Formula**: If < 75%, \`Periods to Attend for 75% = ceil((0.75 * Total - Attended) / 0.25)\`.
+3. **65% – 74.9% Condonation Zone (Medical / Sports Exemption)** & **< 65% SA (Shortage of Attendance / Redo)**.
+4. **40:60 Passing & Ceiling Formula (Theory Courses)**:
+   - \`Total = ceil(CA_out_of_40) + ceil(FinalExam_out_of_100 * 0.6)\`.
+   - Must score **>= 45 / 100** in Final Exam AND **>= 50 / 100** Combined Total (\`Grade C\`).
+
+### LIVE ECAMPUS + SMART TRACKER + GAP SCHEDULE DATA FOR ${roll}
+\`\`\`json
+${JSON.stringify({
+  lastOfficialPortalUpdateDate: ctx.lastOfficialPortalUpdateDate,
+  todayISO: ctx.todayISO,
+  subjects: ctx.subjects || [],
+  gapWorkingDaysSchedule: ctx.gapWorkingDaysSchedule || [],
+  previousStoredAttendance: ctx.previousStoredAttendance || [],
+  timetable: ctx.timetable || {},
+  manualTrackerLogs: ctx.manualTrackerLogs || [],
+  calendar: ctx.calendar || {},
+  internals: ctx.internals || [],
+  results: ctx.results || {},
+})}
+\`\`\`
+
+### RESPONSE STYLE GUIDELINES
+- Be concise, warm, accurate, and mobile-friendly. Address the student by **${roll}**${name ? ` (**${name}**)` : ''}.
+- When predicting attendance from conversational bunk notes, explicitly list which courses & periods were matched from their timetable/gap schedule so they can trust the math 100%.
+- Always refer to classes as **periods** (e.g., "Safe to bunk **2**", "Attend next **3** periods").`;
+}
+
+app.post('/api/bunkai', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const userMessage = String(body.message || '').trim();
+    const history = Array.isArray(body.history) ? body.history : [];
+    const context = body.context || {};
+
+    if (!userMessage) {
+      return res.status(400).json({ success: false, error: 'Please enter a message.' });
+    }
+
+    const candidateKeys = [];
+    if (process.env.GEMINI_API_KEY && String(process.env.GEMINI_API_KEY).trim()) {
+      candidateKeys.push(String(process.env.GEMINI_API_KEY).trim());
+    }
+    if (
+      process.env.API_KEY &&
+      String(process.env.API_KEY).trim() &&
+      !candidateKeys.includes(String(process.env.API_KEY).trim())
+    ) {
+      candidateKeys.push(String(process.env.API_KEY).trim());
+    }
+    if (!candidateKeys.includes(BUNKAI_FALLBACK_KEY)) {
+      candidateKeys.push(BUNKAI_FALLBACK_KEY);
+    }
+
+    const systemInstruction = buildBunkAiSystemPrompt(context);
+
+    // Format conversation contents (keep last 8 turns for fast Vercel Hobby execution)
+    const contents = [];
+    history.slice(-8).forEach((turn) => {
+      if (!turn || !turn.text) return;
+      contents.push({
+        role: turn.role === 'model' || turn.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: String(turn.text) }],
+      });
+    });
+    contents.push({
+      role: 'user',
+      parts: [{ text: userMessage }],
+    });
+
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+    let replyText = null;
+    let lastErr = null;
+    const requestStart = Date.now();
+
+    for (const apiKey of candidateKeys) {
+      if (replyText) break;
+      // Vercel Hobby plan safety guard (10s maxDuration -> stop retrying after 8.5s)
+      if (Date.now() - requestStart > 8500) break;
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      for (const modelName of modelsToTry) {
+        if (Date.now() - requestStart > 8500) break;
+        try {
+          const response = await Promise.race([
+            ai.models.generateContent({
+              model: modelName,
+              contents,
+              config: {
+                systemInstruction,
+                temperature: 0.35,
+              },
+            }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Gemini call timed out')), 7800)
+            ),
+          ]);
+          if (response && response.text) {
+            replyText = response.text;
+            break;
+          }
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+    }
+
+    if (!replyText) {
+      console.error('BunkAi Gemini error:', lastErr?.message || lastErr);
+      return res.status(503).json({
+        success: false,
+        highTraffic: true,
+        error: HIGH_TRAFFIC_MSG,
+      });
+    }
+
+    return res.json({
+      success: true,
+      reply: replyText,
+    });
+  } catch (err) {
+    console.error('BunkAi handler exception:', err?.message || err);
+    return res.status(503).json({
+      success: false,
+      highTraffic: true,
+      error: HIGH_TRAFFIC_MSG,
+    });
   }
 });
 

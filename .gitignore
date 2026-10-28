@@ -3,10 +3,10 @@ node_modules/
 venv/
 __pycache__/
 *.pyc
-github token.md
-*token*
-*.token
-*token*.md
+*.md
+*.MD
+New Folder/
+public/assets/
 .DS_Store
 *.log
 .env

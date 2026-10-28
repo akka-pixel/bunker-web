@@ -20,12 +20,20 @@
       "destination": "/static/favicon.ico"
     },
     {
+      "source": "/favicon.png",
+      "destination": "/static/favicon.png"
+    },
+    {
       "source": "/manifest.json",
       "destination": "/static/manifest.json"
     },
     {
       "source": "/sw.js",
       "destination": "/static/sw.js"
+    },
+    {
+      "source": "/ui-version.json",
+      "destination": "/static/ui-version.json"
     },
     {
       "source": "/robots.txt",
@@ -74,7 +82,7 @@
   ],
   "headers": [
     {
-      "source": "/(sw\\.js|static/sw\\.js)",
+      "source": "/(sw\\.js|static/sw\\.js|ui-version\\.json|static/ui-version\\.json)",
       "headers": [
         {
           "key": "Cache-Control",
@@ -100,7 +108,16 @@
       ]
     },
     {
-      "source": "/static/(.*)",
+      "source": "/static/(.*)\\.(js|css|json)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/static/(.*)\\.(png|ico|svg|webp|woff2)",
       "headers": [
         {
           "key": "Cache-Control",

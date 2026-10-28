@@ -321,15 +321,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Show dashboard immediately with cached data
         enterApp();
-        // Ensure calendar is populated
-        if (!ACADEMIC_DATA || !ACADEMIC_DATA.fullCalendar || ACADEMIC_DATA.fullCalendar.length === 0) {
-            fetchCalendarPhoneDirect(savedRoll, state.subjects).then(() => {
-                renderSemesterHero();
-                renderWidgets();
-                initAcademicCalendar();
-                initPlanner();
-            });
-        }
+        // Always fetch calendar directly from phone (falls back to Vercel if direct fails) so any calendar update reflects immediately
+        fetchCalendarPhoneDirect(savedRoll, state.subjects, true).then(() => {
+            renderSemesterHero();
+            renderWidgets();
+            initAcademicCalendar();
+            initPlanner();
+        });
         // Auto-login on every app open to check the updated date and fetch new attendance data if updated
         backgroundSync(savedCreds.roll, savedCreds.password);
     } else {
@@ -357,6 +355,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (window.pwaManager) updateInstallUI();
 
+    // Check once per session if the owner deployed a new UI version so cached phone UI updates automatically
+    probeOwnerUIVersionOncePerSession();
+
     // Dismiss splash screen and reveal app (instant 200ms for returning users)
     const isReturning = !!(savedCreds && savedRoll && savedCreds.password);
     setTimeout(() => {
@@ -372,8 +373,105 @@ document.addEventListener('DOMContentLoaded', () => {
     }, isReturning ? 200 : 700);
 });
 
-function getSyncCooldownMs() {
-    return 5 * 60 * 1000; // Strict 5-minute attendance sync cooldown (protects Vercel Hobby plan)
+// ============================================================================
+// OWNER UI UPDATE ROLLOUT ENGINE
+// Stores complete UI in phone on first visit; when owner changes UI, deletes
+// old cached UI completely from phone and rolls out the new UI automatically.
+// ============================================================================
+let _uiRolloutInProgress = false;
+
+async function checkAndRolloutUIUpdate(serverUiVersion) {
+    if (!serverUiVersion || _uiRolloutInProgress) return;
+    const cleanVer = String(serverUiVersion).trim();
+    if (!cleanVer) return;
+
+    const storedVer = localStorage.getItem('bunker_ui_version');
+    if (!storedVer) {
+        // First time recording UI version on this phone
+        localStorage.setItem('bunker_ui_version', cleanVer);
+        // Clean out any legacy caches from previous bunker installations
+        if ('caches' in window) {
+            try {
+                const keys = await caches.keys();
+                const legacyKeys = keys.filter(k => k !== cleanVer);
+                if (legacyKeys.length > 0) {
+                    await Promise.all(legacyKeys.map(k => caches.delete(k)));
+                }
+            } catch (e) {}
+        }
+        return;
+    }
+
+    if (storedVer === cleanVer) {
+        return; // Phone already has the exact latest UI
+    }
+
+    // Prevent infinite reload loops within the same 15 seconds
+    const lastRollReload = Number(sessionStorage.getItem('bunker_ui_roll_ts') || '0');
+    if (Date.now() - lastRollReload < 15000) {
+        localStorage.setItem('bunker_ui_version', cleanVer);
+        return;
+    }
+
+    _uiRolloutInProgress = true;
+    sessionStorage.setItem('bunker_ui_roll_ts', String(Date.now()));
+    localStorage.setItem('bunker_ui_version', cleanVer);
+
+    try {
+        // 1. Delete ALL cached UI files from phone CacheStorage
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+        }
+        // 2. Notify active/waiting Service Worker to purge and activate new UI
+        if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(async (reg) => {
+                if (reg.active) {
+                    reg.active.postMessage({ type: 'PURGE_AND_ROLL_UI', version: cleanVer });
+                }
+                if (reg.waiting) {
+                    reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                }
+                await reg.update().catch(() => {});
+            }));
+        }
+    } catch (e) {
+        console.warn('UI rollout cache purge error:', e);
+    }
+
+    // 3. Reload cleanly to roll out the new UI while keeping student logged in
+    window.location.reload();
+}
+window.checkAndRolloutUIUpdate = checkAndRolloutUIUpdate;
+
+async function probeOwnerUIVersionOncePerSession() {
+    try {
+        const lastProbe = Number(sessionStorage.getItem('bunker_ui_probe_ts') || '0');
+        if (Date.now() - lastProbe < 30000) return;
+        sessionStorage.setItem('bunker_ui_probe_ts', String(Date.now()));
+
+        const res = await fetch(`/ui-version.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const headerVer = res.headers.get('X-Bunker-UI-Version');
+        const data = await res.json().catch(() => null);
+        const ver = (data && data.version) || headerVer;
+        if (ver) {
+            await checkAndRolloutUIUpdate(ver);
+        }
+    } catch {}
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        probeOwnerUIVersionOncePerSession();
+    }
+});
+
+function getSyncCooldownMs(forceRefresh = false) {
+    // 15-minute automatic background sync cooldown protects Vercel Hobby plan for 3,000+ daily users;
+    // manual tap on the sync pill allows refreshing after 30 seconds.
+    return forceRefresh ? (30 * 1000) : (15 * 60 * 1000);
 }
 
 function triggerManualSync() {
@@ -398,9 +496,8 @@ async function backgroundSync(roll, password, forceRefresh = false) {
     const hasMappedSubjectNames = Array.isArray(state.subjects) && state.subjects.some(s => s.name && s.name !== s.code);
     const hasValidCourseMapping = state.courseMapping && Object.keys(state.courseMapping).length > 0 && hasMappedSubjectNames;
 
-    // Strict 5-minute attendance cooldown: attendance updates every 5–8 days on eCampus,
-    // so never hit Vercel more than once per 5 minutes when opening or tapping refresh!
-    const cooldownMs = getSyncCooldownMs();
+    // Cooldown guard: 15 minutes for automatic background sync, 30s for manual tap
+    const cooldownMs = getSyncCooldownMs(forceRefresh);
     if (hasValidCourseMapping && hasCachedAttendance && (now - lastProbe) < cooldownMs) {
         showSyncIndicator('done');
         setTimeout(() => hideSyncIndicator(), 1800);
@@ -425,7 +522,11 @@ async function backgroundSync(roll, password, forceRefresh = false) {
                 has_timetable: hasStoredTimetable
             })
         });
+        const uiVerHeader = loginResponse.headers.get('X-Bunker-UI-Version');
         const loginData = await loginResponse.json();
+        if (uiVerHeader || loginData.ui_version) {
+            checkAndRolloutUIUpdate(uiVerHeader || loginData.ui_version);
+        }
 
         if (!loginData.success) {
             showSyncIndicator('offline');
@@ -449,6 +550,7 @@ async function backgroundSync(roll, password, forceRefresh = false) {
                 localStorage.setItem('bunker_last_update', loginData.last_update);
                 localStorage.setItem('bunker_update_sig', loginData.last_update);
             }
+            cleanupManualEntries();
             showSyncIndicator('done');
             setTimeout(() => hideSyncIndicator(), 2000);
             return;
@@ -460,13 +562,15 @@ async function backgroundSync(roll, password, forceRefresh = false) {
             const oldSig = localStorage.getItem('bunker_update_sig') || '';
             const newSig = loginData.update_sig || '';
             const oldUpdate = localStorage.getItem('bunker_last_update') || '';
-            const oldSubs = (state.subjects && state.subjects.length > 0) ? state.subjects : (JSON.parse(localStorage.getItem('bunker_cached_subjects') || localStorage.getItem('bunker_subjects') || '[]'));
+            const oldSubs = (state.subjects && state.subjects.length > 0 && !state.isViewingPreviousAttendance)
+                ? state.subjects
+                : (JSON.parse(localStorage.getItem(`bunker_previous_attendance_${roll}`) || localStorage.getItem('bunker_cached_subjects') || localStorage.getItem('bunker_subjects') || '[]'));
 
-            if (oldSubs && oldSubs.length > 0 && (!oldSig || oldSig !== newSig || (loginData.last_update && loginData.last_update !== oldUpdate))) {
+            if (oldSubs && oldSubs.length > 0 && (checkAttendanceDifference(oldSubs, loginData.subjects) || (loginData.last_update && oldUpdate && loginData.last_update !== oldUpdate) || (!oldSig || oldSig !== newSig))) {
                 try {
                     localStorage.setItem('bunker_prev_att_snapshot_' + roll, JSON.stringify({
                         subjects: oldSubs,
-                        last_update: oldUpdate || 'Previous Update',
+                        last_update: oldUpdate || localStorage.getItem(`bunker_previous_update_${roll}`) || 'Previous Update',
                         saved_at: Date.now()
                     }));
                 } catch (e) {
@@ -476,13 +580,10 @@ async function backgroundSync(roll, password, forceRefresh = false) {
 
             state.subjects = loginData.subjects;
             state.isViewingPreviousAttendance = false;
-            localStorage.setItem('bunker_subjects', JSON.stringify(state.subjects));
-            localStorage.setItem('bunker_cached_subjects', JSON.stringify(state.subjects));
-            localStorage.setItem('bunker_attendance', JSON.stringify(state.subjects));
-            localStorage.setItem(`bunker_subjects_${roll}`, JSON.stringify(state.subjects));
-            saveAttendanceSnapshot(roll, state.subjects, loginData.last_update, loginData.previous_subjects, loginData.previous_last_update);
+            state.forceLivePendingView = false;
+            persistHomeAttendanceSnapshot(roll, state.subjects, loginData.last_update, loginData.previous_subjects, loginData.previous_last_update);
         } else {
-            // Live attendance is currently updating or stopped
+            // Live attendance is currently updating or stopped on eCampus — preserve and show stored attendance
             if (Array.isArray(loginData.previous_subjects) && loginData.previous_subjects.length > 0) {
                 state.previousSubjects = loginData.previous_subjects;
                 localStorage.setItem(`bunker_previous_attendance_${roll}`, JSON.stringify(loginData.previous_subjects));
@@ -490,7 +591,11 @@ async function backgroundSync(roll, password, forceRefresh = false) {
                     localStorage.setItem(`bunker_previous_update_${roll}`, loginData.previous_last_update);
                 }
             }
-            if (!state.isViewingPreviousAttendance) {
+            const storedPrev = getStoredPreviousAttendance(roll);
+            if (storedPrev && storedPrev.length > 0 && !state.forceLivePendingView) {
+                state.subjects = storedPrev;
+                state.isViewingPreviousAttendance = true;
+            } else if (!state.isViewingPreviousAttendance) {
                 state.subjects = [];
             }
         }
@@ -709,29 +814,24 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         if (hasFreshSubjects) {
             state.subjects = loginData.subjects;
             state.isViewingPreviousAttendance = false;
-            localStorage.setItem('bunker_subjects', JSON.stringify(state.subjects));
-            localStorage.setItem('bunker_cached_subjects', JSON.stringify(state.subjects));
-            localStorage.setItem('bunker_attendance', JSON.stringify(state.subjects));
-            localStorage.setItem(`bunker_subjects_${roll}`, JSON.stringify(state.subjects));
-            saveAttendanceSnapshot(roll, state.subjects, loginData.last_update, loginData.previous_subjects, loginData.previous_last_update);
+            state.forceLivePendingView = false;
+            persistHomeAttendanceSnapshot(roll, state.subjects, loginData.last_update, loginData.previous_subjects, loginData.previous_last_update);
         } else {
-            state.subjects = [];
-            state.isViewingPreviousAttendance = false;
             if (Array.isArray(loginData.previous_subjects) && loginData.previous_subjects.length > 0) {
                 state.previousSubjects = loginData.previous_subjects;
                 localStorage.setItem(`bunker_previous_attendance_${roll}`, JSON.stringify(loginData.previous_subjects));
                 if (loginData.previous_last_update) {
                     localStorage.setItem(`bunker_previous_update_${roll}`, loginData.previous_last_update);
                 }
+            }
+            const storedPrev = getStoredPreviousAttendance(roll);
+            if (storedPrev && storedPrev.length > 0) {
+                state.subjects = storedPrev;
+                state.isViewingPreviousAttendance = true;
+                state.forceLivePendingView = false;
             } else {
-                // If previous cache had valid subjects, preserve them into previous attendance
-                const prev = localStorage.getItem(`bunker_subjects_${roll}`);
-                try {
-                    const parsed = JSON.parse(prev);
-                    if (Array.isArray(parsed) && parsed.length > 0) {
-                        localStorage.setItem(`bunker_previous_attendance_${roll}`, prev);
-                    }
-                } catch {}
+                state.subjects = [];
+                state.isViewingPreviousAttendance = false;
             }
         }
 
@@ -805,33 +905,28 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
     if (!roll) return null;
     const detectedSem = detectCurrentSemesterFromSubjects(subjects || (state.rollNumber === roll ? state.subjects : [])) || getDefaultSemesterForRoll(roll);
     const vaultKey = `bunker_calendar_vault_v2_${roll}_${detectedSem}`;
-    // 6-hour phone refresh interval so any mid-semester event changes by PSG Tech are picked up directly on the phone (0 Vercel load!)
-    const CALENDAR_TTL = 6 * 60 * 60 * 1000;
     const expectedPid = getPlannerId(roll, detectedSem);
 
-    if (!force) {
-        try {
-            const rawVault = localStorage.getItem(vaultKey);
-            if (rawVault) {
-                const vault = JSON.parse(rawVault);
-                const vPid = vault && vault.data && (vault.data.id || (vault.data.matchedPlanner && vault.data.matchedPlanner.id));
-                if (expectedPid && vPid && parseInt(vPid, 10) !== expectedPid) {
-                    localStorage.removeItem(vaultKey);
-                    localStorage.removeItem('bunker_calendar_cache');
-                } else if (vault && vault.data) {
-                    // Always render cached semester calendar immediately in 0ms
-                    processCalendarData(vault.data, roll);
-                    if (Date.now() - (vault.timestamp || 0) < CALENDAR_TTL) {
-                        return vault.data;
-                    }
-                }
+    // Render cached phone data immediately in 0ms for instant UI responsiveness while fetching live from phone
+    let cachedFallbackData = null;
+    try {
+        const rawVault = localStorage.getItem(vaultKey);
+        if (rawVault) {
+            const vault = JSON.parse(rawVault);
+            const vPid = vault && vault.data && (vault.data.id || (vault.data.matchedPlanner && vault.data.matchedPlanner.id));
+            if (expectedPid && vPid && parseInt(vPid, 10) !== expectedPid) {
+                localStorage.removeItem(vaultKey);
+                localStorage.removeItem('bunker_calendar_cache');
+            } else if (vault && vault.data) {
+                cachedFallbackData = vault.data;
+                processCalendarData(vault.data, roll);
             }
-        } catch (e) {}
+        }
+    } catch (e) {}
 
-        const calCacheKey = `bunker_cal_time_v2_${roll}`;
-        const lastCalTime = parseInt(localStorage.getItem(calCacheKey) || '0');
+    if (!cachedFallbackData) {
         const cachedCalendar = localStorage.getItem('bunker_calendar_cache');
-        if (cachedCalendar && (Date.now() - lastCalTime < CALENDAR_TTL)) {
+        if (cachedCalendar) {
             try {
                 const parsed = JSON.parse(cachedCalendar);
                 const cPid = parsed && (parsed.id || (parsed.matchedPlanner && parsed.matchedPlanner.id));
@@ -839,9 +934,9 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
                 if (expectedPid && cPid && parseInt(cPid, 10) !== expectedPid) {
                     localStorage.removeItem('bunker_calendar_cache');
                 } else if (parsed && parsed.fullCalendar && parsed.fullCalendar.length > 0 && hasHolidays) {
+                    cachedFallbackData = parsed;
                     ACADEMIC_DATA = parsed;
                     state.calendarCache = parsed;
-                    return parsed;
                 }
             } catch (e) {}
         }
@@ -883,11 +978,11 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
         { id: 41, name: "Second Year BE / BTech(Regular & SW)", startDate: "2027-01-04T00:00:00", lastDate: "2027-05-07T00:00:00", totalWorkingDays: 82, calendarYear: 2026, isPublished: true }
     ];
 
-    // Strategy 1: Direct phone fetch from official PSG Tech academic calendar API (CORS enabled, 0 Vercel compute!)
+    // Strategy 1: Direct phone fetch from official PSG Tech academic calendar API (always fetches fresh so calendar updates reflect immediately!)
     try {
         let yearEntry = null;
         try {
-            const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026');
+            const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026', { cache: 'no-store' });
             if (idxRes.ok) {
                 const rawCal = await idxRes.json();
                 yearEntry = Array.isArray(rawCal) ? (rawCal[0] || {}) : rawCal;
@@ -905,7 +1000,7 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
         const matchedPlanner = resolvePlannerForRoll(roll, planners, detectedSem);
 
         if (matchedPlanner && matchedPlanner.id) {
-            const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matchedPlanner.id}`);
+            const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matchedPlanner.id}`, { cache: 'no-store' });
             if (pRes.ok) {
                 calData = await pRes.json();
                 if (calData) {
@@ -921,10 +1016,29 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
             }
         }
     } catch (e) {
-        console.warn('Direct phone calendar fetch failed, trying static cache fallback:', e);
+        console.warn('Direct phone calendar fetch failed, falling back to Vercel:', e);
     }
 
-    // Strategy 2: Fallback to local static JSON bundle (0 Vercel serverless invocations!)
+    // Strategy 2: Fallback to Vercel API endpoint if direct phone fetch fails
+    if (!calData || !calData.activities) {
+        try {
+            const calUrl = detectedSem ? `/api/calendar/${roll}?sem=${detectedSem}` : `/api/calendar/${roll}`;
+            const token = localStorage.getItem('bunker_session_token');
+            const headers = {};
+            if (token) headers['X-Session-Token'] = token;
+            const calRes = await fetch(calUrl, { headers });
+            if (calRes.ok) {
+                calData = await calRes.json();
+                if (calData && window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.normalizePlannerPayload === 'function') {
+                    calData = window.CALENDAR_TOKENS.normalizePlannerPayload(calData, defaultHolidays);
+                }
+            }
+        } catch (e) {
+            console.warn('Vercel API calendar fallback failed:', e);
+        }
+    }
+
+    // Strategy 3: Fallback to Vercel static JSON bundle
     if (!calData || !calData.activities) {
         try {
             const cacheRes = await fetch('/static/all_calendars_cache.json');
@@ -953,25 +1067,6 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
         }
     }
 
-    // Strategy 3: Fallback to Vercel edge-cached endpoint only if both direct & static cache fail
-    if (!calData || !calData.activities) {
-        try {
-            const calUrl = detectedSem ? `/api/calendar/${roll}?sem=${detectedSem}` : `/api/calendar/${roll}`;
-            const token = localStorage.getItem('bunker_session_token');
-            const headers = {};
-            if (token) headers['X-Session-Token'] = token;
-            const calRes = await fetch(calUrl, { headers });
-            if (calRes.ok) {
-                calData = await calRes.json();
-                if (calData && window.CALENDAR_TOKENS && typeof window.CALENDAR_TOKENS.normalizePlannerPayload === 'function') {
-                    calData = window.CALENDAR_TOKENS.normalizePlannerPayload(calData, defaultHolidays);
-                }
-            }
-        } catch (e) {
-            console.warn('Fallback calendar fetch failed:', e);
-        }
-    }
-
     if (calData && !calData.error && (calData.activities || calData.name)) {
         processCalendarData(calData, roll);
         localStorage.setItem(`bunker_cal_time_v2_${roll}`, Date.now().toString());
@@ -981,8 +1076,9 @@ async function fetchCalendarPhoneDirect(roll, subjects, force = false) {
                 timestamp: Date.now()
             }));
         } catch (e) {}
+        return calData;
     }
-    return calData;
+    return cachedFallbackData;
 }
 
 // Background silent timetable update on navigation (24-hour cooldown: 1 check per day max)
@@ -1121,6 +1217,57 @@ function processCalendarData(data, roll) {
     if (state.subjects.length === 0) saveState();
 }
 
+function getStoredPreviousAttendance(roll) {
+    const r = roll || state.rollNumber || localStorage.getItem('bunker_roll') || '';
+    const keys = [
+        r ? `bunker_previous_attendance_${r}` : null,
+        r ? `bunker_current_attendance_${r}` : null,
+        r ? `bunker_subjects_${r}` : null,
+        'bunker_cached_subjects',
+        'bunker_subjects',
+        'bunker_attendance'
+    ].filter(Boolean);
+
+    for (const k of keys) {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed;
+            }
+        } catch {}
+    }
+    if (Array.isArray(state.previousSubjects) && state.previousSubjects.length > 0) {
+        return state.previousSubjects;
+    }
+    return null;
+}
+
+function persistHomeAttendanceSnapshot(roll, subjects, lastUpdate, prevSubjects = null, prevLastUpdate = null) {
+    const r = roll || state.rollNumber || localStorage.getItem('bunker_roll') || '';
+    if (!Array.isArray(subjects) || subjects.length === 0) return;
+
+    const jsonStr = JSON.stringify(subjects);
+    localStorage.setItem('bunker_subjects', jsonStr);
+    localStorage.setItem('bunker_cached_subjects', jsonStr);
+    localStorage.setItem('bunker_attendance', jsonStr);
+
+    if (r) {
+        localStorage.setItem(`bunker_subjects_${r}`, jsonStr);
+        localStorage.setItem(`bunker_previous_attendance_${r}`, jsonStr);
+        const effUpdate = (lastUpdate && lastUpdate !== 'No data')
+            ? lastUpdate
+            : (localStorage.getItem('bunker_last_update') && localStorage.getItem('bunker_last_update') !== 'No data'
+                ? localStorage.getItem('bunker_last_update')
+                : localStorage.getItem(`bunker_previous_update_${r}`));
+        if (effUpdate && effUpdate !== 'No data') {
+            localStorage.setItem(`bunker_previous_update_${r}`, effUpdate);
+        }
+        saveAttendanceSnapshot(r, subjects, effUpdate || lastUpdate, prevSubjects, prevLastUpdate);
+    }
+}
+
 async function loadCachedAttendance() {
     const roll = state.rollNumber || localStorage.getItem('bunker_roll') || (() => {
         try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}').roll; } catch { return null; }
@@ -1132,20 +1279,7 @@ async function loadCachedAttendance() {
     }
     state.rollNumber = roll;
 
-    // Helper to safely parse non-empty array
-    const getValidArray = (key) => {
-        const val = localStorage.getItem(key);
-        if (!val) return null;
-        try {
-            const arr = JSON.parse(val);
-            return (Array.isArray(arr) && arr.length > 0) ? arr : null;
-        } catch { return null; }
-    };
-
-    let cached = getValidArray(`bunker_previous_attendance_${roll}`)
-        || getValidArray(`bunker_subjects_${roll}`)
-        || getValidArray('bunker_subjects')
-        || (Array.isArray(state.previousSubjects) && state.previousSubjects.length > 0 ? state.previousSubjects : null);
+    let cached = getStoredPreviousAttendance(roll);
 
     // If not found in local cache, attempt to fetch from server
     if (!cached || cached.length === 0) {
@@ -1190,6 +1324,7 @@ async function loadCachedAttendance() {
     try {
         state.subjects = cached;
         state.isViewingPreviousAttendance = true;
+        state.forceLivePendingView = false;
 
         const tt = localStorage.getItem('bunker_timetable');
         if (tt) state.timetable = JSON.parse(tt);
@@ -1209,6 +1344,7 @@ window.loadCachedAttendance = loadCachedAttendance;
 
 function returnToLiveStatus() {
     state.isViewingPreviousAttendance = false;
+    state.forceLivePendingView = true;
     state.subjects = [];
     initDashboard();
     showToast('Returned to live attendance status');
@@ -1437,71 +1573,44 @@ function triggerInstall() {
     }
 
     if (isIOS) {
+        const existing = document.getElementById('bunker-pwa-install-sheet');
+        if (existing) existing.remove();
         const modal = document.createElement('div');
-        modal.className = "fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-md p-4";
-        modal.style.cssText = 'animation: fadeIn 0.25s ease';
+        modal.id = 'bunker-pwa-install-sheet';
+        modal.className = "fixed inset-0 z-[95] flex items-end justify-center bg-black/75 backdrop-blur-md p-4";
+        modal.style.cssText = 'animation: fadeIn 0.22s ease';
         modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
         modal.innerHTML = `
-            <div style="background:linear-gradient(145deg,#1c1c1e,#111)" class="w-full max-w-sm rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl">
-                <!-- Header gradient -->
-                <div style="background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%)" class="p-6 text-center relative overflow-hidden">
-                    <div class="absolute inset-0 opacity-20" style="background:radial-gradient(circle at 70% 30%,#fff 0%,transparent 60%)"></div>
-                    <img src="/static/icon.png" class="w-16 h-16 rounded-[1.1rem] mx-auto mb-3 shadow-xl border-2 border-white/20 relative z-10">
-                    <h3 class="text-lg font-black text-white relative z-10">Add to Home Screen</h3>
-                    <p class="text-indigo-200 text-[11px] mt-1 relative z-10 font-medium">Install Bunker as a native app on your iPhone</p>
+            <div style="background:linear-gradient(155deg,#17152b 0%,#0c0a18 100%)" class="w-full max-w-sm rounded-[2rem] overflow-hidden border border-indigo-500/30 shadow-2xl">
+                <div style="background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 55%,#06b6d4 100%)" class="p-5 text-center relative overflow-hidden">
+                    <img src="/static/apple-touch-icon.png" class="w-16 h-16 rounded-[1.15rem] mx-auto mb-2.5 shadow-xl border-2 border-white/25 relative z-10">
+                    <h3 class="text-base font-black text-white relative z-10">Install PSG Bunker on iPhone</h3>
+                    <p class="text-indigo-100 text-[11px] mt-0.5 relative z-10 font-semibold">Full-screen iOS app with instant offline access</p>
                 </div>
 
-                <!-- Steps -->
-                <div class="p-6 space-y-4">
-                    <div class="flex items-start gap-4">
-                        <div class="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-500/30 flex items-center justify-center shrink-0">
-                            <span class="text-blue-400 font-black text-xs">1</span>
+                <div class="p-5 space-y-3.5">
+                    <div class="flex items-start gap-3.5 p-2.5 rounded-2xl bg-white/[0.04] border border-white/10">
+                        <div class="w-7 h-7 rounded-xl bg-indigo-500/25 border border-indigo-400/40 flex items-center justify-center shrink-0">
+                            <span class="text-indigo-300 font-black text-xs">1</span>
                         </div>
                         <div>
-                            <p class="text-white font-bold text-sm">Open in Safari</p>
-                            <p class="text-gray-400 text-[11px] mt-0.5">Make sure this page is open in Safari, not in-app browsers.</p>
+                            <p class="text-white font-bold text-xs">Tap <i class="fas fa-arrow-up-from-bracket text-sky-400 mx-0.5"></i> Share in Safari</p>
+                            <p class="text-gray-400 text-[10.5px] mt-0.5">Tap the Share button on the bottom bar of Safari.</p>
                         </div>
                     </div>
-                    <div class="flex items-start gap-4">
-                        <div class="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-500/30 flex items-center justify-center shrink-0">
-                            <span class="text-blue-400 font-black text-xs">2</span>
+                    <div class="flex items-start gap-3.5 p-2.5 rounded-2xl bg-white/[0.04] border border-white/10">
+                        <div class="w-7 h-7 rounded-xl bg-indigo-500/25 border border-indigo-400/40 flex items-center justify-center shrink-0">
+                            <span class="text-indigo-300 font-black text-xs">2</span>
                         </div>
                         <div>
-                            <p class="text-white font-bold text-sm">Tap <i class="fas fa-arrow-up-from-bracket text-blue-400"></i> Share</p>
-                            <p class="text-gray-400 text-[11px] mt-0.5">Find the Share icon at the bottom of Safari.</p>
-                        </div>
-                    </div>
-                    <div class="flex items-start gap-4">
-                        <div class="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-500/30 flex items-center justify-center shrink-0">
-                            <span class="text-blue-400 font-black text-xs">3</span>
-                        </div>
-                        <div>
-                            <p class="text-white font-bold text-sm">Select "Add to Home Screen"</p>
-                            <p class="text-gray-400 text-[11px] mt-0.5">Scroll down in the share sheet and tap <span class="text-white font-bold">Add to Home Screen</span>.</p>
+                            <p class="text-white font-bold text-xs">Tap "Add to Home Screen" <i class="fas fa-plus-square text-emerald-400 ml-0.5"></i></p>
+                            <p class="text-gray-400 text-[10.5px] mt-0.5">Scroll down the share sheet and tap <span class="text-white font-bold">Add to Home Screen</span>, then tap <span class="text-white font-bold">Add</span>.</p>
                         </div>
                     </div>
 
-                    <!-- Benefits row -->
-                    <div class="grid grid-cols-3 gap-2 pt-2 border-t border-white/5">
-                        <div class="text-center p-2 rounded-xl bg-white/5">
-                            <i class="fas fa-bolt text-yellow-400 text-sm mb-1"></i>
-                            <p class="text-[9px] text-gray-400 font-bold">Instant</p>
-                        </div>
-                        <div class="text-center p-2 rounded-xl bg-white/5">
-                            <i class="fas fa-wifi-slash text-indigo-400 text-sm mb-1"></i>
-                            <p class="text-[9px] text-gray-400 font-bold">Offline</p>
-                        </div>
-                        <div class="text-center p-2 rounded-xl bg-white/5">
-                            <i class="fas fa-expand text-emerald-400 text-sm mb-1"></i>
-                            <p class="text-[9px] text-gray-400 font-bold">Fullscreen</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Arrow hint -->
-                <div class="text-center pb-6">
-                    <p class="text-[10px] text-gray-600 font-bold uppercase tracking-widest mb-2">Tap outside to close</p>
-                    <i class="fas fa-arrow-down text-indigo-500/40 animate-bounce"></i>
+                    <button type="button" onclick="this.closest('#bunker-pwa-install-sheet').remove()" class="w-full py-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-black text-xs uppercase tracking-wider active:scale-95 transition">
+                        Got It
+                    </button>
                 </div>
             </div>
         `;
@@ -1509,51 +1618,51 @@ function triggerInstall() {
         return;
     }
 
-    // Android & Chromium PWA
+    // Android & Chromium 1-Tap PWA Install
     if (window.pwaManager.deferredPrompt) {
         triggerPwaInstall();
     } else {
+        const ua = navigator.userAgent || '';
+        const isSamsung = /SamsungBrowser/i.test(ua);
+        const existing = document.getElementById('bunker-pwa-install-sheet');
+        if (existing) existing.remove();
         const modal = document.createElement('div');
-        modal.className = "fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-md p-4";
-        modal.style.cssText = 'animation: fadeIn 0.25s ease';
+        modal.id = 'bunker-pwa-install-sheet';
+        modal.className = "fixed inset-0 z-[95] flex items-end justify-center bg-black/75 backdrop-blur-md p-4";
+        modal.style.cssText = 'animation: fadeIn 0.22s ease';
         modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
         modal.innerHTML = `
-            <div style="background:linear-gradient(145deg,#1c1c1e,#111)" class="w-full max-w-sm rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl">
-                <div style="background:linear-gradient(135deg,#4338ca 0%,#6d28d9 100%)" class="p-6 text-center relative overflow-hidden">
-                    <div class="absolute inset-0 opacity-20" style="background:radial-gradient(circle at 70% 30%,#fff 0%,transparent 60%)"></div>
-                    <img src="/static/icon.png" class="w-16 h-16 rounded-[1.1rem] mx-auto mb-3 shadow-xl border-2 border-white/20 relative z-10">
-                    <h3 class="text-lg font-black text-white relative z-10">Install PSG Bunker</h3>
-                    <p class="text-indigo-200 text-[11px] mt-1 relative z-10 font-medium">Add to your home screen for instantaneous 0ms loading</p>
+            <div style="background:linear-gradient(155deg,#17152b 0%,#0c0a18 100%)" class="w-full max-w-sm rounded-[2rem] overflow-hidden border border-indigo-500/30 shadow-2xl">
+                <div style="background:linear-gradient(135deg,#4338ca 0%,#7c3aed 55%,#06b6d4 100%)" class="p-5 text-center relative overflow-hidden">
+                    <img src="/static/icon-192.png" class="w-16 h-16 rounded-[1.15rem] mx-auto mb-2.5 shadow-xl border-2 border-white/25 relative z-10">
+                    <h3 class="text-base font-black text-white relative z-10">Install PSG Bunker App</h3>
+                    <p class="text-indigo-100 text-[11px] mt-0.5 relative z-10 font-semibold">Works on all Android phones • 0ms offline launch</p>
                 </div>
 
-                <div class="p-6 space-y-4">
-                    <div class="flex items-start gap-4">
-                        <div class="w-8 h-8 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
-                            <span class="text-indigo-400 font-black text-xs">1</span>
+                <div class="p-5 space-y-3.5">
+                    <div class="flex items-start gap-3.5 p-2.5 rounded-2xl bg-white/[0.04] border border-white/10">
+                        <div class="w-7 h-7 rounded-xl bg-indigo-500/25 border border-indigo-400/40 flex items-center justify-center shrink-0">
+                            <span class="text-indigo-300 font-black text-xs">1</span>
                         </div>
                         <div>
-                            <p class="text-white font-bold text-sm">Tap Chrome Menu (<i class="fas fa-ellipsis-vertical text-indigo-400"></i>)</p>
-                            <p class="text-gray-400 text-[11px] mt-0.5">Find the 3 dots menu at the top right of your browser.</p>
+                            <p class="text-white font-bold text-xs">Tap Browser Menu (${isSamsung ? '<i class="fas fa-bars text-indigo-400"></i>' : '<i class="fas fa-ellipsis-vertical text-indigo-400"></i>'})</p>
+                            <p class="text-gray-400 text-[10.5px] mt-0.5">${isSamsung ? 'Tap the menu icon at the bottom right of Samsung Internet.' : 'Tap the 3-dots menu at the top right of your Android browser.'}</p>
                         </div>
                     </div>
-                    <div class="flex items-start gap-4">
-                        <div class="w-8 h-8 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
-                            <span class="text-indigo-400 font-black text-xs">2</span>
+                    <div class="flex items-start gap-3.5 p-2.5 rounded-2xl bg-white/[0.04] border border-white/10">
+                        <div class="w-7 h-7 rounded-xl bg-indigo-500/25 border border-indigo-400/40 flex items-center justify-center shrink-0">
+                            <span class="text-indigo-300 font-black text-xs">2</span>
                         </div>
                         <div>
-                            <p class="text-white font-bold text-sm">Tap "Install app" or "Add to Home screen"</p>
-                            <p class="text-gray-400 text-[11px] mt-0.5">Look for the Install option in the Chrome dropdown menu.</p>
+                            <p class="text-white font-bold text-xs">${isSamsung ? 'Tap "Add page to" → "Home screen"' : 'Tap "Install app" or "Add to Home screen"'}</p>
+                            <p class="text-gray-400 text-[10.5px] mt-0.5">Confirm to add PSG Bunker directly to your Android app drawer.</p>
                         </div>
                     </div>
 
-                    <button onclick="triggerPwaInstall(); this.closest('.fixed').remove();" class="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all">
-                        <i class="fas fa-arrow-down-to-bracket text-xs"></i>
-                        <span>Try 1-Tap Install Now</span>
+                    <button type="button" onclick="triggerPwaInstall(); this.closest('#bunker-pwa-install-sheet').remove();" class="w-full py-3 rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-purple-600 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all">
+                        <i class="fas fa-download text-xs"></i>
+                        <span>Install App Now</span>
                     </button>
-                </div>
-
-                <div class="text-center pb-5">
-                    <p class="text-[10px] text-gray-600 font-bold uppercase tracking-widest">Tap outside to close</p>
                 </div>
             </div>
         `;
@@ -1566,206 +1675,152 @@ function downloadAndroidApk() {
     triggerInstall();
 }
 
-// --- FIRST-TIME LOGIN FEATURES TOUR & ANDROID PROMPT ---
+// --- FIRST-TIME LOGIN FEATURES TOUR & ANDROID PROMPT (REMOVED) ---
 
 function checkFirstLoginFeaturesModal() {
-    const seenKey = 'bunker_features_tour_seen_v2';
-    if (localStorage.getItem(seenKey)) return;
-
-    // Delay slightly (900ms) after entering dashboard for a smooth entrance
-    setTimeout(() => {
-        showFeaturesTourModal();
-    }, 900);
-}
-
-// Backwards compatibility alias
-function checkAndroidApkPrompt() {
-    checkFirstLoginFeaturesModal();
-}
-
-function showFeaturesTourModal() {
-    // Avoid duplicate modals
     const existing = document.getElementById('bunker-features-tour-modal');
     if (existing) existing.remove();
 
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    const isInstalled = window.pwaManager.isStandalone || window.pwaManager.isAppInstalled;
-
-    const modal = document.createElement('div');
-    modal.id = 'bunker-features-tour-modal';
-    modal.className = "fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md transition-all duration-300";
-    modal.style.opacity = '0';
-
-    modal.innerHTML = `
-        <div class="w-full max-w-[420px] max-h-[90dvh] rounded-[28px] sm:rounded-[32px] overflow-hidden border border-white/15 shadow-2xl glass-panel relative flex flex-col transform translate-y-8 sm:translate-y-0 sm:scale-95 transition-all duration-300" style="background: linear-gradient(165deg, rgba(20, 18, 38, 0.98) 0%, rgba(10, 9, 22, 0.99) 100%) !important;">
-            <!-- Ambient glowing orbs -->
-            <div class="absolute -right-12 -top-12 w-36 h-36 rounded-full bg-indigo-500/20 blur-3xl pointer-events-none"></div>
-            <div class="absolute -left-12 -bottom-12 w-36 h-36 rounded-full bg-purple-500/20 blur-3xl pointer-events-none"></div>
-            ${isAndroid ? '<div class="absolute right-4 bottom-24 w-28 h-28 rounded-full bg-emerald-500/15 blur-2xl pointer-events-none"></div>' : ''}
-
-            <!-- Header -->
-            <div class="p-5 pb-3 relative z-10 border-b border-white/5 flex items-start justify-between">
-                <div>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-[9px] font-black uppercase tracking-widest mb-1.5">
-                        <i class="fas fa-sparkles text-amber-400"></i>
-                        Explore Bunker
-                    </span>
-                    <h3 class="text-lg font-black text-white tracking-tight flex items-center gap-2">
-                        <span>All Features in One Place</span>
-                    </h3>
-                    <p class="text-[11px] text-gray-400 mt-0.5">Quick overview of your powerful Bunker toolkit</p>
-                </div>
-                <button onclick="closeFeaturesTourModal(true)" class="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white transition-colors shrink-0">
-                    <i class="fas fa-times text-xs"></i>
-                </button>
-            </div>
-
-            <!-- Scrollable Features Content -->
-            <div class="p-5 pt-3 overflow-y-auto no-scrollbar space-y-2.5 relative z-10">
-                <!-- Feature 1: Auto Feedback Entry -->
-                <div class="p-3 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-amber-500/30 transition-colors flex items-start gap-3 group">
-                    <div class="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
-                        <i class="fas fa-bolt text-sm"></i>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center justify-between gap-1 mb-0.5">
-                            <h4 class="text-xs font-bold text-white">Auto Feedback Entry</h4>
-                            <span class="text-[8px] font-black text-amber-400 bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30 uppercase tracking-wider">Top Pick</span>
-                        </div>
-                        <p class="text-[11px] text-gray-400 leading-snug">1-Click 5-Star automated survey filling for Mid & End-Semester faculty forms. Zero manual effort.</p>
-                    </div>
-                </div>
-
-                <!-- Feature 2: Academic Calendar Hub -->
-                <div class="p-3 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-indigo-500/30 transition-colors flex items-start gap-3 group">
-                    <div class="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
-                        <i class="fas fa-calendar-alt text-sm"></i>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center justify-between gap-1 mb-0.5">
-                            <h4 class="text-xs font-bold text-white">Academic Calendar</h4>
-                            <span class="text-[8px] font-black text-indigo-300 bg-indigo-500/15 px-1.5 py-0.2 rounded border border-indigo-500/30 uppercase tracking-wider">Live</span>
-                        </div>
-                        <p class="text-[11px] text-gray-400 leading-snug">Continuous assessment (CA) exam timetables, official holidays & remaining working days counter.</p>
-                    </div>
-                </div>
-
-                <!-- Feature 3: Smart Bunk Tracker -->
-                <div class="p-3 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-emerald-500/30 transition-colors flex items-start gap-3 group">
-                    <div class="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
-                        <i class="fas fa-bullseye text-sm"></i>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center justify-between gap-1 mb-0.5">
-                            <h4 class="text-xs font-bold text-white">Smart Bunk Tracker</h4>
-                            <span class="text-[8px] font-black text-emerald-300 bg-emerald-500/15 px-1.5 py-0.2 rounded border border-emerald-500/30 uppercase tracking-wider">Safe</span>
-                        </div>
-                        <p class="text-[11px] text-gray-400 leading-snug">Instant safe bunk calculator, live attendance percentages, and custom 75% or 85% goal simulator.</p>
-                    </div>
-                </div>
-
-                <!-- Feature 4: Academics & Internals -->
-                <div class="p-3 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-purple-500/30 transition-colors flex items-start gap-3 group">
-                    <div class="w-9 h-9 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
-                        <i class="fas fa-graduation-cap text-sm"></i>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center justify-between gap-1 mb-0.5">
-                            <h4 class="text-xs font-bold text-white">Academics & Internals</h4>
-                            <span class="text-[8px] font-black text-purple-300 bg-purple-500/15 px-1.5 py-0.2 rounded border border-purple-500/30 uppercase tracking-wider">Marks</span>
-                        </div>
-                        <p class="text-[11px] text-gray-400 leading-snug">Detailed CA internal marks breakdowns, SGPA/CGPA estimator & complete subject performance.</p>
-                    </div>
-                </div>
-
-                <!-- Feature 5: Compare Attendance -->
-                <div class="p-3 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-cyan-500/30 transition-colors flex items-start gap-3 group">
-                    <div class="w-9 h-9 rounded-xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
-                        <i class="fas fa-history text-sm"></i>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center justify-between gap-1 mb-0.5">
-                            <h4 class="text-xs font-bold text-white">Attendance Comparison</h4>
-                            <span class="text-[8px] font-black text-cyan-300 bg-cyan-500/15 px-1.5 py-0.2 rounded border border-cyan-500/30 uppercase tracking-wider">History</span>
-                        </div>
-                        <p class="text-[11px] text-gray-400 leading-snug">Track previous vs current attendance to immediately see which recent classes were updated.</p>
-                    </div>
-                </div>
-
-                <!-- Install Bunker App Card (Visible if not in standalone) -->
-                ${!isInstalled ? `
-                <div class="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-500/15 via-purple-500/10 to-pink-500/10 border border-indigo-500/30 flex items-center justify-between gap-3 shadow-[0_0_20px_rgba(99,102,241,0.15)] mt-3">
-                    <div class="flex items-center gap-3 min-w-0">
-                        <div class="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-lg shrink-0">
-                            <i class="fas fa-mobile-screen-button"></i>
-                        </div>
-                        <div class="min-w-0">
-                            <div class="text-xs font-black text-white flex items-center gap-1.5">
-                                <span>Install Bunker App</span>
-                                <span class="px-1.5 py-0.2 rounded text-[8px] font-black bg-indigo-500/25 text-indigo-300 uppercase tracking-widest border border-indigo-500/30">PWA</span>
-                            </div>
-                            <p class="text-[10.5px] text-gray-300/80 leading-tight mt-0.5 truncate">Add to Home Screen for 0ms offline speed</p>
-                        </div>
-                    </div>
-                    <button onclick="handleTourApkDownload()" class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-[0_2px_12px_rgba(99,102,241,0.35)] shrink-0 active:scale-95 transition-all">
-                        <i class="fas fa-arrow-down-to-bracket text-xs"></i>
-                        <span>Install</span>
-                    </button>
-                </div>
-                ` : ''}
-            </div>
-
-            <!-- Footer Action Button -->
-            <div class="p-4 pt-3 border-t border-white/5 bg-black/30 relative z-10">
-                <button onclick="closeFeaturesTourModal(true)" class="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 via-purple-600 to-pink-500 hover:from-indigo-400 hover:via-purple-500 hover:to-pink-400 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-[0_4px_20px_rgba(99,102,241,0.35)] active:scale-95 transition-all">
-                    <span>Get Started &bull; Explore Bunker</span>
-                    <i class="fas fa-arrow-right text-xs"></i>
-                </button>
-            </div>
-        </div>
-    `;
-
-    document.body.appendChild(modal);
-
-    requestAnimationFrame(() => {
-        modal.style.opacity = '1';
-        const card = modal.querySelector('.glass-panel');
-        if (card) {
-            card.classList.remove('translate-y-8', 'sm:scale-95');
-            card.classList.add('translate-y-0', 'sm:scale-100');
+    // One-time "Bunker Updated" popup for all users
+    try {
+        const seenOnce = localStorage.getItem('bunker_update_once_popup_v1');
+        if (!seenOnce) {
+            const modal = document.getElementById('bunker-update-once-modal');
+            if (modal) {
+                modal.classList.remove('hidden');
+            }
         }
-    });
+    } catch (e) {}
 }
 
-function closeFeaturesTourModal(markSeen = true) {
-    if (markSeen) {
-        localStorage.setItem('bunker_features_tour_seen_v2', 'true');
+function closeBunkerUpdatePopup() {
+    try {
+        localStorage.setItem('bunker_update_once_popup_v1', '1');
+    } catch (e) {}
+    const modal = document.getElementById('bunker-update-once-modal');
+    if (modal) {
+        modal.classList.add('hidden');
     }
+}
+
+function submitBunkerDirectFeedback(event, source) {
+    if (event) event.preventDefault();
+    const inputId = source === 'popup' ? 'bunker-popup-feedback-input' : 'bunker-settings-feedback-input';
+    const btnId = source === 'popup' ? 'bunker-popup-feedback-btn' : 'bunker-settings-feedback-btn';
+    const inputEl = document.getElementById(inputId);
+    const btnEl = document.getElementById(btnId);
+    if (!inputEl) return;
+
+    const message = (inputEl.value || '').trim();
+    if (!message) {
+        if (typeof showToast === 'function') showToast('Please enter your message', 'warning');
+        return;
+    }
+
+    // Auto-fill roll number
+    let rollNo = (state && state.rollNumber) || localStorage.getItem('bunker_roll') || '';
+    if (!rollNo) {
+        try {
+            const creds = JSON.parse(localStorage.getItem('bunker_credentials') || '{}');
+            if (creds && creds.roll) rollNo = creds.roll;
+        } catch (e) {}
+    }
+    if (!rollNo) rollNo = 'GUEST';
+
+    const originalHtml = btnEl ? btnEl.innerHTML : '';
+    if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.innerHTML = '<i class="fas fa-circle-notch fa-spin text-xs"></i>';
+    }
+
+    const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLSdcGqD1YidrjizaktAvcdWmxHs1Pv2hNwdeIRdbKWHRf7yHsA/formResponse';
+
+    // 1. Populate and submit the exact Google Form DOM (#mG61Hd) into hidden iframe
+    try {
+        const gform = document.getElementById('mG61Hd');
+        const rollField = document.getElementById('gform-entry-roll');
+        const textField = document.getElementById('gform-entry-text');
+        const tsField = document.getElementById('gform-submission-ts');
+        if (rollField) rollField.value = rollNo;
+        if (textField) textField.value = message;
+        if (tsField) tsField.value = String(Date.now());
+        if (gform) gform.submit();
+    } catch (e) {}
+
+    // 2. Also send via fetch no-cors with URLSearchParams to guarantee delivery
+    try {
+        const params = new URLSearchParams();
+        params.append('entry.2005620554', rollNo);
+        params.append('entry.1045781291', message);
+        params.append('fvv', '1');
+        params.append('partialResponse', '[null,null,"-2967055624982682554"]');
+        params.append('pageHistory', '0');
+        params.append('fbzx', '-2967055624982682554');
+        params.append('submissionTimestamp', String(Date.now()));
+        fetch(formUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+        }).catch(() => {});
+
+        // Safeguard in case entry.1045781291 has Google Forms email validation active
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(message)) {
+            const fallbackParams = new URLSearchParams();
+            fallbackParams.append('entry.2005620554', `${rollNo} | ${message}`);
+            fallbackParams.append('entry.1045781291', '');
+            fallbackParams.append('fvv', '1');
+            fallbackParams.append('partialResponse', '[null,null,"-2967055624982682554"]');
+            fallbackParams.append('pageHistory', '0');
+            fallbackParams.append('fbzx', '-2967055624982682554');
+            fallbackParams.append('submissionTimestamp', String(Date.now()));
+            fetch(formUrl, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: fallbackParams.toString()
+            }).catch(() => {});
+        }
+    } catch (e) {}
+
+    setTimeout(() => {
+        inputEl.value = '';
+        if (btnEl) {
+            btnEl.innerHTML = '<i class="fas fa-check text-emerald-300 text-xs"></i>';
+            setTimeout(() => {
+                btnEl.disabled = false;
+                btnEl.innerHTML = originalHtml;
+            }, 1200);
+        }
+        if (typeof showToast === 'function') {
+            showToast('Feedback sent to Bunker!', 'success');
+        }
+        if (source === 'popup') {
+            setTimeout(() => closeBunkerUpdatePopup(), 600);
+        }
+    }, 350);
+}
+
+function checkAndroidApkPrompt() {}
+
+function showFeaturesTourModal() {
+    const existing = document.getElementById('bunker-features-tour-modal');
+    if (existing) existing.remove();
+}
+
+function closeFeaturesTourModal() {
     const modal = document.getElementById('bunker-features-tour-modal');
-    if (!modal) return;
-    modal.style.opacity = '0';
-    const card = modal.querySelector('.glass-panel');
-    if (card) {
-        card.classList.remove('translate-y-0', 'sm:scale-100');
-        card.classList.add('translate-y-6', 'sm:scale-95');
-    }
-    setTimeout(() => modal.remove(), 250);
+    if (modal) modal.remove();
 }
 
 function handleTourApkDownload() {
-    closeFeaturesTourModal(true);
     triggerInstall();
 }
 
-// Backwards compatibility alias
-function showAndroidApkModal() {
-    showFeaturesTourModal();
-}
-function closeAndroidApkModal() {
-    closeFeaturesTourModal(true);
-}
+function showAndroidApkModal() {}
+function closeAndroidApkModal() {}
 function handleDownloadAndCloseModal() {
-    handleTourApkDownload();
+    triggerInstall();
 }
 
 function triggerPwaInstall() {
@@ -1976,17 +2031,27 @@ function showAcademicRegulations() {
                 <!-- Section: Grades & Classification -->
                 <div id="reg-sec-grades" class="reg-content-sec space-y-4 hidden">
                     <div class="bg-white/5 rounded-2xl p-4 border border-white/5">
-                        <h4 class="text-xs font-bold text-white mb-2 uppercase tracking-wider">Relative vs Absolute Grading</h4>
-                        <p class="text-[10px] text-gray-400 leading-relaxed mb-2">PSG College of Technology follows a mixed grading scheme. For regular semester courses, grading may be Relative or Absolute depending on the department. However, for <strong>all REDO category courses</strong>, Absolute Grading is strictly followed.</p>
+                        <h4 class="text-xs font-bold text-white mb-2 uppercase tracking-wider">2023 Regulation Grading &amp; Passing Minimum</h4>
+                        <p class="text-[10px] text-gray-400 leading-relaxed mb-2">Under PSG Tech 2023 Regulations (Section 8), Theory courses carry <strong>40% CA + 60% Final Exam (FE)</strong>, and Laboratory courses carry <strong>60% CA + 40% FE</strong>. Passing requires <strong>at least 45% in the Final Exam (50% for Lab)</strong> AND <strong>not less than 50% combined total</strong>.</p>
+                        <div class="grid grid-cols-4 gap-1.5 text-center text-[9.5px] font-bold pt-1">
+                            <div class="p-1.5 rounded-lg bg-black/40 border border-white/5"><span class="text-amber-400 block font-black">O (10)</span>91–100</div>
+                            <div class="p-1.5 rounded-lg bg-black/40 border border-white/5"><span class="text-purple-400 block font-black">A+ (9)</span>81–90</div>
+                            <div class="p-1.5 rounded-lg bg-black/40 border border-white/5"><span class="text-indigo-400 block font-black">A (8)</span>71–80</div>
+                            <div class="p-1.5 rounded-lg bg-black/40 border border-white/5"><span class="text-emerald-400 block font-black">B+ (7)</span>66–70</div>
+                            <div class="p-1.5 rounded-lg bg-black/40 border border-white/5"><span class="text-teal-400 block font-black">B (6.5)</span>61–65</div>
+                            <div class="p-1.5 rounded-lg bg-black/40 border border-white/5"><span class="text-sky-400 block font-black">C+ (6)</span>56–60</div>
+                            <div class="p-1.5 rounded-lg bg-black/40 border border-white/5"><span class="text-cyan-400 block font-black">C (5)</span>50–55</div>
+                            <div class="p-1.5 rounded-lg bg-black/40 border border-white/5"><span class="text-rose-400 block font-black">RA (0)</span>&lt; 50</div>
+                        </div>
                     </div>
                     
                     <div class="bg-black/30 rounded-2xl p-4 border border-white/5 space-y-3">
-                        <h4 class="text-xs font-bold text-indigo-400 uppercase tracking-wider">Degree Classification Rules</h4>
+                        <h4 class="text-xs font-bold text-indigo-400 uppercase tracking-wider">Degree Classification Rules (Section 10)</h4>
                         
                         <div class="flex justify-between items-start border-b border-white/5 pb-2">
                             <div>
                                 <span class="text-xs font-bold text-white block">First Class with Distinction</span>
-                                <span class="text-[9px] text-gray-500">CGPA &ge; 8.50 | First appearance (no backlogs) | Within 5 years (4 for lateral entry)</span>
+                                <span class="text-[9px] text-gray-500">CGPA &ge; 8.50 | Passed all courses in first attempt | Within normal duration (4 yrs / 5 yrs Sandwich / 3 yrs Lateral)</span>
                             </div>
                             <span class="text-[9px] font-black bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/20 whitespace-nowrap">Distinction</span>
                         </div>
@@ -1994,7 +2059,7 @@ function showAcademicRegulations() {
                         <div class="flex justify-between items-start border-b border-white/5 pb-2">
                             <div>
                                 <span class="text-xs font-bold text-white block">First Class</span>
-                                <span class="text-[9px] text-gray-500">CGPA &ge; 6.50 | Completed within 5 years (4 for lateral entry)</span>
+                                <span class="text-[9px] text-gray-500">CGPA &ge; 6.50 | Completed within 5 years (6 yrs Sandwich / 4 yrs Lateral)</span>
                             </div>
                             <span class="text-[9px] font-black bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/20 whitespace-nowrap">First Class</span>
                         </div>
@@ -2002,7 +2067,7 @@ function showAcademicRegulations() {
                         <div class="flex justify-between items-start">
                             <div>
                                 <span class="text-xs font-bold text-white block">Second Class</span>
-                                <span class="text-[9px] text-gray-500">All other students who successfully clear all coursework and qualify for the degree</span>
+                                <span class="text-[9px] text-gray-500">All other students who qualify for the degree</span>
                             </div>
                             <span class="text-[9px] font-black bg-gray-500/10 text-gray-400 px-2 py-0.5 rounded border border-gray-500/20 whitespace-nowrap">Second Class</span>
                         </div>
@@ -2012,14 +2077,14 @@ function showAcademicRegulations() {
                 <!-- Section: Honours & Minors -->
                 <div id="reg-sec-honours" class="reg-content-sec space-y-4 hidden">
                     <div class="bg-white/5 rounded-2xl p-4 border border-white/5">
-                        <h4 class="text-xs font-bold text-white mb-2 uppercase tracking-wider">Honours &amp; Minors (Extra 18 Credits)</h4>
-                        <p class="text-[10px] text-gray-400 leading-relaxed mb-3">Students can opt to earn a B.E./B.Tech. Honours (same or different specialization) or a Minor in another discipline by earning an additional 18 credits from 5th semester onwards.</p>
+                        <h4 class="text-xs font-bold text-white mb-2 uppercase tracking-wider">Honours &amp; Minors (Extra &ge; 18 Credits)</h4>
+                        <p class="text-[10px] text-gray-400 leading-relaxed mb-3">Students can opt to earn a B.E./B.Tech. Honours or a Minor in another discipline by earning an additional minimum of 18 credits from the 5th semester onwards.</p>
                         
                         <div class="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-3 flex gap-2.5 items-start">
                             <i class="fas fa-info-circle text-indigo-400 text-xs mt-0.5"></i>
                             <div>
-                                <span class="text-[10px] font-bold text-indigo-300 block">Registration Eligibility</span>
-                                <p class="text-[9px] text-gray-400 mt-0.5 leading-normal">Must have a cumulative CGPA &ge; 8.00 at the end of the 3rd semester and must have cleared all courses in the first attempt.</p>
+                                <span class="text-[10px] font-bold text-indigo-300 block">Honours &amp; Minor Requirements (Section 6 &amp; 10)</span>
+                                <p class="text-[9px] text-gray-400 mt-0.5 leading-normal">Must pass all courses in the first attempt. B.E./B.Tech. Honours requires CGPA &ge; 7.50 (First Class) or CGPA &ge; 8.50 (Distinction).</p>
                             </div>
                         </div>
                     </div>
@@ -2029,24 +2094,24 @@ function showAcademicRegulations() {
                         
                         <div class="flex justify-between items-start border-b border-white/5 pb-2">
                             <div>
-                                <span class="text-xs font-bold text-white block">Honours/Minor with Distinction</span>
-                                <span class="text-[9px] text-gray-500">CGPA &ge; 8.50 in the first attempt</span>
+                                <span class="text-xs font-bold text-white block">Honours / Minor with Distinction</span>
+                                <span class="text-[9px] text-gray-500">CGPA &ge; 8.50 in the first attempt (+18 credits)</span>
                             </div>
                             <span class="text-[9px] font-black bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">Distinction</span>
                         </div>
                         
                         <div class="flex justify-between items-start border-b border-white/5 pb-2">
                             <div>
-                                <span class="text-xs font-bold text-white block">Honours only (First Class)</span>
-                                <span class="text-[9px] text-gray-500">CGPA &ge; 7.50 in the first attempt</span>
+                                <span class="text-xs font-bold text-white block">Honours (First Class)</span>
+                                <span class="text-[9px] text-gray-500">CGPA &ge; 7.50 in the first attempt (+18 credits)</span>
                             </div>
                             <span class="text-[9px] font-black bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/20">First Class</span>
                         </div>
 
                         <div class="flex justify-between items-start">
                             <div>
-                                <span class="text-xs font-bold text-white block">Minor only (First Class / Second Class)</span>
-                                <span class="text-[9px] text-gray-500">First Class if CGPA &ge; 6.50, else Second Class</span>
+                                <span class="text-xs font-bold text-white block">Minor (First Class)</span>
+                                <span class="text-[9px] text-gray-500">CGPA &ge; 6.50 within allowed duration (+18 credits)</span>
                             </div>
                             <span class="text-[9px] font-black bg-gray-500/10 text-gray-400 px-2 py-0.5 rounded border border-gray-500/20">Qualifying</span>
                         </div>
@@ -2227,7 +2292,6 @@ function renderSemesterHero() {
                             </div>
                             <div>
                                 <h3 class="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em] mb-0.5">Semester Progress</h3>
-                                <div class="text-xs font-bold text-white tracking-wide truncate max-w-[160px]">${ACADEMIC_DATA.name}</div>
                             </div>
                         </div>
                         <div class="text-right">
@@ -2247,7 +2311,8 @@ function renderSemesterHero() {
 
 function initDashboard() {
     const today = getToday();
-    document.getElementById('current-date').innerText = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    const curDateEl = document.getElementById('current-date');
+    if (curDateEl) curDateEl.innerText = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
     // Roll display
     const rollEl = document.getElementById('settings-roll');
@@ -2326,7 +2391,7 @@ function initDashboard() {
     }, 0);
 }
 
-function getSubjectStats(code) {
+function getSubjectStats(code, forceIncludeManual = false) {
     const s = state.subjects.find(x => x.code === code); if (!s) return null;
 
     // Determine base attendance based on selected mode (PSG Tech only)
@@ -2346,11 +2411,12 @@ function getSubjectStats(code) {
         }
     }
 
-    // Only include manual stats if toggle is ON
+    // Home page only includes Smart Tracker entries if manual toggle (state.includeManual) is enabled.
+    // Smart Tracker cards pass forceIncludeManual = true so they always reflect Smart Tracker data.
     let p = 0;
     let b = 0;
 
-    if (state.includeManual) {
+    if (forceIncludeManual || state.includeManual) {
         const m = state.manual.filter(x => x.code === code);
         p = m.filter(x => x.status === 'Present').length;
         b = m.filter(x => x.status === 'Absent').length;
@@ -2457,12 +2523,12 @@ function computeHybridBunkerAnalytics(code, customAtt = null, customTot = null) 
 
     const fmtDate = (d) => d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : null;
     const eta75Label = need75 === 0
-        ? (safe75 > 0 ? `${safe75} hr${safe75 > 1 ? 's' : ''} buffer above 75%` : 'At exact 75% boundary')
-        : (eta75Date ? `Reach 75% by ~${fmtDate(eta75Date)}` : (weeklyPeriods > 0 ? `Exceeds remaining sem (${remClassesInSem}h left)` : `Need ${need75} consecutive hrs`));
+        ? (safe75 > 0 ? `${safe75} period${safe75 > 1 ? 's' : ''} buffer above 75%` : 'At exact 75% boundary')
+        : (eta75Date ? `Reach 75% by ~${fmtDate(eta75Date)}` : (weeklyPeriods > 0 ? `Exceeds remaining sem (${remClassesInSem}p left)` : `Need ${need75} consecutive periods`));
 
     const eta65Label = need65 === 0
-        ? `${safe65} hr${safe65 !== 1 ? 's' : ''} buffer above 65% floor`
-        : (eta65Date ? `Reach 65% by ~${fmtDate(eta65Date)}` : `Need ${need65} consecutive hrs for 65%`);
+        ? `${safe65} period${safe65 !== 1 ? 's' : ''} buffer above 65% floor`
+        : (eta65Date ? `Reach 65% by ~${fmtDate(eta65Date)}` : `Need ${need65} consecutive periods for 65%`);
 
     const projFinalTot = tot + remClassesInSem;
     const projMaxAtt = att + remClassesInSem;
@@ -2528,9 +2594,27 @@ function renderSubjects() {
     if (!c) return;
     c.innerHTML = '';
 
-    // Display last update date from backend (not today's date)
+    const savedCreds = getStoredCredentials();
+    const roll = state.rollNumber || savedCreds.roll || localStorage.getItem('bunker_roll') || '';
+
+    // Always store updated attendance on the Home page until the user logs out
     const lastUpdate = localStorage.getItem('bunker_last_update') || 'No data';
-    if (document.getElementById('last-updated-date')) document.getElementById('last-updated-date').innerText = lastUpdate;
+    if (Array.isArray(state.subjects) && state.subjects.length > 0 && !state.isViewingPreviousAttendance) {
+        persistHomeAttendanceSnapshot(roll, state.subjects, lastUpdate);
+    } else if ((!state.subjects || state.subjects.length === 0) && !state.forceLivePendingView) {
+        // If PSG is currently updating attendance on eCampus, automatically restore stored previous attendance
+        const storedPrev = getStoredPreviousAttendance(roll);
+        if (storedPrev && storedPrev.length > 0) {
+            state.subjects = storedPrev;
+            state.isViewingPreviousAttendance = true;
+        }
+    }
+
+    // Display last update date from backend (or saved previous update date when viewing previous attendance)
+    const displayUpdateDate = state.isViewingPreviousAttendance
+        ? ((roll && localStorage.getItem(`bunker_previous_update_${roll}`)) || (roll && localStorage.getItem(`bunker_current_update_${roll}`)) || lastUpdate)
+        : lastUpdate;
+    if (document.getElementById('last-updated-date')) document.getElementById('last-updated-date').innerText = displayUpdateDate;
 
     // Also keep the Others tab Live Widget preview synchronized
     if (typeof updateOthersWidgetLivePreview === 'function') {
@@ -2538,24 +2622,8 @@ function renderSubjects() {
     }
 
     if (state.subjects.length === 0) {
-        const savedCreds = getStoredCredentials();
-        const roll = state.rollNumber || savedCreds.roll;
-        let hasCache = false;
-        if (roll) {
-            const check = (key) => {
-                const val = localStorage.getItem(key);
-                if (!val) return false;
-                try {
-                    const arr = JSON.parse(val);
-                    return Array.isArray(arr) && arr.length > 0;
-                } catch { return false; }
-            };
-            hasCache = check(`bunker_previous_attendance_${roll}`)
-                || check(`bunker_subjects_${roll}`)
-                || check('bunker_subjects')
-                || (Array.isArray(state.previousSubjects) && state.previousSubjects.length > 0);
-        }
-
+        const storedPrev = getStoredPreviousAttendance(roll);
+        const hasCache = !!(storedPrev && storedPrev.length > 0);
         const hasCreds = !!savedCreds.password || !!localStorage.getItem('bunker_credentials');
 
         let cacheBtn = '';
@@ -2662,7 +2730,7 @@ function renderSubjects() {
                 return !isPass || g.startsWith('RA') || g === 'U' || (sub.result && sub.result.toLowerCase() === 'fail');
             });
             const hasBacklogs = activeArrears.length > 0 || state.academics.cgpa.cgpa === 'RA';
-            if (!isNaN(currentCGPA) && currentCGPA >= 8.00 && !hasBacklogs) eligibleHonours = true;
+            if (!isNaN(currentCGPA) && currentCGPA >= 7.50 && !hasBacklogs) eligibleHonours = true;
         }
 
         let alertsHTML = '';
@@ -2691,9 +2759,9 @@ function renderSubjects() {
                     <i class="fas fa-ban text-xs"></i>
                 </div>
                 <div>
-                    <h4 class="text-xs font-black text-white uppercase tracking-wider">Critical &lt;65% Repeat Zone (${repeatCount})</h4>
+                    <h4 class="text-xs font-black text-white uppercase tracking-wider">Critical &lt;65% SA Redo Zone (${repeatCount})</h4>
                     <p class="text-[10px] text-rose-300/85 mt-1 leading-normal font-medium">
-                        <b>${repeatCount}</b> course(s) are below the 65% medical condonation floor. Attend upcoming classes immediately to recover above 65% / 75%.
+                        <b>${repeatCount}</b> course(s) are below the 65% condonation floor (Grade SA). Attend upcoming periods immediately to recover above 65% / 75%.
                     </p>
                 </div>
             </div>`;
@@ -2704,9 +2772,9 @@ function renderSubjects() {
                     <i class="fas fa-notes-medical text-xs"></i>
                 </div>
                 <div>
-                    <h4 class="text-xs font-black text-white uppercase tracking-wider">65–74.9% Medical Condonation Zone (${medCount})</h4>
+                    <h4 class="text-xs font-black text-white uppercase tracking-wider">65–74.9% Condonation Zone (${medCount})</h4>
                     <p class="text-[10px] text-amber-300/85 mt-1 leading-normal font-medium">
-                        <b>${medCount}</b> course(s) are between 65% and 74.9%. Eligible only with medical certificate condonation — check recovery classes below.
+                        <b>${medCount}</b> course(s) are between 65% and 74.9%. Eligible only with medical or approved sports exemption — check recovery periods below.
                     </p>
                 </div>
             </div>`;
@@ -2721,7 +2789,7 @@ function renderSubjects() {
                 <div>
                     <h4 class="text-xs font-black text-white uppercase tracking-wider">Next Semester Registration Risk</h4>
                     <p class="text-[10px] text-rose-300/80 mt-1 leading-normal font-medium">
-                        You have <b>${under75Count}</b> courses under 75%. Having more than 2 Redo courses blocks next semester registration.
+                        You have <b>${under75Count}</b> courses under 75%. Having more than 2 Redo courses blocks next immediate semester registration (Section 5).
                     </p>
                 </div>
             </div>`;
@@ -2736,7 +2804,7 @@ function renderSubjects() {
                 <div>
                     <h4 class="text-xs font-black text-white uppercase tracking-wider">Honours &amp; Minor Eligible</h4>
                     <p class="text-[10px] text-emerald-300/80 mt-1 leading-normal font-medium">
-                        Your CGPA is <b>${state.academics.cgpa.cgpa}</b> with no backlogs. You qualify for Honours or Minor degrees (+18 credits).
+                        Your CGPA is <b>${state.academics.cgpa.cgpa}</b> with zero backlogs (first attempt). You qualify for B.E./B.Tech. Honours or Minor (+18 credits).
                     </p>
                 </div>
             </div>`;
@@ -2766,79 +2834,57 @@ function renderSubjects() {
     }
 
     const fragment = document.createDocumentFragment();
-    filteredList.forEach(({ sub, analytics }) => {
+    filteredList.forEach(({ sub }) => {
         const pct = sub.pct.toFixed(1);
         const pctVal = parseFloat(pct);
 
-        // Strict 75% Exam & 65% Medical Color Coding
-        let col, bar, bor;
-        if (pctVal === 100) { col = 'text-[#22C55E]'; bar = 'bg-[#22C55E]'; bor = 'border-[#22C55E]'; }
-        else if (pctVal >= 85) { col = 'text-[#10B981]'; bar = 'bg-[#10B981]'; bor = 'border-[#10B981]'; }
-        else if (pctVal >= 78) { col = 'text-[#6366F1]'; bar = 'bg-[#6366F1]'; bor = 'border-[#6366F1]'; }
-        else if (pctVal >= 75) { col = 'text-[#F97316]'; bar = 'bg-[#F97316]'; bor = 'border-[#F97316]'; }
-        else if (pctVal >= 65) { col = 'text-[#F59E0B]'; bar = 'bg-[#F59E0B]'; bor = 'border-[#F59E0B]'; }
-        else { col = 'text-[#EF4444]'; bar = 'bg-[#EF4444]'; bor = 'border-[#EF4444]'; }
+        let col, bar, glow, hex;
+        if (pctVal === 100) { col = 'text-[#22C55E]'; bar = 'bg-[#22C55E]'; glow = 'bg-[#22C55E]'; hex = '#22C55E'; }
+        else if (pctVal >= 90) { col = 'text-[#10B981]'; bar = 'bg-[#10B981]'; glow = 'bg-[#10B981]'; hex = '#10B981'; }
+        else if (pctVal >= 85) { col = 'text-[#3B82F6]'; bar = 'bg-[#3B82F6]'; glow = 'bg-[#3B82F6]'; hex = '#3B82F6'; }
+        else if (pctVal >= 80) { col = 'text-[#EAB308]'; bar = 'bg-[#EAB308]'; glow = 'bg-[#EAB308]'; hex = '#EAB308'; }
+        else if (pctVal >= 75) { col = 'text-[#F97316]'; bar = 'bg-[#F97316]'; glow = 'bg-[#F97316]'; hex = '#F97316'; }
+        else { col = 'text-[#EF4444]'; bar = 'bg-[#EF4444]'; glow = 'bg-[#EF4444]'; hex = '#EF4444'; }
 
         let stat;
-        if (sub.pct >= 75) {
-            stat = analytics.safe75 > 0
-                ? `<div class="flex items-center gap-1.5 text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/20"><i class="fas fa-shield-alt text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Safe to bunk ${analytics.safe75} hr${analytics.safe75 > 1 ? 's' : ''}</span></div>`
-                : `<div class="flex items-center gap-1.5 text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-xl border border-amber-500/20"><i class="fas fa-exclamation-triangle text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">75% Boundary (0 Bunks)</span></div>`;
-        } else if (sub.pct >= 65) {
-            stat = `<div class="flex items-center gap-1.5 text-amber-300 bg-amber-500/15 px-3 py-1.5 rounded-xl border border-amber-500/30"><i class="fas fa-notes-medical text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Med Zone • Need ${analytics.need75}h for 75%</span></div>`;
+        if (sub.pct >= state.threshold) {
+            const b = Math.floor((sub.att - (state.threshold / 100) * sub.tot) / (state.threshold / 100));
+            stat = b > 0
+                ? `<div class="flex items-center gap-1.5 text-emerald-400 bg-emerald-500/10 px-3.5 py-1.5 rounded-full border border-emerald-500/20"><i class="fas fa-shield-alt text-[10px]"></i><span class="text-[9.5px] font-black uppercase tracking-wider">Safe ${b} bunk</span></div>`
+                : `<div class="flex items-center gap-1.5 text-amber-400 bg-amber-500/10 px-3.5 py-1.5 rounded-full border border-amber-500/20"><i class="fas fa-exclamation-circle text-[10px]"></i><span class="text-[9.5px] font-black uppercase tracking-wider">On the edge</span></div>`;
         } else {
-            stat = `<div class="flex items-center gap-1.5 text-rose-300 bg-rose-500/15 px-3 py-1.5 rounded-xl border border-rose-500/30"><i class="fas fa-arrow-trend-up text-[10px]"></i><span class="text-[9px] font-black uppercase tracking-wider">Need ${analytics.need65}h (65%) • ${analytics.need75}h (75%)</span></div>`;
+            const n = Math.max(1, Math.ceil(((state.threshold / 100) * sub.tot - sub.att) / (1 - (state.threshold / 100))));
+            stat = `<div class="flex items-center gap-1.5 text-rose-400 bg-rose-500/10 px-3.5 py-1.5 rounded-full border border-rose-500/20"><i class="fas fa-arrow-up text-[10px]"></i><span class="text-[9.5px] font-black uppercase tracking-wider">Attend next ${n}</span></div>`;
         }
 
-        const freqBadge = analytics.weeklyPeriods > 0
-            ? `<span class="text-[9px] text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-lg font-bold">${analytics.weeklyPeriods}h/wk</span>`
-            : '';
-
-        const medBufferPill = sub.pct >= 65
-            ? `<span class="text-[9px] text-gray-400 font-semibold">65% Med Buffer: <b class="text-amber-300">${analytics.safe65}h</b></span>`
-            : `<span class="text-[9px] text-rose-300 font-semibold">${analytics.eta65Label}</span>`;
-
-        const semProjPill = analytics.remClassesInSem > 0
-            ? `<span class="text-[9px] text-indigo-300/90 font-semibold">~${analytics.remClassesInSem}h left in sem • Max <b class="text-white">${analytics.maxSemPct.toFixed(1)}%</b></span>`
-            : `<span class="text-[9px] text-gray-400 font-semibold">${analytics.eta75Label}</span>`;
-
         const d = document.createElement('div');
-        d.className = `glass-panel rounded-[28px] overflow-hidden transition-all duration-300 mb-3.5 cursor-pointer active:scale-[0.98] border-l-4 ${bor}`;
+        d.className = 'glass-panel rounded-[32px] overflow-hidden transition-all duration-300 mb-3.5 cursor-pointer active:scale-[0.98]';
         d.onclick = (e) => { if (!e.target.closest('button')) openSim(sub.code); };
 
         d.innerHTML = `
-            <div class="p-4 sm:p-5 relative overflow-hidden">
-                <div class="flex justify-between items-start mb-3">
-                    <div class="flex items-center gap-3 z-10 flex-1 pr-2 min-w-0">
+            <div class="p-5 relative overflow-hidden">
+                <div class="absolute -right-6 -top-6 w-28 h-28 rounded-full ${glow} opacity-20 blur-2xl pointer-events-none"></div>
+                <div class="flex justify-between items-start mb-4">
+                    <div class="flex items-center gap-3 z-10 flex-1 pr-3 min-w-0">
                         <div class="min-w-0 flex-1">
-                            <div class="flex items-center gap-1.5 mb-1 flex-wrap">
-                                <span class="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-white/5 text-gray-300 border border-white/10">${sub.code}</span>
-                                ${freqBadge}
-                            </div>
-                            <h4 class="font-bold text-white text-sm sm:text-base leading-snug drop-shadow-md tracking-wide truncate w-full block">${sub.name}</h4>
-                            <div class="flex items-center gap-2.5 opacity-90 mt-1 flex-wrap">
-                                <span class="text-[10px] text-gray-400 font-bold tracking-wider uppercase">Attended: <span class="text-white">${sub.att}/${sub.tot}</span></span>
-                                <span class="text-[9px] text-indigo-300 font-bold">${analytics.eta75Label}</span>
+                            <h4 class="font-extrabold text-white text-[15px] sm:text-base uppercase tracking-wide leading-snug drop-shadow-md truncate w-full block">${sub.name}</h4>
+                            <div class="flex items-center gap-2 opacity-80 mt-1">
+                                <span class="text-[10px] text-gray-400 font-bold tracking-wider uppercase"><span class="text-white">${sub.att}/${sub.tot} Periods</span></span>
                             </div>
                         </div>
                     </div>
                     <div class="flex flex-col items-end z-10 shrink-0 pl-2">
-                        <span class="text-2xl sm:text-3xl font-black ${col} tracking-tighter">${pct}%</span>
-                        <span class="text-[8px] font-bold uppercase tracking-widest text-gray-500 mt-0.5">${sub.pct >= 75 ? 'Exam Safe' : sub.pct >= 65 ? 'Medical Zone' : 'Below 65%'}</span>
+                        <span class="text-2xl sm:text-[28px] font-black ${col} tracking-tighter leading-none" style="text-shadow: 0 0 20px ${hex}40;">${pct}%</span>
                     </div>
                 </div>
-                <div class="w-full bg-black/40 h-2 rounded-full overflow-hidden mb-3 border border-white/5 shadow-inner relative">
-                    <div class="h-full ${bar} rounded-full transition-all duration-700 ease-out" style="width:${Math.min(100, Math.max(0, pctVal))}%"></div>
-                </div>
-                <div class="flex items-center justify-between text-[9px] px-1 mb-3 gap-2 flex-wrap">
-                    ${medBufferPill}
-                    ${semProjPill}
+                <div class="w-full bg-black/40 h-2 rounded-full overflow-hidden mb-4 border border-white/5 shadow-inner relative">
+                    <div class="h-full ${bar} rounded-full transition-all duration-700 ease-out" style="width:${Math.min(100, Math.max(0, pctVal))}%; box-shadow: 0 0 10px ${hex}80;"></div>
                 </div>
                 <div class="flex justify-between items-center z-10 relative gap-2">
                     ${stat}
-                    <button onclick="openSim('${sub.code}')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20 hover:text-white transition-all active:scale-95 shrink-0">
-                        <i class="fas fa-sliders text-[10px] text-indigo-400"></i>
-                        <span class="text-[9px] font-black uppercase tracking-wider">Simulate</span>
+                    <button onclick="openSim('${sub.code}')" class="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20 hover:text-white transition-all active:scale-95 shrink-0">
+                        <i class="fas fa-wand-magic-sparkles text-[10px] text-indigo-400"></i>
+                        <span class="text-[9.5px] font-black uppercase tracking-wider">Tap to Simulate</span>
                     </button>
                 </div>
             </div>`;
@@ -2857,9 +2903,8 @@ function renderWidgets() {
             examContainer.innerHTML = `
                 <div class="absolute -right-4 -bottom-4 text-8xl opacity-10 transform rotate-12"><i class="fas fa-stopwatch"></i></div>
                 <div class="relative z-10 flex flex-col h-full justify-between">
-                    <div class="flex justify-between items-start">
+                    <div class=" flex justify-between items-start">
                         <div class="w-10 h-10 rounded-full flex items-center justify-center text-lg bg-black/40 text-white shadow-sm border border-white/20 scale-105"><i class="fas fa-stopwatch"></i></div>
-                        <span class="widget-badge badge-exam">Exams</span>
                     </div>
                     <div class="flex flex-col items-center justify-center flex-1 my-2">
                         <span class="text-4xl font-black text-white leading-none tracking-tighter">--</span>
@@ -2891,7 +2936,6 @@ function renderWidgets() {
                     <div class="relative z-10 flex flex-col h-full justify-between">
                         <div class="flex justify-between items-start">
                             <div class="w-10 h-10 rounded-full flex items-center justify-center text-lg bg-black/40 text-white shadow-sm border border-white/20 scale-105"><i class="fas fa-stopwatch"></i></div>
-                            <span class="widget-badge ${badgeClass}">${badgeText}</span>
                         </div>
                         <div class="flex flex-col items-center justify-center flex-1 my-2">
                             <span class="text-4xl font-black text-white leading-none tracking-tighter drop-shadow-md">${diff}</span>
@@ -2913,7 +2957,6 @@ function renderWidgets() {
                     <div class="relative z-10 flex flex-col h-full justify-between">
                         <div class="flex justify-between items-start">
                             <div class="w-10 h-10 rounded-full flex items-center justify-center text-lg bg-black/40 text-white shadow-sm border border-white/20 scale-105"><i class="fas fa-calendar-check"></i></div>
-                            <span class="widget-badge badge-noexams">Relax</span>
                         </div>
                         <div class="flex flex-col items-center justify-center flex-1 my-2">
                             <span class="text-4xl font-black text-white leading-none tracking-tighter">--</span>
@@ -3065,7 +3108,6 @@ function renderWidgets() {
                     <div class="relative z-10 flex flex-col h-full justify-between">
                         <div class="flex justify-between items-start">
                             <div class="w-10 h-10 rounded-full flex items-center justify-center text-lg bg-black/40 text-white shadow-sm border border-white/20 scale-105"><i class="fas ${icon}"></i></div>
-                            <span class="widget-badge ${badgeClass}">Holiday</span>
                         </div>
                         <div class="flex flex-col items-center justify-center flex-1 my-2">
                             <span class="text-4xl font-black text-white leading-none tracking-tighter drop-shadow-md">${diff}</span>
@@ -3162,11 +3204,121 @@ function getWeekDates(referenceDate) {
         week[dayNames[i]] = {
             date: iso,
             dayNum: String(cur.getDate()),
+            shortDate: cur.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
             full: cur.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" })
         };
     }
     return week;
 }
+
+function getCalendarEventsForDateISO(dateISO) {
+    if (!dateISO) return [];
+    const targetPrefix = String(dateISO).slice(0, 10);
+    const calList = (ACADEMIC_DATA && Array.isArray(ACADEMIC_DATA.fullCalendar) && ACADEMIC_DATA.fullCalendar.length > 0)
+        ? ACADEMIC_DATA.fullCalendar
+        : (state.calendarCache && Array.isArray(state.calendarCache.fullCalendar) ? state.calendarCache.fullCalendar : []);
+
+    const fallbackHolidays = (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [
+        { date: "2026-08-15T00:00:00", name: "Independence Day", type: "Holiday" },
+        { date: "2026-08-26T00:00:00", name: "Milad-un-Nabi", type: "Holiday" },
+        { date: "2026-09-04T00:00:00", name: "Krishna Jayanthi", type: "Holiday" },
+        { date: "2026-09-14T00:00:00", name: "Vinayakar Chathurthi", type: "Holiday" },
+        { date: "2026-10-02T00:00:00", name: "Gandhi Jayanthi", type: "Holiday" },
+        { date: "2026-10-19T00:00:00", name: "Ayutha Pooja", type: "Holiday" },
+        { date: "2026-10-20T00:00:00", name: "Vijaya Dasami", type: "Holiday" },
+        { date: "2026-11-08T00:00:00", name: "Deepavali", type: "Holiday" },
+        { date: "2026-12-25T00:00:00", name: "Christmas", type: "Holiday" },
+        { date: "2027-01-01T00:00:00", name: "New Year", type: "Holiday" },
+        { date: "2027-01-15T00:00:00", name: "Pongal", type: "Holiday" },
+        { date: "2027-01-16T00:00:00", name: "Thiruvalluvar Day / Pongal", type: "Holiday" },
+        { date: "2027-01-26T00:00:00", name: "Republic Day", type: "Holiday" },
+        { date: "2027-03-10T00:00:00", name: "Ramzan", type: "Holiday" },
+        { date: "2027-03-26T00:00:00", name: "Good Friday", type: "Holiday" },
+        { date: "2027-04-08T00:00:00", name: "Telugu New Year", type: "Holiday" },
+        { date: "2027-04-14T00:00:00", name: "Tamil New Year", type: "Holiday" },
+        { date: "2027-04-19T00:00:00", name: "Mahaveer Jayanthi", type: "Holiday" },
+        { date: "2027-05-17T00:00:00", name: "Bakrid", type: "Holiday" },
+        { date: "2027-06-15T00:00:00", name: "Muharram", type: "Holiday" }
+    ];
+
+    const combined = calList.length > 0 ? calList : fallbackHolidays;
+    const seen = new Set();
+    const results = [];
+
+    const classifyEvent = (raw) => {
+        if (!raw || !raw.date) return null;
+        const dStr = String(raw.date).slice(0, 10);
+        if (dStr !== targetPrefix) return null;
+        const name = String(raw.name || raw.title || "").trim();
+        const typeRaw = String(raw.type || "").toLowerCase();
+        const nameLower = name.toLowerCase();
+
+        // Ignore generic routine working day entries without special names
+        if (!name || nameLower === "working day" || nameLower === "regular classes" || (typeRaw === "working" && !name)) {
+            return null;
+        }
+        const key = `${dStr}_${nameLower}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+
+        let category = "event";
+        if (typeRaw === "holiday" || nameLower.includes("holiday") || nameLower.includes("pooja") || nameLower.includes("dasami") || nameLower.includes("deepavali") || nameLower.includes("diwali") || nameLower.includes("pongal") || nameLower.includes("christmas") || nameLower.includes("republic") || nameLower.includes("independence") || nameLower.includes("jayanthi") || nameLower.includes("ramzan") || nameLower.includes("bakrid") || nameLower.includes("new year") || nameLower.includes("good friday") || nameLower.includes("muharram")) {
+            category = "holiday";
+        } else if (typeRaw === "exam" || nameLower.includes("test") || nameLower.includes("exam") || nameLower.includes("assessment") || nameLower.includes("ca ") || nameLower.includes("ca-") || nameLower.includes("quiz")) {
+            category = "exam";
+        }
+
+        return {
+            date: dStr,
+            name,
+            category
+        };
+    };
+
+    combined.forEach(item => {
+        const ev = classifyEvent(item);
+        if (ev) results.push(ev);
+    });
+    // Also check fallbackHolidays if calList didn't include a holiday
+    fallbackHolidays.forEach(item => {
+        const ev = classifyEvent(item);
+        if (ev) results.push(ev);
+    });
+
+    return results;
+}
+window.getCalendarEventsForDateISO = getCalendarEventsForDateISO;
+
+function shiftTrackerWeek(deltaWeeks) {
+    const baseISO = state.selectedDateISO || (() => {
+        const t = getToday();
+        return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    })();
+    const dObj = new Date(baseISO + "T00:00:00");
+    dObj.setDate(dObj.getDate() + (deltaWeeks * 7));
+
+    const yyyy = dObj.getFullYear();
+    const mm = String(dObj.getMonth() + 1).padStart(2, "0");
+    const dd = String(dObj.getDate()).padStart(2, "0");
+    state.selectedDateISO = `${yyyy}-${mm}-${dd}`;
+
+    const week = getWeekDates(state.selectedDateISO);
+    const activeDay = state.activePlannerDay || "Mon";
+    if (week[activeDay]) {
+        state.selectedDateISO = week[activeDay].date;
+    }
+
+    const picker = document.getElementById("tracker-date-picker");
+    if (picker) picker.value = state.selectedDateISO;
+
+    const lbl = document.getElementById("tracker-selected-date-label");
+    if (lbl && week[activeDay]) {
+        lbl.innerText = week[activeDay].full;
+    }
+
+    initPlanner();
+}
+window.shiftTrackerWeek = shiftTrackerWeek;
 
 function selectPlannerDay(day) {
     state.activePlannerDay = day;
@@ -3189,12 +3341,18 @@ function jumpToTodayTracker() {
     state.selectedDateISO = `${yyyy}-${mm}-${dd}`;
     const dayIdx = today.getDay();
     state.activePlannerDay = (dayIdx >= 1 && dayIdx <= 5) ? DAYS[dayIdx - 1] : "Mon";
+    const week = getWeekDates(state.selectedDateISO);
+    if (week[state.activePlannerDay]) {
+        state.selectedDateISO = week[state.activePlannerDay].date;
+    }
     const picker = document.getElementById("tracker-date-picker");
     if (picker) picker.value = state.selectedDateISO;
     const lbl = document.getElementById("tracker-selected-date-label");
-    if (lbl) lbl.innerText = today.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
+    if (lbl && week[state.activePlannerDay]) {
+        lbl.innerText = week[state.activePlannerDay].full;
+    }
     initPlanner();
-    showToast(`Jumped to Today (${state.activePlannerDay}, ${today.toLocaleDateString("en-US", { month: "short", day: "numeric" })})`);
+    showToast(`Jumped to ${state.activePlannerDay}, ${week[state.activePlannerDay]?.shortDate || 'Today'}`);
 }
 
 function onTrackerDateChange(val) {
@@ -3204,15 +3362,21 @@ function onTrackerDateChange(val) {
     const dayIdx = dObj.getDay();
     if (dayIdx >= 1 && dayIdx <= 5) {
         state.activePlannerDay = DAYS[dayIdx - 1];
+    } else {
+        state.activePlannerDay = "Mon";
+        const week = getWeekDates(val);
+        if (week["Mon"]) state.selectedDateISO = week["Mon"].date;
     }
+    const week = getWeekDates(state.selectedDateISO);
     const lbl = document.getElementById("tracker-selected-date-label");
     if (lbl) {
-        lbl.innerText = dObj.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
+        lbl.innerText = week[state.activePlannerDay]?.full || dObj.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
     }
     initPlanner();
 }
 
 function initPlanner() {
+    cleanupManualEntries();
     if (!state.selectedDateISO) {
         const t0 = getToday();
         const y = t0.getFullYear(), m = String(t0.getMonth() + 1).padStart(2, "0"), d = String(t0.getDate()).padStart(2, "0");
@@ -3221,20 +3385,49 @@ function initPlanner() {
 
     const week = getWeekDates(state.selectedDateISO);
     const activeInfo = week[state.activePlannerDay] || week["Mon"];
+    if (activeInfo && activeInfo.date) {
+        state.selectedDateISO = activeInfo.date;
+    }
+
     const lbl = document.getElementById("tracker-selected-date-label");
-    if (lbl && !lbl.dataset.initialized) {
+    if (lbl) {
         lbl.dataset.initialized = "true";
         lbl.innerText = activeInfo ? activeInfo.full : new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
     }
+
+    const weekRangeLbl = document.getElementById("tracker-week-range-label");
+    if (weekRangeLbl && week["Mon"] && week["Fri"]) {
+        const todayObj = getToday();
+        const todayISO = `${todayObj.getFullYear()}-${String(todayObj.getMonth() + 1).padStart(2, "0")}-${String(todayObj.getDate()).padStart(2, "0")}`;
+        const todayWeek = getWeekDates(todayISO);
+        const isCurrentWeek = todayWeek["Mon"] && todayWeek["Mon"].date === week["Mon"].date;
+        weekRangeLbl.innerText = `${isCurrentWeek ? "This Week • " : "Week • "}${week["Mon"].shortDate} – ${week["Fri"].shortDate}`;
+    }
+
     const picker = document.getElementById("tracker-date-picker");
-    if (picker && !picker.value) {
+    if (picker) {
         picker.value = state.selectedDateISO;
     }
 
     const t = document.getElementById("planner-days");
     const c = document.getElementById("planner-classes");
+    const eventBanner = document.getElementById("tracker-event-banner");
+    const summaryEl = document.getElementById("tracker-day-summary");
+    const clearDayBtn = document.getElementById("tracker-clear-day-btn");
+
     const hasTimetable = state.timetable && Object.keys(state.timetable).length > 0 &&
         Object.values(state.timetable).some(d => d && d.length > 0 && d.some(x => x !== "Free"));
+
+    // Collect calendar events across all 5 days of the viewed week
+    const weekEventsMap = {};
+    DAYS.forEach(d => {
+        const info = week[d];
+        if (info && info.date) {
+            weekEventsMap[d] = getCalendarEventsForDateISO(info.date);
+        } else {
+            weekEventsMap[d] = [];
+        }
+    });
 
     if (t) {
         if (!hasTimetable) {
@@ -3243,14 +3436,116 @@ function initPlanner() {
             t.innerHTML = DAYS.map(d => {
                 const info = week[d] || { dayNum: "--", date: "" };
                 const active = d === state.activePlannerDay;
-                const hasLogs = state.manual.some(m => (m.dateISO === info.date) || (m.timestamp && m.timestamp.startsWith(info.date)));
+                const dayLogs = state.manual.filter(m => resolveManualEntryDateKey(m) === info.date);
+                const hasLogs = dayLogs.length > 0;
+                const hasBunk = dayLogs.some(m => m.status === "Absent");
+                const dayEvents = weekEventsMap[d] || [];
+                const isHoliday = dayEvents.some(e => e.category === "holiday");
+                const isExam = !isHoliday && dayEvents.some(e => e.category === "exam");
+                const isEvent = !isHoliday && !isExam && dayEvents.length > 0;
+
+                let pillStyle = "bg-white/[0.04] text-gray-400 border border-white/[0.07] hover:bg-white/[0.08]";
+                if (active) {
+                    if (isHoliday) {
+                        pillStyle = "bg-gradient-to-b from-amber-500/35 to-orange-500/20 text-white border border-amber-400/60 shadow-[0_0_16px_rgba(245,158,11,0.3)] scale-[1.02]";
+                    } else if (isExam) {
+                        pillStyle = "bg-gradient-to-b from-rose-500/35 to-pink-500/20 text-white border border-rose-400/60 shadow-[0_0_16px_rgba(244,63,94,0.3)] scale-[1.02]";
+                    } else {
+                        pillStyle = "mode-pill-active scale-[1.02]";
+                    }
+                } else if (isHoliday) {
+                    pillStyle = "bg-amber-500/12 text-amber-200 border border-amber-500/30";
+                } else if (isExam) {
+                    pillStyle = "bg-rose-500/12 text-rose-200 border border-rose-500/30";
+                } else if (isEvent) {
+                    pillStyle = "bg-indigo-500/12 text-indigo-200 border border-indigo-500/30";
+                }
+
+                let bottomMarker = `<span class="w-1.5 h-1.5 rounded-full ${hasLogs ? (hasBunk ? "bg-rose-400" : "bg-emerald-400") : "bg-transparent"}"></span>`;
+                if (isHoliday) {
+                    bottomMarker = `<span class="text-[7px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded bg-amber-500/25 text-amber-300 border border-amber-400/30 leading-tight">HOL</span>`;
+                } else if (isExam) {
+                    bottomMarker = `<span class="text-[7px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded bg-rose-500/25 text-rose-300 border border-rose-400/30 leading-tight">EXAM</span>`;
+                } else if (isEvent) {
+                    bottomMarker = `<span class="text-[7px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded bg-indigo-500/25 text-indigo-300 border border-indigo-400/30 leading-tight">EVT</span>`;
+                }
+
                 return `
-                <button onclick="selectPlannerDay('${d}')" class="py-2.5 px-1 rounded-2xl flex flex-col items-center justify-center gap-0.5 transition-all ${active ? "mode-pill-active scale-[1.02]" : "bg-white/5 text-gray-400 border border-white/5"}">
-                    <span class="text-[8.5px] font-black uppercase tracking-wider opacity-80">${d}</span>
-                    <span class="text-sm font-black ${active ? "text-white" : "text-gray-200"}">${info.dayNum}</span>
-                    <span class="w-1.5 h-1.5 rounded-full ${hasLogs ? "bg-emerald-400" : "bg-transparent"}"></span>
+                <button type="button" onclick="selectPlannerDay('${d}')" class="py-2 px-1 rounded-2xl flex flex-col items-center justify-center gap-0.5 transition-all ${pillStyle}">
+                    <span class="text-[8.5px] font-black uppercase tracking-wider opacity-85">${d}</span>
+                    <span class="text-sm font-black tabular-nums ${active ? "text-white" : isHoliday ? "text-amber-300" : isExam ? "text-rose-300" : "text-gray-200"}">${info.dayNum}</span>
+                    <div class="h-3.5 flex items-center justify-center">${bottomMarker}</div>
                 </button>`;
             }).join("");
+        }
+    }
+
+    // Render Calendar Event Banner for Selected Day Only
+    if (eventBanner) {
+        const activeEvents = weekEventsMap[state.activePlannerDay] || [];
+
+        let bannerHTML = "";
+        if (activeEvents.length > 0) {
+            bannerHTML += activeEvents.map(ev => {
+                if (ev.category === "holiday") {
+                    return `
+                    <div class="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-amber-500/5 border border-amber-500/35 flex items-center justify-between gap-3 shadow-lg">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-400/35 flex items-center justify-center text-amber-300 text-sm shrink-0">
+                                <i class="fas fa-umbrella-beach"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-1.5">
+                                    <span class="text-[8.5px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-amber-500/25 text-amber-200 border border-amber-400/30">Holiday</span>
+                                    <span class="text-[9px] font-bold text-amber-200/80">${activeInfo?.shortDate || ""}</span>
+                                </div>
+                                <h4 class="text-xs sm:text-sm font-extrabold text-white truncate mt-1">${ev.name}</h4>
+                            </div>
+                        </div>
+                        <span class="text-[9px] font-black uppercase tracking-wider text-amber-300 shrink-0">No Classes</span>
+                    </div>`;
+                } else if (ev.category === "exam") {
+                    return `
+                    <div class="p-3.5 rounded-2xl bg-gradient-to-r from-rose-500/20 via-pink-500/15 to-rose-500/5 border border-rose-500/35 flex items-center justify-between gap-3 shadow-lg">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-400/35 flex items-center justify-center text-rose-300 text-sm shrink-0">
+                                <i class="fas fa-file-pen"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-1.5">
+                                    <span class="text-[8.5px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-rose-500/25 text-rose-200 border border-rose-400/30">Academic Exam</span>
+                                    <span class="text-[9px] font-bold text-rose-200/80">${activeInfo?.shortDate || ""}</span>
+                                </div>
+                                <h4 class="text-xs sm:text-sm font-extrabold text-white truncate mt-1">${ev.name}</h4>
+                            </div>
+                        </div>
+                    </div>`;
+                } else {
+                    return `
+                    <div class="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-500/20 via-purple-500/15 to-indigo-500/5 border border-indigo-500/35 flex items-center justify-between gap-3 shadow-lg">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-400/35 flex items-center justify-center text-indigo-300 text-sm shrink-0">
+                                <i class="fas fa-calendar-check"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-1.5">
+                                    <span class="text-[8.5px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-indigo-500/25 text-indigo-200 border border-indigo-400/30">Calendar Event</span>
+                                    <span class="text-[9px] font-bold text-indigo-200/80">${activeInfo?.shortDate || ""}</span>
+                                </div>
+                                <h4 class="text-xs sm:text-sm font-extrabold text-white truncate mt-1">${ev.name}</h4>
+                            </div>
+                        </div>
+                    </div>`;
+                }
+            }).join("<div class='h-2'></div>");
+        }
+
+        if (bannerHTML) {
+            eventBanner.innerHTML = bannerHTML;
+            eventBanner.classList.remove("hidden");
+        } else {
+            eventBanner.innerHTML = "";
+            eventBanner.classList.add("hidden");
         }
     }
 
@@ -3263,46 +3558,83 @@ function initPlanner() {
 
         const cl = state.timetable[state.activePlannerDay] || [];
         if (!cl.length || cl.every(x => x === "Free")) {
-            c.innerHTML = "<div class=\"text-center py-10 text-gray-600 text-[10px] font-black uppercase tracking-widest\">No classes scheduled</div>";
+            c.innerHTML = "<div class=\"text-center py-10 text-gray-500 text-[10px] font-black uppercase tracking-widest\">No classes scheduled on this day</div>";
+            if (summaryEl) summaryEl.innerText = "No periods scheduled";
+            if (clearDayBtn) clearDayBtn.classList.add("hidden");
             updateSmartTrackerImpact();
             return;
         }
 
-        const selDateStr = new Date(state.selectedDateISO + "T00:00:00").toLocaleDateString();
+        let dayAttendedCount = 0;
+        let dayBunkedCount = 0;
+        let totalScheduledPeriods = 0;
 
         cl.forEach((code, i) => {
             if (code === "Free") return;
+            totalScheduledPeriods++;
             const s = state.subjects.find(s => s.code === code) || { name: state.courseMapping[code] || code };
-            const subStats = getSubjectStats(code) || { att: s.attended || 0, tot: s.total || 0, pct: s.percentage || 0 };
+            // Always include Smart Tracker entries when displaying attendance on Smart Tracker cards
+            const subStats = getSubjectStats(code, true) || { att: s.attended || 0, tot: s.total || 0, pct: s.percentage || 0 };
             const periodNum = i + 1;
 
-            const logged = state.manual.find(m => 
-                (m.code === code && m.dateISO === state.selectedDateISO && (m.period === periodNum || !m.period)) ||
-                (m.code === code && (new Date(m.timestamp || m.time).toLocaleDateString() === selDateStr) && m.period === periodNum)
+            const logged = state.manual.find(m =>
+                m.code === code && resolveManualEntryDateKey(m) === state.selectedDateISO && extractEntryPeriodNumber(m) === periodNum
             );
-            const isDone = !!logged;
-            const statusBadge = isDone
-                ? `<span class="text-[8px] font-black px-2 py-0.5 rounded-md ${logged.status === "Present" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"}">${logged.status === "Present" ? "✓ Attended" : "✕ Bunked"}</span>`
+            const isPresent = logged && logged.status === "Present";
+            const isAbsent = logged && logged.status === "Absent";
+            if (isPresent) dayAttendedCount++;
+            if (isAbsent) dayBunkedCount++;
+
+            const statusBadge = isPresent
+                ? `<span class="text-[8px] font-black px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase tracking-wider">✓ Attended</span>`
+                : isAbsent
+                ? `<span class="text-[8px] font-black px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/30 uppercase tracking-wider">✕ Bunked</span>`
                 : "";
 
+            const pctVal = Number(subStats.pct || 0);
+            const pctColor = pctVal >= 75 ? "text-emerald-400" : pctVal >= 65 ? "text-amber-400" : "text-rose-400";
+
+            const cardBorder = isPresent
+                ? "border-emerald-500/40"
+                : isAbsent
+                ? "border-rose-500/40"
+                : pctVal >= 75
+                ? "border-indigo-500/25"
+                : "border-rose-500/30";
+
+            const cardGradStyle = isPresent
+                ? "background: linear-gradient(135deg, rgba(16,185,129,0.20) 0%, rgba(15,14,28,0.92) 70%);"
+                : isAbsent
+                ? "background: linear-gradient(135deg, rgba(244,63,94,0.20) 0%, rgba(15,14,28,0.92) 70%);"
+                : pctVal >= 75
+                ? "background: linear-gradient(135deg, rgba(99,102,241,0.15) 0%, rgba(15,14,28,0.92) 70%);"
+                : "background: linear-gradient(135deg, rgba(244,63,94,0.14) 0%, rgba(15,14,28,0.92) 70%);";
+
+            const btnPresentClass = isPresent
+                ? "bg-emerald-500 text-black border-emerald-400 shadow-lg shadow-emerald-500/25 font-black"
+                : "bg-emerald-500/12 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25";
+
+            const btnAbsentClass = isAbsent
+                ? "bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-500/25 font-black"
+                : "bg-rose-500/12 border-rose-500/30 text-rose-400 hover:bg-rose-500/25";
+
             c.innerHTML += `
-                <div class="glass-panel p-4 rounded-[26px] border border-white/5 transition-all duration-300 flex items-center justify-between group ${isDone ? "opacity-90" : ""}">
-                    <div class="min-w-0 pr-3 flex-1">
-                        <div class="flex items-center gap-1.5 mb-1">
-                            <span class="px-2 py-0.5 rounded-lg bg-indigo-500/15 text-indigo-300 text-[8px] font-black uppercase tracking-wider">Period ${periodNum}</span>
-                            <span class="text-[9px] font-bold text-gray-400">${subStats.pct.toFixed(1)}% (${subStats.att}/${subStats.tot})</span>
+                <div class="glass-panel p-3.5 sm:p-4 rounded-[24px] border ${cardBorder} transition-all duration-200 flex items-center justify-between gap-3" style="${cardGradStyle}">
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-1.5 mb-1 flex-wrap">
+                            <span class="px-2 py-0.5 rounded-lg bg-indigo-500/20 border border-indigo-400/25 text-indigo-200 text-[8.5px] font-black uppercase tracking-wider">Period ${periodNum}</span>
+                            <span class="text-[10px] font-black ${pctColor} tabular-nums">${pctVal.toFixed(1)}%</span>
                             ${statusBadge}
                         </div>
-                        <p class="text-sm font-bold text-white truncate">${s.name}</p>
-                        <p class="text-[9px] text-gray-500 font-bold uppercase tracking-wider mt-0.5">${code}</p>
+                        <p class="text-[13.5px] sm:text-sm font-extrabold text-white truncate">${s.name}</p>
                     </div>
                     <div class="flex gap-2 shrink-0">
-                        <button onclick="markTimetableAttendance('${code}', 'Present', ${periodNum})" 
-                            class="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center hover:bg-emerald-500/25 active:scale-90 transition" title="Mark Attended">
+                        <button type="button" onclick="markTimetableAttendance('${code}', 'Present', ${periodNum})" 
+                            class="w-10 h-10 rounded-2xl border flex items-center justify-center active:scale-90 transition ${btnPresentClass}" title="Mark Attended">
                             <i class="fas fa-check text-xs"></i>
                         </button>
-                        <button onclick="markTimetableAttendance('${code}', 'Absent', ${periodNum})" 
-                            class="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center hover:bg-rose-500/25 active:scale-90 transition" title="Mark Bunked">
+                        <button type="button" onclick="markTimetableAttendance('${code}', 'Absent', ${periodNum})" 
+                            class="w-10 h-10 rounded-2xl border flex items-center justify-center active:scale-90 transition ${btnAbsentClass}" title="Mark Bunked">
                             <i class="fas fa-times text-xs"></i>
                         </button>
                     </div>
@@ -3310,30 +3642,71 @@ function initPlanner() {
             `;
         });
 
+        if (summaryEl) {
+            if (dayAttendedCount > 0 || dayBunkedCount > 0) {
+                const parts = [];
+                if (dayAttendedCount > 0) parts.push(`${dayAttendedCount} Attended`);
+                if (dayBunkedCount > 0) parts.push(`${dayBunkedCount} Bunked`);
+                summaryEl.innerHTML = `<span class="text-indigo-300">${parts.join(" • ")}</span> <span class="text-gray-500">(${dayAttendedCount + dayBunkedCount}/${totalScheduledPeriods} periods)</span>`;
+            } else {
+                summaryEl.innerText = `Tap ✓ or ✕ per period (${totalScheduledPeriods} periods)`;
+            }
+        }
+        if (clearDayBtn) {
+            if (dayAttendedCount > 0 || dayBunkedCount > 0) {
+                clearDayBtn.classList.remove("hidden");
+            } else {
+                clearDayBtn.classList.add("hidden");
+            }
+        }
+
         updateSmartTrackerImpact();
     }
 
-    // Render manual history card in planner
+    // Render Tracked History in Smart Tracker (only bunked classes with Date + Period, no click time, no course code)
     const histEl = document.getElementById("manual-history");
     const badgeEl = document.getElementById("manual-count-badge");
-    if (badgeEl) badgeEl.innerText = `${state.manual.length} Logs`;
+    const bunkedLogs = state.manual.filter(m => m.status === "Absent");
+    if (badgeEl) badgeEl.innerText = `${bunkedLogs.length} Bunked`;
     if (histEl) {
-        histEl.innerHTML = state.manual.length === 0
-            ? "<div class=\"text-center text-xs text-gray-500 py-3\">No tracked entries yet</div>"
-            : state.manual.slice(0, 5).map(m => `
-                <div class="flex justify-between items-center p-3 rounded-2xl bg-white/5 border border-white/5">
-                    <div class="flex items-center gap-3 min-w-0 pr-2">
-                        <div class="w-2 h-8 rounded-full ${m.status === "Present" ? "bg-emerald-500" : "bg-rose-500"} shrink-0"></div>
-                        <div class="min-w-0">
-                            <p class="text-xs font-bold text-white truncate">${m.name}</p>
-                            <p class="text-[9px] text-gray-400 font-bold uppercase truncate">${m.time} • ${m.status === "Present" ? "Attended" : "Bunked"}</p>
+        if (bunkedLogs.length === 0) {
+            histEl.innerHTML = "<div class=\"text-center text-xs text-gray-500 py-3\">No bunked periods tracked yet</div>";
+        } else {
+            const dateGroups = {};
+            bunkedLogs.slice(0, 8).forEach(entry => {
+                const key = resolveManualEntryDateKey(entry);
+                if (!dateGroups[key]) dateGroups[key] = [];
+                dateGroups[key].push(entry);
+            });
+            const sortedKeys = Object.keys(dateGroups).sort((a, b) => b.localeCompare(a));
+            histEl.innerHTML = sortedKeys.map(dateKey => {
+                const prettyDate = formatManualDateHeading(dateKey);
+                const items = dateGroups[dateKey].slice().sort((a, b) => extractEntryPeriodNumber(a) - extractEntryPeriodNumber(b));
+                const rows = items.map(m => {
+                    const periodNum = extractEntryPeriodNumber(m);
+                    return `
+                    <div class="flex justify-between items-center p-2.5 rounded-2xl bg-white/[0.04] border border-white/[0.06]">
+                        <div class="flex items-center gap-2.5 min-w-0 pr-2">
+                            <span class="px-2 py-1 rounded-lg text-[8.5px] font-black uppercase tracking-wider shrink-0 bg-rose-500/15 text-rose-300 border border-rose-500/30">Period ${periodNum}</span>
+                            <div class="min-w-0">
+                                <p class="text-xs font-bold text-white truncate">${m.name}</p>
+                            </div>
                         </div>
+                        <button type="button" onclick="deleteManual(${m.id})" class="w-8 h-8 rounded-xl bg-white/5 text-gray-400 hover:text-rose-400 flex items-center justify-center active:scale-90 transition shrink-0" title="Delete entry">
+                            <i class="fas fa-trash text-[10px]"></i>
+                        </button>
+                    </div>`;
+                }).join("");
+                return `
+                <div class="space-y-1.5">
+                    <div class="flex items-center justify-between px-1 pt-1">
+                        <span class="text-[8.5px] font-black uppercase tracking-widest text-indigo-300">${prettyDate}</span>
+                        <span class="text-[8px] font-bold text-rose-400">${items.length} ${items.length === 1 ? "Period" : "Periods"} Bunked</span>
                     </div>
-                    <button onclick="deleteManual(${m.id})" class="w-8 h-8 rounded-xl bg-white/5 text-gray-400 hover:text-rose-400 flex items-center justify-center active:scale-90 transition shrink-0">
-                        <i class="fas fa-trash text-[10px]"></i>
-                    </button>
-                </div>
-            `).join("");
+                    <div class="space-y-1.5">${rows}</div>
+                </div>`;
+            }).join("");
+        }
     }
     pushWidgetDataToNative();
 }
@@ -3350,24 +3723,46 @@ function toggleSmartTrackerPanel(btn) {
     if (!isHidden) updateSmartTrackerImpact();
 }
 
-function toggleSelectAllCards() {
+function markAllDayAttendance(status = "Present") {
     const cl = state.timetable[state.activePlannerDay] || [];
     const validCodes = [];
     cl.forEach((code, idx) => {
         if (code !== "Free") validCodes.push({ code, period: idx + 1 });
     });
 
-    if (validCodes.length === 0) return;
+    if (validCodes.length === 0) {
+        showToast("No classes scheduled on this day", "info");
+        return;
+    }
 
     validCodes.forEach(({ code, period }) => {
-        markTimetableAttendance(code, "Present", period, true);
+        markTimetableAttendance(code, status, period, true);
     });
 
     state.selectedCards = {};
     saveState();
     renderSemesterHero(); renderWidgets(); renderSubjects(); initPlanner(); initManual();
-    hapticFeedback("success");
-    showToast(`✅ Marked all ${validCodes.length} classes Attended for ${state.activePlannerDay}!`, "success");
+    hapticFeedback(status === "Present" ? "success" : "warning");
+    const label = status === "Present" ? "Attended" : "Bunked";
+    showToast(`Marked all ${validCodes.length} periods ${label} (${state.activePlannerDay})`, "success");
+}
+window.markAllDayAttendance = markAllDayAttendance;
+
+function clearSelectedDayTrackerLogs() {
+    const curISO = state.selectedDateISO;
+    if (!curISO) return;
+    const before = state.manual.length;
+    state.manual = state.manual.filter(m => resolveManualEntryDateKey(m) !== curISO);
+    if (state.manual.length !== before) {
+        saveState();
+        renderSemesterHero(); renderWidgets(); renderSubjects(); initPlanner(); initManual();
+        showToast(`Cleared tracked entries for ${state.activePlannerDay}`);
+    }
+}
+window.clearSelectedDayTrackerLogs = clearSelectedDayTrackerLogs;
+
+function toggleSelectAllCards() {
+    markAllDayAttendance("Present");
 }
 
 function toggleCardSelection(id, code) {
@@ -3378,26 +3773,45 @@ function markTimetableAttendance(code, status, period = 1, silent = false) {
     const s = state.subjects.find(x => x.code === code);
     const name = s ? s.name : (state.courseMapping[code] || code);
 
-    const stamp = state.simulatedDate ? new Date(state.simulatedDate) : new Date();
-    if (state.simulatedDate) {
-        const now = new Date();
-        stamp.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+    const t0 = getToday();
+    const fallbackISO = `${t0.getFullYear()}-${String(t0.getMonth() + 1).padStart(2, "0")}-${String(t0.getDate()).padStart(2, "0")}`;
+    const curISO = state.selectedDateISO || fallbackISO;
+
+    // Check if an entry already exists for this exact date + period + course
+    const existingIdx = state.manual.findIndex(m =>
+        m.code === code && resolveManualEntryDateKey(m) === curISO && extractEntryPeriodNumber(m) === period
+    );
+
+    if (existingIdx !== -1) {
+        const existing = state.manual[existingIdx];
+        if (!silent && existing.status === status) {
+            // Tapping the same active button again toggles/clears that period's log
+            state.manual.splice(existingIdx, 1);
+            saveState();
+            renderSemesterHero(); renderWidgets(); renderSubjects(); initPlanner(); initManual();
+            showToast(`Removed log for Period ${period}`);
+            return;
+        }
+        // Only store dateISO and period (never store click timestamp)
+        state.manual[existingIdx] = {
+            id: existing.id,
+            code: code,
+            name: name,
+            status: status,
+            dateISO: curISO,
+            period: period
+        };
+    } else {
+        // Only store dateISO and period (never store click timestamp)
+        state.manual.unshift({
+            id: Date.now() + Math.random(),
+            code: code,
+            name: name,
+            status: status,
+            dateISO: curISO,
+            period: period
+        });
     }
-
-    const curISO = state.selectedDateISO || stamp.toISOString().split("T")[0];
-    const dObj = new Date(curISO + "T00:00:00");
-    const dShort = dObj.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-
-    state.manual.unshift({
-        id: Date.now() + Math.random(),
-        code: code,
-        name: name,
-        status: status,
-        dateISO: curISO,
-        period: period,
-        time: `${dShort}, Period ${period}`,
-        timestamp: stamp.toISOString()
-    });
 
     if (state.selectedCards) {
         Object.keys(state.selectedCards).forEach(id => {
@@ -3409,7 +3823,7 @@ function markTimetableAttendance(code, status, period = 1, silent = false) {
         saveState();
         renderSemesterHero(); renderWidgets(); renderSubjects(); initPlanner(); initManual();
         hapticFeedback(status === "Present" ? "tap" : "warning");
-        showToast(`✅ Marked ${status === "Present" ? "Attended" : "Bunked"}: ${code} (P${period})`, "success");
+        showToast(`Marked ${status === "Present" ? "Attended" : "Bunked"}: Period ${period}`, "success");
     }
 }
 
@@ -3445,8 +3859,10 @@ function updateSmartTrackerImpact() {
     const l = document.getElementById('planner-impact-list');
     if (!l) return;
 
-    const todayStr = getToday().toLocaleDateString();
-    const todayManual = state.manual.filter(m => new Date(m.timestamp || m.time).toLocaleDateString() === todayStr);
+    const t0 = getToday();
+    const todayISO = `${t0.getFullYear()}-${String(t0.getMonth() + 1).padStart(2, '0')}-${String(t0.getDate()).padStart(2, '0')}`;
+    const activeDateISO = state.selectedDateISO || todayISO;
+    const todayManual = state.manual.filter(m => resolveManualEntryDateKey(m) === activeDateISO);
     const todayManualCodes = [...new Set(todayManual.map(m => m.code))];
 
     if (todayManualCodes.length === 0) {
@@ -3472,13 +3888,10 @@ function updateSmartTrackerImpact() {
             }
         }
 
-        // Add manual entries EXCEPT today's to get base if includeManual is true
-        let p_past = 0, b_past = 0;
-        if (state.includeManual) {
-            const pastManual = state.manual.filter(x => x.code === code && new Date(x.timestamp || x.time).toLocaleDateString() !== todayStr);
-            p_past = pastManual.filter(x => x.status === 'Present').length;
-            b_past = pastManual.filter(x => x.status === 'Absent').length;
-        }
+        // Add manual entries EXCEPT activeDateISO to get base
+        const pastManual = state.manual.filter(x => x.code === code && resolveManualEntryDateKey(x) !== activeDateISO);
+        const p_past = pastManual.filter(x => x.status === 'Present').length;
+        const b_past = pastManual.filter(x => x.status === 'Absent').length;
 
         const baseAtt = offAtt + p_past;
         const baseTot = offTot + p_past + b_past;
@@ -3514,26 +3927,7 @@ function updateSmartTrackerImpact() {
 }
 
 function initManual() {
-    const h = document.getElementById('manual-history');
-
-    // Render subject comparison panel
     renderManualComparison();
-
-    if (h) {
-        h.innerHTML = state.manual.length ? '' : '<div class="text-center text-xs text-gray-700 italic py-4">No manual entries yet</div>';
-        state.manual.slice(0, 3).forEach(m => {
-            h.innerHTML += `<div class="flex justify-between items-center p-3 rounded-xl bg-white/5 border border-white/5 mb-2">
-                <div class="flex items-center gap-3">
-                    <div class="w-2 h-8 rounded-full ${m.status === 'Present' ? 'bg-emerald-500' : 'bg-rose-500'}"></div>
-                    <div>
-                        <p class="text-xs font-bold text-white">${m.name}</p>
-                        <p class="text-[9px] text-gray-500 font-bold uppercase">${m.time.split(',')[0]}</p>
-                    </div>
-                </div>
-                <button onclick="deleteManual(${m.id})" class="w-8 h-8 flex items-center justify-center rounded-full text-gray-600 hover:bg-white/10 hover:text-white transition"><i class="fas fa-trash"></i></button>
-            </div>`;
-        });
-    }
 }
 
 function toggleManualView(el) {
@@ -3644,47 +4038,71 @@ function toggleManualImpact(el) {
     }
 }
 
-function cleanupManualEntries() {
-    // Logic: Remove local manual entries if their date is <= official last update
-    const lastUpdateStr = localStorage.getItem('bunker_last_update');
-    if (!lastUpdateStr || lastUpdateStr === 'No data') return;
+function parseOfficialUpdateDateISO(rawStr) {
+    if (!rawStr || rawStr === 'No data' || rawStr === '-' || rawStr === 'Unknown') return null;
+    const clean = String(rawStr).trim();
+    // 1. YYYY-MM-DD
+    const ymd = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (ymd) {
+        return `${ymd[1]}-${String(ymd[2]).padStart(2, '0')}-${String(ymd[3]).padStart(2, '0')}`;
+    }
+    // 2. DD-MM-YYYY or DD/MM/YYYY or DD.MM.YYYY (common in eCampus)
+    const dmy = clean.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (dmy) {
+        return `${dmy[3]}-${String(dmy[2]).padStart(2, '0')}-${String(dmy[1]).padStart(2, '0')}`;
+    }
+    // 3. Formatted strings like "Oct 25, 2026"
+    const parsed = new Date(clean);
+    if (!isNaN(parsed.getTime())) {
+        const yyyy = parsed.getFullYear();
+        const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+        const dd = String(parsed.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+    }
+    return null;
+}
 
-    // Try parsing various formats
-    let lastUpdateDate = new Date(lastUpdateStr);
-    if (isNaN(lastUpdateDate.getTime())) {
-        // If standard parse fails, try "DD-MM-YYYY" or "DD/MM/YYYY" common in India
-        const parts = lastUpdateStr.split(/[-/]/);
-        if (parts.length === 3) {
-            // Assume DD-MM-YYYY
-            lastUpdateDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+function cleanupManualEntries() {
+    // Automatically delete Smart Tracker entries up to AND including the official eCampus attendance updated date.
+    // Example: if marked from 20th to 27th and eCampus attendance updated date is 25th,
+    // all entries with dateISO <= 25th (20th..25th inclusive) are deleted automatically, keeping 26th..27th.
+    if (!Array.isArray(state.manual) || state.manual.length === 0) return;
+
+    const lastUpdateStr = localStorage.getItem('bunker_last_update');
+    const lastUpdateISO = parseOfficialUpdateDateISO(lastUpdateStr);
+
+    let modified = false;
+    const cleaned = [];
+
+    for (const m of state.manual) {
+        if (!m) continue;
+        const entryDateISO = resolveManualEntryDateKey(m);
+        const periodNum = extractEntryPeriodNumber(m);
+
+        // If official attendance update date exists and entry date is <= lastUpdateISO (up to and on that date), delete it
+        if (lastUpdateISO && /^\d{4}-\d{2}-\d{2}$/.test(entryDateISO) && entryDateISO <= lastUpdateISO) {
+            modified = true;
+            continue;
         }
+
+        // Normalize entry to only store dateISO & period (strip any legacy timestamp/click time)
+        if (m.timestamp !== undefined || m.time !== undefined || m.dateISO !== entryDateISO || m.period !== periodNum) {
+            modified = true;
+        }
+        cleaned.push({
+            id: m.id || (Date.now() + Math.random()),
+            code: m.code,
+            name: m.name,
+            status: m.status,
+            dateISO: /^\d{4}-\d{2}-\d{2}$/.test(entryDateISO) ? entryDateISO : m.dateISO,
+            period: periodNum
+        });
     }
 
-    if (isNaN(lastUpdateDate.getTime())) return; // Failed to parse
-
-    // Set to start of the day so that manual entries tracked TODAY are successfully kept
-    // and aren't aggressively deleted immediately upon page reload.
-    lastUpdateDate.setHours(0, 0, 0, 0);
-
-    const initialCount = state.manual.length;
-
-    // Filter: Keep entries NEWER than last update
-    state.manual = state.manual.filter(m => {
-        let entryDate;
-        if (m.timestamp) {
-            entryDate = new Date(m.timestamp);
-        } else {
-            // Backwards compatibility for old entries (try parsing locale string)
-            entryDate = new Date(m.time);
-            if (isNaN(entryDate.getTime())) return true; // Keep safely if unknown
-        }
-        return entryDate > lastUpdateDate;
-    });
-
-    if (state.manual.length < initialCount) {
-        // Cleanup completed silently
+    if (modified || cleaned.length !== state.manual.length) {
+        state.manual = cleaned;
         saveState();
-        initManual(); // Refresh UI if checking
+        initManual();
     }
 }
 
@@ -3758,21 +4176,14 @@ function switchTab(id, index) {
     }
     else if (id === 'calendar') {
         t = "Timeline";
-        // Calendar changes each semester and events may update in between:
-        // Check directly from phone every 6 hours (0 Vercel compute!) or immediately if semester changed
+        // Always fetch calendar directly from phone so any calendar update reflects immediately (falls back to Vercel if direct fails)
         if (roll) {
-            const calKey = `bunker_cal_time_v2_${roll}`;
-            const lastCalTime = parseInt(localStorage.getItem(calKey) || '0');
-            const isCalStale = (Date.now() - lastCalTime) > (6 * 60 * 60 * 1000);
-            const hasCal = state.calendarCache && state.calendarCache.fullCalendar && state.calendarCache.fullCalendar.length > 0;
-            if (isCalStale || !hasCal) {
-                fetchCalendarPhoneDirect(roll, state.subjects, isCalStale).then(data => {
-                    if (data) {
-                        initAcademicCalendar();
-                        renderSemesterHero();
-                    }
-                });
-            }
+            fetchCalendarPhoneDirect(roll, state.subjects, true).then(data => {
+                if (data) {
+                    initAcademicCalendar();
+                    renderSemesterHero();
+                }
+            });
         }
     }
     else if (id === 'planner') {
@@ -4053,10 +4464,19 @@ function renderOthersOverview() {
     // 2. Render Attendance Comparison card preview
     renderAttendanceComparisonCard();
 
-    // 3. Render Academic Standing & GPA/CGPA summary
-    if (!state.academics) return;
-    const cgpaData = state.academics.cgpa;
-    const gpaData = state.academics.gpa;
+    // 3. Render Academic Standing & GPA/CGPA summary ONLY after data arrives
+    const acadCard = document.getElementById('others-academic-card');
+    const loadingCard = document.getElementById('others-cgpa-loading');
+    const errorCard = document.getElementById('others-cgpa-error');
+    const errorMsgEl = document.getElementById('others-cgpa-error-msg');
+
+    const cgpaData = state.academics ? state.academics.cgpa : null;
+    const gpaData = state.academics ? state.academics.gpa : null;
+    const hasCgpaSubs = (cgpaData && Array.isArray(cgpaData.all_subjects) && cgpaData.all_subjects.length > 0) ||
+                        (gpaData && Array.isArray(gpaData.table || gpaData.all_subjects) && (gpaData.table || gpaData.all_subjects).length > 0);
+    const hasStudyingSubs = gpaData && Array.isArray(gpaData.studying_courses) && gpaData.studying_courses.length > 0;
+    const hasCgpaOrGpaData = Boolean(hasCgpaSubs || hasStudyingSubs || (cgpaData && cgpaData.cgpa && cgpaData.cgpa !== '--') || (gpaData && gpaData.gpa && gpaData.gpa !== '--'));
+
     const valEl = document.getElementById('others-cgpa-value');
     const subEl = document.getElementById('others-cgpa-sub');
     const badgeEl = document.getElementById('others-cgpa-badge');
@@ -4085,25 +4505,39 @@ function renderOthersOverview() {
         }
     }
 
-    if (!cgpaData && !gpaData) {
-        if (valEl) valEl.textContent = '--';
-        if (subEl) subEl.textContent = 'Tap Sem Marks or Refresh to sync transcript';
-        if (badgeEl) {
-            badgeEl.textContent = 'Overall';
-            badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider';
-        }
-        if (chipsList) {
-            chipsList.innerHTML = '<div class="text-[10px] text-gray-500 italic py-1">Tap Sem Marks to view semester GPAs</div>';
+    if (!hasCgpaOrGpaData) {
+        // Hide the CGPA/GPA card until data arrives
+        if (acadCard) acadCard.classList.add('hidden');
+        if (state.academics && state.academics.error) {
+            if (loadingCard) loadingCard.classList.add('hidden');
+            if (errorCard) errorCard.classList.remove('hidden');
+            if (errorMsgEl) errorMsgEl.textContent = state.academics.errorMsg || 'Failed to fetch CGPA & GPA';
+        } else {
+            if (errorCard) errorCard.classList.add('hidden');
+            if (loadingCard) loadingCard.classList.remove('hidden');
         }
         return;
     }
 
-    const cgpa = (cgpaData && cgpaData.cgpa) || (gpaData && (gpaData.overall_cgpa || gpaData.gpa));
-    const numCGPA = parseFloat(cgpa);
-    const hasRA = cgpa === 'RA' || (cgpaData && (cgpaData.has_ra || cgpaData.has_arrears));
+    // Data has arrived: hide loading & error states, reveal CGPA/GPA card
+    if (loadingCard) loadingCard.classList.add('hidden');
+    if (errorCard) errorCard.classList.add('hidden');
+
+    // If a 1st-semester student only has studying_courses and 0 completed semester results, hide the CGPA card rather than showing '--'
+    if (!hasCgpaSubs && hasStudyingSubs) {
+        if (acadCard) acadCard.classList.add('hidden');
+        return;
+    }
+
+    if (acadCard) acadCard.classList.remove('hidden');
+
+    const rawCgpa = (cgpaData && cgpaData.cgpa) || (gpaData && (gpaData.overall_cgpa || gpaData.gpa));
+    const hasRA = rawCgpa === 'RA' || rawCgpa === '***' || (cgpaData && (cgpaData.has_ra || cgpaData.has_arrears)) || (gpaData && gpaData.has_arrears);
+    const cgpa = hasRA ? '***' : (typeof rawCgpa === 'number' ? rawCgpa.toFixed(2) : rawCgpa);
+    const numCGPA = parseFloat(rawCgpa);
 
     if (valEl) {
-        valEl.textContent = cgpa === 'RA' ? 'RA' : (cgpa || '--');
+        valEl.textContent = cgpa;
         valEl.style.color = hasRA ? '#EF4444' : numCGPA >= 8.5 ? '#10B981' : numCGPA >= 7.0 ? '#6366f1' : numCGPA >= 5.0 ? '#F59E0B' : '#EF4444';
     }
 
@@ -4128,8 +4562,9 @@ function renderOthersOverview() {
     }
 
     const resultsCgpaPill = document.getElementById("results-cgpa-pill");
-    if (resultsCgpaPill) {
-        resultsCgpaPill.innerText = (cgpa && cgpa !== "--") ? `${cgpa} CGPA` : "-- CGPA";
+    if (resultsCgpaPill && cgpa) {
+        resultsCgpaPill.innerText = `CGPA ${cgpa}`;
+        resultsCgpaPill.classList.remove('hidden');
     }
 
     const totalCredits = (cgpaData && cgpaData.total_credits) || (gpaData && gpaData.total_credits);
@@ -4184,7 +4619,7 @@ function renderOthersOverview() {
                 </button>`;
             }).join('');
         } else {
-            chipsList.innerHTML = '<div class="text-[10px] text-gray-500 italic py-1">Semester GPAs will appear once synced</div>';
+            chipsList.innerHTML = '';
         }
     }
 }
@@ -4459,10 +4894,10 @@ function renderLiveClassWidgetModal() {
     if (payload.currentClass) {
         const cur = payload.currentClass;
         const bunkBadge = cur.safeBunks > 0
-            ? `<span class="text-[9px] font-black text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-lg border border-emerald-500/30">Safe to bunk ${cur.safeBunks}h</span>`
+            ? `<span class="text-[9px] font-black text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-lg border border-emerald-500/30">Safe to bunk ${cur.safeBunks}p</span>`
             : cur.safeBunks === 0
             ? `<span class="text-[9px] font-black text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-lg border border-amber-500/30">On 75% Edge</span>`
-            : `<span class="text-[9px] font-black text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded-lg border border-rose-500/30">Need ${Math.abs(cur.safeBunks)}h for 75%</span>`;
+            : `<span class="text-[9px] font-black text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded-lg border border-rose-500/30">Need ${Math.abs(cur.safeBunks)}p for 75%</span>`;
 
         html += `
         <div class="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-2.5">
@@ -4475,7 +4910,7 @@ function renderLiveClassWidgetModal() {
             </div>
             <div>
                 <h4 class="text-sm font-black text-white">${cur.name}</h4>
-                <p class="text-[10px] text-gray-300 font-bold mt-0.5">${cur.code} • Attended ${cur.attendedHours}/${cur.totalHours} hrs</p>
+                <p class="text-[10px] text-gray-300 font-bold mt-0.5">${cur.code} • Attended ${cur.attendedHours}/${cur.totalHours} periods</p>
             </div>
             <div class="w-full h-1.5 rounded-full bg-black/40 overflow-hidden">
                 <div class="h-full bg-emerald-400 rounded-full" style="width:${cur.progressPct}%"></div>
@@ -4499,7 +4934,7 @@ function renderLiveClassWidgetModal() {
             </div>
             <div class="text-right shrink-0">
                 <span class="text-xs font-black px-2.5 py-1 rounded-xl ${nxt.safeBunks > 0 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'}">
-                    ${nxt.safeBunks > 0 ? `+${nxt.safeBunks} Safe` : nxt.safeBunks === 0 ? '75% Edge' : `Need ${Math.abs(nxt.safeBunks)}h`}
+                    ${nxt.safeBunks > 0 ? `+${nxt.safeBunks} Safe` : nxt.safeBunks === 0 ? '75% Edge' : `Need ${Math.abs(nxt.safeBunks)}p`}
                 </span>
             </div>
         </div>`;
@@ -4523,7 +4958,7 @@ function renderLiveClassWidgetModal() {
                 ? `<span class="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">Bunked</span>`
                 : isNow
                 ? `<span class="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-emerald-500 text-black">Live</span>`
-                : `<span class="text-[8px] font-bold uppercase px-2 py-0.5 rounded bg-white/5 text-gray-400">${item.safeBunks > 0 ? `Safe +${item.safeBunks}` : item.safeBunks === 0 ? 'Edge' : `Need ${Math.abs(item.safeBunks)}h`}</span>`;
+                : `<span class="text-[8px] font-bold uppercase px-2 py-0.5 rounded bg-white/5 text-gray-400">${item.safeBunks > 0 ? `Safe +${item.safeBunks}` : item.safeBunks === 0 ? 'Edge' : `Need ${Math.abs(item.safeBunks)}p`}</span>`;
 
             html += `
             <div class="p-3 rounded-2xl ${isNow ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-white/[0.03] border border-white/10'} flex items-center justify-between gap-2.5">
@@ -4619,18 +5054,13 @@ function logout() {
                 if (k) allKeys.push(k);
             }
             allKeys.forEach(key => {
-                // Keep roll-specific cached subjects and previous attendance
-                if (key.startsWith('bunker_subjects_')) return;
-                if (key.startsWith('bunker_previous_attendance_')) return;
-                if (key.startsWith('bunker_previous_update_')) return;
-                // Keep manual tracking entries
+                // Keep manual tracking entries and user preferences
                 if (key.startsWith('bunker_manual_')) return;
-                // Keep per-user preferences
                 if (key.startsWith('bunker_include_manual_')) return;
                 if (key.startsWith('bunker_view_manual_')) return;
                 if (key.startsWith('bunker_att_mode_')) return;
                 if (key.startsWith('bunker_features_tour')) return;
-                // Clear all other session keys
+                // Clear all stored attendance snapshots and session keys on logout
                 try { localStorage.removeItem(key); } catch (e) {}
             });
         } catch (e) {}
@@ -4638,6 +5068,9 @@ function logout() {
         try { sessionStorage.clear(); } catch (e) {}
         state.rollNumber = null;
         state.subjects = [];
+        state.previousSubjects = null;
+        state.isViewingPreviousAttendance = false;
+        state.forceLivePendingView = false;
         state.timetable = {};
     } catch (err) {
         console.warn('Error during logout:', err);
@@ -4681,15 +5114,15 @@ function setSimAbsenceMode(mode) {
         }
     }
     if (bunkLabel) {
-        bunkLabel.innerText = simAbsenceMode === 'od' ? 'OD / Exemp Hrs' : 'Bunk / Leave';
+        bunkLabel.innerText = simAbsenceMode === 'od' ? 'OD / Exemp' : 'Bunk';
     }
     if (bunkIcon && bunkIconWrap) {
         if (simAbsenceMode === 'od') {
             bunkIcon.className = 'fas fa-id-badge';
-            bunkIconWrap.className = 'w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-300 text-xs';
+            bunkIconWrap.className = 'w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center text-indigo-300 text-xs shrink-0';
         } else {
             bunkIcon.className = 'fas fa-times';
-            bunkIconWrap.className = 'w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-400 text-xs';
+            bunkIconWrap.className = 'w-8 h-8 rounded-xl bg-rose-500/15 border border-rose-500/25 flex items-center justify-center text-rose-400 text-xs shrink-0';
         }
     }
     updateSimUI();
@@ -4712,7 +5145,10 @@ function openSim(code) {
     simAddBunk = 0;
     simAbsenceMode = 'leave';
 
-    document.getElementById('sim-subject').innerText = stats.name || simSubject.name;
+    const subjEl = document.getElementById('sim-subject');
+    if (subjEl) subjEl.innerText = stats.name || simSubject.name;
+    const codeEl = document.getElementById('sim-sub-code');
+    if (codeEl) codeEl.innerText = code;
     document.getElementById('val-attend').innerText = '0';
     document.getElementById('val-bunk').innerText = '0';
     setSimAbsenceMode('leave');
@@ -4781,8 +5217,6 @@ function updateBunkSim(type, change) {
 function updateSimUI() {
     if (!simSubject) return;
 
-    // In 'leave' mode, bunking adds to conducted total without increasing attended.
-    // In 'od' (On-Duty / Exemption) mode, OD hours credit effective attendance (or reduce effective total).
     let newAtt, newTot;
     if (simAbsenceMode === 'od') {
         newAtt = simBaseAtt + simAddAttend + simAddBunk;
@@ -4796,7 +5230,7 @@ function updateSimUI() {
     const ring = document.getElementById('sim-ring');
     const pctText = document.getElementById('sim-pct');
     const diffText = document.getElementById('sim-diff');
-    if (!ring || !pctText || !diffText) return;
+    if (!ring || !pctText) return;
 
     pctText.innerText = pct.toFixed(1) + '%';
 
@@ -4807,84 +5241,91 @@ function updateSimUI() {
     let color;
     const pVal = parseFloat(pct.toFixed(1));
     if (pVal === 100) color = '#22C55E';
-    else if (pVal >= 85) color = '#10B981';
-    else if (pVal >= 78) color = '#6366F1';
+    else if (pVal >= 90) color = '#10B981';
+    else if (pVal >= 85) color = '#3B82F6';
+    else if (pVal >= 80) color = '#EAB308';
     else if (pVal >= 75) color = '#F97316';
-    else if (pVal >= 65) color = '#F59E0B';
     else color = '#EF4444';
 
     ring.setAttribute('stroke', color);
-    ring.style.filter = `drop-shadow(0 0 8px ${color})`;
+    ring.style.filter = `drop-shadow(0 0 12px ${color}88)`;
     pctText.style.color = color;
+    pctText.style.textShadow = `0 0 24px ${color}55`;
 
     const diff = pct - simBasePct;
-    if (Math.abs(diff) < 0.05) {
-        diffText.innerText = simAbsenceMode === 'od' ? 'OD Mode' : 'Current';
-        diffText.className = 'text-[8.5px] font-black px-2.5 py-0.5 rounded-full bg-white/5 mt-1 uppercase border border-white/10 text-gray-300';
-        diffText.style.color = '#9CA3AF';
-    } else if (diff > 0) {
-        diffText.innerText = `+${diff.toFixed(1)}%`;
-        diffText.className = 'text-[8.5px] font-black px-2.5 py-0.5 rounded-full bg-emerald-500/20 mt-1 uppercase border border-emerald-500/30 text-emerald-300';
-        diffText.style.color = '#34D399';
-    } else {
-        diffText.innerText = `${diff.toFixed(1)}%`;
-        diffText.className = 'text-[8.5px] font-black px-2.5 py-0.5 rounded-full bg-rose-500/20 mt-1 uppercase border border-rose-500/30 text-rose-300';
-        diffText.style.color = '#FB7185';
+    if (diffText) {
+        if (Math.abs(diff) < 0.05) {
+            diffText.innerText = 'Current';
+            diffText.className = 'text-[9px] font-extrabold px-3 py-0.5 rounded-full bg-white/[0.06] mt-2 uppercase tracking-wider border border-white/10 text-gray-300 tabular-nums';
+            diffText.style.color = '#9CA3AF';
+        } else if (diff > 0) {
+            diffText.innerText = `+${diff.toFixed(1)}%`;
+            diffText.className = 'text-[9px] font-extrabold px-3 py-0.5 rounded-full bg-emerald-500/20 mt-2 uppercase tracking-wider border border-emerald-500/30 text-emerald-300 tabular-nums';
+            diffText.style.color = '#34D399';
+        } else {
+            diffText.innerText = `${diff.toFixed(1)}%`;
+            diffText.className = 'text-[9px] font-extrabold px-3 py-0.5 rounded-full bg-rose-500/20 mt-2 uppercase tracking-wider border border-rose-500/30 text-rose-300 tabular-nums';
+            diffText.style.color = '#FB7185';
+        }
     }
 
     const fractionEl = document.getElementById('sim-fraction');
-    if (fractionEl) fractionEl.innerText = `${newAtt} / ${newTot} hrs`;
-
-    const analytics = computeHybridBunkerAnalytics(simSubject.code, newAtt, newTot);
+    if (fractionEl) fractionEl.innerText = `${newAtt} / ${newTot} PERIODS`;
 
     const metaEl = document.getElementById('sim-sub-meta');
-    if (metaEl) {
-        metaEl.innerText = analytics.weeklyPeriods > 0
-            ? `${simSubject.code} • ${analytics.weeklyPeriods} hrs/week (${analytics.scheduledDays.join(', ')})`
-            : `${simSubject.code} • Strict 75% Exam & 65% Medical Rules`;
+    if (metaEl) metaEl.innerText = 'Prediction Mode';
+
+    // 75% and 65% live calculations
+    const safe75 = newTot > 0 ? Math.max(0, Math.floor((4 * newAtt - 3 * newTot) / 3)) : 0;
+    const need75 = newTot > 0 && pct < 75 ? Math.max(1, Math.ceil(3 * newTot - 4 * newAtt)) : 0;
+    const safe65 = newTot > 0 ? Math.max(0, Math.floor((20 * newAtt - 13 * newTot) / 13)) : 0;
+    const need65 = newTot > 0 && pct < 65 ? Math.max(1, Math.ceil((13 * newTot - 20 * newAtt) / 7)) : 0;
+
+    const stat75El = document.getElementById('sim-stat-75');
+    if (stat75El) {
+        if (pct >= 75) {
+            stat75El.className = 'text-[10px] font-black text-emerald-400 tabular-nums';
+            stat75El.innerText = safe75 > 0 ? `Safe (+${safe75})` : 'On Edge (0)';
+        } else {
+            stat75El.className = 'text-[10px] font-black text-rose-400 tabular-nums';
+            stat75El.innerText = `Need +${need75}`;
+        }
     }
 
-    const diag75El = document.getElementById('sim-diag-75');
-    const eta75El = document.getElementById('sim-eta-75');
-    const diag65El = document.getElementById('sim-diag-65');
-    const eta65El = document.getElementById('sim-eta-65');
-
-    if (diag75El) {
-        diag75El.innerHTML = pct >= 75
-            ? `<span class="text-emerald-400">Safe: ${analytics.safe75} hr${analytics.safe75 !== 1 ? 's' : ''}</span>`
-            : `<span class="text-rose-400">Need +${analytics.need75} hr${analytics.need75 !== 1 ? 's' : ''}</span>`;
+    const stat65El = document.getElementById('sim-stat-65');
+    if (stat65El) {
+        if (pct >= 65) {
+            stat65El.className = 'text-[10px] font-black text-indigo-300 tabular-nums';
+            stat65El.innerText = `Buffer +${safe65}`;
+        } else {
+            stat65El.className = 'text-[10px] font-black text-rose-400 tabular-nums';
+            stat65El.innerText = `Need +${need65}`;
+        }
     }
-    if (eta75El) eta75El.innerText = analytics.eta75Label;
 
-    if (diag65El) {
-        diag65El.innerHTML = pct >= 65
-            ? `<span class="text-amber-300">Buffer: ${analytics.safe65} hr${analytics.safe65 !== 1 ? 's' : ''}</span>`
-            : `<span class="text-rose-400">Need +${analytics.need65} hr${analytics.need65 !== 1 ? 's' : ''}</span>`;
-    }
-    if (eta65El) eta65El.innerText = analytics.eta65Label;
-
-    const remLabelEl = document.getElementById('sim-rem-classes-label');
-    const maxPctEl = document.getElementById('sim-max-sem-pct');
-    if (remLabelEl) {
-        remLabelEl.innerText = `Est. Left in Sem: ~${analytics.remClassesInSem} hrs`;
-    }
-    if (maxPctEl) {
-        maxPctEl.innerText = `Sem Max: ${analytics.maxSemPct.toFixed(1)}%`;
+    const resetBtn = document.getElementById('sim-reset-btn');
+    if (resetBtn) {
+        const isSimActive = simAddAttend > 0 || simAddBunk > 0;
+        resetBtn.className = isSimActive
+            ? 'py-1.5 px-3.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/35 text-[9px] font-bold uppercase tracking-wider text-indigo-200 active:scale-95 transition inline-flex items-center justify-center gap-1.5'
+            : 'py-1.5 px-3.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] text-[9px] font-bold uppercase tracking-wider text-gray-400 hover:text-white active:scale-95 transition inline-flex items-center justify-center gap-1.5';
     }
 
     const bannerEl = document.getElementById('sim-verdict-banner');
     if (bannerEl) {
-        if (pct >= 75) {
-            bannerEl.className = "mb-3 py-2 px-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center text-[10px] font-black text-emerald-300 uppercase tracking-wider relative z-10";
-            bannerEl.innerHTML = analytics.safe75 > 0
-                ? `<i class="fas fa-shield-alt mr-1.5"></i>Safe to bunk ${analytics.safe75} class${analytics.safe75 > 1 ? "es" : ""} (75% Exam Safe)`
-                : `<i class="fas fa-exclamation-triangle mr-1.5"></i>On 75% Boundary • 0 Safe Bunks`;
-        } else if (pct >= 65) {
-            bannerEl.className = "mb-3 py-2 px-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-center text-[10px] font-black text-amber-300 uppercase tracking-wider relative z-10";
-            bannerEl.innerHTML = `<i class="fas fa-notes-medical mr-1.5"></i>Medical Zone (65–74.9%) • Need ${analytics.need75}h for 75%`;
+        if (pct >= state.threshold) {
+            const b = Math.floor((newAtt - (state.threshold / 100) * newTot) / (state.threshold / 100));
+            if (b > 0) {
+                bannerEl.className = "mt-1 mb-2.5 py-2 px-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center text-[10px] font-black text-emerald-400 uppercase tracking-wider relative z-10 flex items-center justify-center gap-2 shadow-sm";
+                bannerEl.innerHTML = `<i class="fas fa-shield-alt text-xs"></i><span>Safe to bunk ${b}</span>`;
+            } else {
+                bannerEl.className = "mt-1 mb-2.5 py-2 px-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-center text-[10px] font-black text-amber-400 uppercase tracking-wider relative z-10 flex items-center justify-center gap-2 shadow-sm";
+                bannerEl.innerHTML = `<i class="fas fa-exclamation-circle text-xs"></i><span>On the edge • 0 safe bunks</span>`;
+            }
         } else {
-            bannerEl.className = "mb-3 py-2 px-3 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-center text-[10px] font-black text-rose-300 uppercase tracking-wider relative z-10";
-            bannerEl.innerHTML = `<i class="fas fa-ban mr-1.5"></i>Critical &lt;65% • Need ${analytics.need65}h for 65% (${analytics.need75}h for 75%)`;
+            const n = Math.max(1, Math.ceil(((state.threshold / 100) * newTot - newAtt) / (1 - (state.threshold / 100))));
+            bannerEl.className = "mt-1 mb-2.5 py-2 px-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-center text-[10px] font-black text-rose-400 uppercase tracking-wider relative z-10 flex items-center justify-center gap-2 shadow-sm";
+            bannerEl.innerHTML = `<i class="fas fa-arrow-up text-xs"></i><span>Attend next ${n}</span>`;
         }
     }
 }
@@ -5026,17 +5467,17 @@ function renderLeavePlannerImpact() {
         const afterNeed75 = newTot > 0 && newPct < 75 ? Math.max(1, Math.ceil(3 * newTot - 4 * newAtt)) : 0;
 
         const statusBadge = newPct >= 75
-            ? `<span class="text-[8.5px] font-black text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded border border-emerald-500/30">Safe (${afterSafe75}h left)</span>`
+            ? `<span class="text-[8.5px] font-black text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded border border-emerald-500/30">Safe (${afterSafe75}p left)</span>`
             : newPct >= 65
-            ? `<span class="text-[8.5px] font-black text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded border border-amber-500/30">Med Zone (Need ${afterNeed75}h)</span>`
-            : `<span class="text-[8.5px] font-black text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded border border-rose-500/30">&lt;65% Repeat Risk!</span>`;
+            ? `<span class="text-[8.5px] font-black text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded border border-amber-500/30">Med Zone (Need ${afterNeed75}p)</span>`
+            : `<span class="text-[8.5px] font-black text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded border border-rose-500/30">&lt;65% SA Redo Risk!</span>`;
 
         rowsHtml += `
         <div class="p-3 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between gap-2">
             <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5">
                     <span class="text-[9px] font-black text-indigo-300 uppercase">${code}</span>
-                    <span class="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-white/5 text-gray-300">${hrs} hr${hrs > 1 ? 's' : ''} on ${selectedDays.join('/')}</span>
+                    <span class="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-white/5 text-gray-300">${hrs} period${hrs > 1 ? 's' : ''} on ${selectedDays.join('/')}</span>
                 </div>
                 <h5 class="text-xs font-bold text-white truncate mt-0.5">${stats.name}</h5>
                 <div class="mt-1">${statusBadge}</div>
@@ -5064,66 +5505,162 @@ function renderLeavePlannerImpact() {
 // BULK ATTENDANCE & HISTORY
 
 
+function resolveManualEntryDateKey(entry) {
+    if (entry && entry.dateISO && /^\d{4}-\d{2}-\d{2}$/.test(entry.dateISO)) {
+        return entry.dateISO;
+    }
+    if (entry && entry.timestamp) {
+        const d = new Date(entry.timestamp);
+        if (!isNaN(d.getTime())) {
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+        }
+    }
+    if (entry && entry.time) {
+        const d = new Date(entry.time);
+        if (!isNaN(d.getTime())) {
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+        }
+    }
+    return 'Unknown Date';
+}
+
+function formatManualDateHeading(dateKey) {
+    if (!dateKey || dateKey === 'Unknown Date') return 'Tracked Date';
+    const d = new Date(dateKey + 'T00:00:00');
+    if (isNaN(d.getTime())) return dateKey;
+    return d.toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+    });
+}
+
+function extractEntryPeriodNumber(entry) {
+    if (entry && entry.period) return entry.period;
+    if (entry && entry.time) {
+        const m = String(entry.time).match(/Period\s*(\d+)/i);
+        if (m) return parseInt(m[1], 10);
+    }
+    return 1;
+}
+
+function clearAllManualHistory() {
+    if (!state.manual || state.manual.length === 0) {
+        showToast('No tracked history to delete', 'info');
+        return;
+    }
+    state.manual = [];
+    saveState();
+    renderSemesterHero();
+    renderWidgets();
+    renderSubjects();
+    initPlanner();
+    initManual();
+    showFullHistory();
+    showToast('Deleted all tracked history logs', 'success');
+}
+window.clearAllManualHistory = clearAllManualHistory;
+
+function deleteManualByDateKey(dateKey) {
+    if (!dateKey) return;
+    state.manual = state.manual.filter(entry => resolveManualEntryDateKey(entry) !== dateKey);
+    saveState();
+    renderSemesterHero();
+    renderWidgets();
+    renderSubjects();
+    initPlanner();
+    initManual();
+    showFullHistory();
+    showToast(`Deleted logs for ${formatManualDateHeading(dateKey)}`, 'success');
+}
+window.deleteManualByDateKey = deleteManualByDateKey;
+
 function showFullHistory() {
     const m = document.getElementById('history-modal'), p = document.getElementById('history-panel'),
         b = document.getElementById('history-backdrop'), c = document.getElementById('full-history-content'),
-        count = document.getElementById('history-count');
+        count = document.getElementById('history-count'),
+        delAllBtn = document.getElementById('history-delete-all-btn');
 
     if (!m || !c) return;
 
-    // Group by date
+    const bunkedList = state.manual.filter(entry => entry.status === 'Absent');
+
+    if (delAllBtn) {
+        if (bunkedList.length > 0) {
+            delAllBtn.classList.remove('hidden');
+        } else {
+            delAllBtn.classList.add('hidden');
+        }
+    }
+
+    // Group bunked classes by actual tracked class date (dateISO)
     const groups = {};
-    state.manual.forEach(entry => {
-        const date = new Date(entry.timestamp || entry.time).toLocaleDateString(undefined, {
-            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-        });
-        if (!groups[date]) groups[date] = [];
-        groups[date].push(entry);
+    bunkedList.forEach(entry => {
+        const dateKey = resolveManualEntryDateKey(entry);
+        if (!groups[dateKey]) groups[dateKey] = [];
+        groups[dateKey].push(entry);
     });
 
     let html = '';
-    const sortedDates = Object.keys(groups).sort((a, b) => new Date(b) - new Date(a));
+    const sortedDateKeys = Object.keys(groups).sort((a, b) => b.localeCompare(a));
 
-    if (sortedDates.length === 0) {
-        html = '<div class="text-center py-20 opacity-50"><div class="text-4xl mb-4">📜</div><p class="text-xs font-bold uppercase tracking-widest text-gray-500">No History Yet</p></div>';
+    if (sortedDateKeys.length === 0) {
+        html = '<div class="text-center py-16 opacity-60"><div class="text-4xl mb-3">📜</div><p class="text-xs font-bold uppercase tracking-widest text-gray-400">No Bunked Periods Yet</p><p class="text-[10px] text-gray-500 mt-1">Mark bunked periods in Smart Tracker to view them by date</p></div>';
     } else {
-        sortedDates.forEach(date => {
-            html += `<div class="mb-8">
-                <div class="flex items-center gap-3 mb-4">
-                    <div class="h-px flex-1 bg-white/5"></div>
-                    <p class="text-[9px] font-black text-gray-600 uppercase tracking-[0.2em] whitespace-nowrap">${date}</p>
-                    <div class="h-px flex-1 bg-white/5"></div>
-                </div>
-                <div class="space-y-3">`;
-            groups[date].forEach(m => {
-                const timeStr = new Date(m.timestamp || m.time).toLocaleTimeString(undefined, {
-                    hour: '2-digit', minute: '2-digit'
-                });
-                html += `<div class="p-4 rounded-[24px] bg-white/[0.03] border border-white/5 flex justify-between items-center group hover:bg-white/[0.06] transition-colors">
-                    <div class="flex items-center gap-4">
-                        <div class="w-10 h-10 rounded-2xl ${m.status === 'Present' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'} flex items-center justify-center text-sm">
-                            <i class="fas fa-${m.status === 'Present' ? 'check' : 'times'}"></i>
+        sortedDateKeys.forEach(dateKey => {
+            const dateHeading = formatManualDateHeading(dateKey);
+            const entriesForDate = groups[dateKey].slice().sort((a, b) => extractEntryPeriodNumber(a) - extractEntryPeriodNumber(b));
+            const bunkCount = entriesForDate.length;
+
+            html += `
+            <div class="rounded-[24px] bg-white/[0.03] border border-white/[0.08] p-3.5 space-y-2.5">
+                <div class="flex items-center justify-between gap-2 pb-2 border-b border-white/[0.06]">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <div class="w-7 h-7 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-300 text-[10px] shrink-0">
+                            <i class="fas fa-calendar-day"></i>
                         </div>
-                        <div class="max-w-[180px]">
-                            <p class="text-xs font-bold text-white truncate">${m.name}</p>
-                            <div class="flex items-center gap-2 mt-0.5">
-                                <span class="text-[9px] text-gray-500 uppercase font-black">${m.code}</span>
-                                <span class="w-0.5 h-0.5 rounded-full bg-gray-700"></span>
-                                <span class="text-[9px] text-gray-500 font-bold">${timeStr}</span>
-                            </div>
+                        <div class="min-w-0">
+                            <p class="text-xs font-black text-white truncate">${dateHeading}</p>
+                            <p class="text-[9px] font-bold text-rose-400">${bunkCount} ${bunkCount === 1 ? 'Period' : 'Periods'} Bunked</p>
                         </div>
                     </div>
-                    <button onclick="deleteManual(${m.id}); showFullHistory();" 
-                        class="w-10 h-10 flex items-center justify-center rounded-xl text-gray-600 hover:bg-rose-500/10 hover:text-rose-500 transition-all opacity-0 group-hover:opacity-100">
-                        <i class="fas fa-trash-alt text-xs"></i>
+                    <button type="button" onclick="deleteManualByDateKey('${dateKey}')" class="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-300 text-[8.5px] font-black uppercase tracking-wider shrink-0 active:scale-95 transition">
+                        Clear Date
                     </button>
-                </div>`;
+                </div>
+                <div class="space-y-2">`;
+
+            entriesForDate.forEach(m => {
+                const periodNum = extractEntryPeriodNumber(m);
+                html += `
+                    <div class="p-3 rounded-2xl bg-black/40 border border-white/[0.06] flex justify-between items-center gap-2.5">
+                        <div class="flex items-center gap-3 min-w-0 flex-1">
+                            <div class="px-2.5 py-1.5 rounded-xl bg-rose-500/15 text-rose-300 border border-rose-500/30 flex flex-col items-center justify-center shrink-0 min-w-[52px]">
+                                <span class="text-[8px] font-black uppercase tracking-wider opacity-80">Period</span>
+                                <span class="text-xs font-black leading-none mt-0.5 tabular-nums">${periodNum}</span>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-xs font-extrabold text-white truncate">${m.name}</p>
+                            </div>
+                        </div>
+                        <button type="button" onclick="deleteManual(${m.id}); showFullHistory();" 
+                            class="w-9 h-9 flex items-center justify-center rounded-xl bg-white/[0.05] text-gray-400 hover:bg-rose-500/20 hover:text-rose-400 active:scale-90 transition shrink-0" title="Delete Period">
+                            <i class="fas fa-trash-alt text-xs"></i>
+                        </button>
+                    </div>`;
             });
             html += `</div></div>`;
         });
     }
 
-    count.innerText = `${state.manual.length} Total Entries`;
+    count.innerText = `${bunkedList.length} Bunked ${bunkedList.length === 1 ? 'Period' : 'Periods'} • ${sortedDateKeys.length} ${sortedDateKeys.length === 1 ? 'Date' : 'Dates'}`;
     c.innerHTML = html;
 
     m.classList.remove('hidden');
@@ -5142,6 +5679,567 @@ function closeHistory() {
     b.classList.add('opacity-0');
     document.body.style.overflow = '';
     setTimeout(() => m.classList.add('hidden'), 300);
+}
+
+// ================================================================
+// BUNKAI — SMART GHOST AI ASSISTANT (Full eCampus Context)
+// ================================================================
+let bunkAiHistory = [];
+let bunkAiBusy = false;
+
+function getStudentDisplayNameAndRoll() {
+    const roll = (typeof state !== 'undefined' && state.rollNumber) || localStorage.getItem('bunker_roll') || 'Student';
+    let studentName = '';
+    try {
+        studentName = localStorage.getItem(`bunker_student_name_${roll}`) || localStorage.getItem('bunker_student_name') || '';
+    } catch {}
+    const info = parseStudentInfoFromRoll(roll);
+    return {
+        roll,
+        name: studentName,
+        displayGreeting: studentName ? `${studentName} (${roll})` : roll,
+        info
+    };
+}
+
+function parsePortalUpdateDate(rawStr) {
+    if (!rawStr || rawStr === '-' || rawStr === 'Unknown') return null;
+    const clean = String(rawStr).trim();
+    // Try DD-MM-YYYY or DD/MM/YYYY
+    const dmy = clean.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (dmy) {
+        const dt = new Date(parseInt(dmy[3], 10), parseInt(dmy[2], 10) - 1, parseInt(dmy[1], 10));
+        if (!isNaN(dt.getTime())) return dt;
+    }
+    const parsed = new Date(clean);
+    if (!isNaN(parsed.getTime())) {
+        return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+    }
+    return null;
+}
+
+function formatLocalDateKey(dateObj) {
+    if (!dateObj || !(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    }
+    const yyyy = dateObj.getFullYear();
+    const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const dd = String(dateObj.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+function buildBunkAiLiveContext() {
+    const { roll, name, info } = getStudentDisplayNameAndRoll();
+    const todayObj = getToday();
+    const todayNorm = new Date(todayObj.getFullYear(), todayObj.getMonth(), todayObj.getDate());
+    const todayISO = formatLocalDateKey(todayNorm);
+
+    const lastOfficialUpdateRaw = localStorage.getItem('bunker_last_update') || state.lastUpdatedDate || 'Unknown';
+    const lastUpdateDateObj = parsePortalUpdateDate(lastOfficialUpdateRaw);
+    const lastUpdateISO = lastUpdateDateObj ? formatLocalDateKey(lastUpdateDateObj) : null;
+
+    // Load previous stored attendance snapshot from phone if available
+    let previousStoredAttendance = [];
+    try {
+        const prevRaw = localStorage.getItem(`bunker_previous_attendance_${roll}`);
+        if (prevRaw) {
+            const parsedPrev = JSON.parse(prevRaw);
+            if (Array.isArray(parsedPrev)) {
+                previousStoredAttendance = parsedPrev.map(p => ({
+                    code: p.code,
+                    attended: p.attended,
+                    total: p.total,
+                    percentage: p.percentage
+                }));
+            }
+        }
+    } catch (e) {}
+
+    // Build holiday lookup map from Academic Calendar
+    const holidayMap = {};
+    if (ACADEMIC_DATA && Array.isArray(ACADEMIC_DATA.fullCalendar)) {
+        ACADEMIC_DATA.fullCalendar.forEach(ev => {
+            const dKey = String(ev.date || '').slice(0, 10);
+            if (dKey) holidayMap[dKey] = ev;
+        });
+    }
+
+    // Build manual tracker lookup by dateISO -> period
+    const manualByDate = {};
+    (state.manual || []).forEach(m => {
+        const dKey = resolveManualEntryDateKey(m);
+        const pNum = extractEntryPeriodNumber(m);
+        if (!manualByDate[dKey]) manualByDate[dKey] = [];
+        manualByDate[dKey].push({
+            period: pNum,
+            code: m.code,
+            name: m.name,
+            status: m.status === 'Present' ? 'Attended' : 'Bunked'
+        });
+    });
+
+    // Compute unlogged / gap working days schedule from (lastUpdateDateObj + 1 day) up to Today
+    const gapWorkingDaysSchedule = [];
+    const unloggedSubjectCounts = {}; // code -> count of unlogged scheduled periods between portal update and today
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    const gapStartDate = lastUpdateDateObj
+        ? new Date(lastUpdateDateObj.getFullYear(), lastUpdateDateObj.getMonth(), lastUpdateDateObj.getDate() + 1)
+        : new Date(todayNorm.getFullYear(), todayNorm.getMonth(), todayNorm.getDate() - 7);
+
+    // Cap gap scan to max 35 days so payload stays compact
+    const maxScanStart = new Date(todayNorm.getFullYear(), todayNorm.getMonth(), todayNorm.getDate() - 35);
+    const cursor = new Date(Math.max(gapStartDate.getTime(), maxScanStart.getTime()));
+
+    while (cursor <= todayNorm) {
+        const dISO = formatLocalDateKey(cursor);
+        const dow = cursor.getDay();
+        const dayName = dayNames[dow];
+        const calEv = holidayMap[dISO];
+        const isHoliday = dow === 0 || (calEv && calEv.type === 'holiday');
+
+        if (!isHoliday && state.timetable && Array.isArray(state.timetable[dayName])) {
+            const dayPeriods = state.timetable[dayName];
+            const loggedOnDate = manualByDate[dISO] || [];
+            const scheduledPeriods = [];
+
+            dayPeriods.forEach((code, idx) => {
+                if (!code || code === 'Free') return;
+                const pNum = idx + 1;
+                const sObj = (state.subjects || []).find(x => x.code === code);
+                const cname = sObj ? sObj.name : ((state.courseMapping && state.courseMapping[code]) || code);
+                const alreadyLogged = loggedOnDate.find(l => l.period === pNum || l.code === code);
+
+                if (!alreadyLogged) {
+                    unloggedSubjectCounts[code] = (unloggedSubjectCounts[code] || 0) + 1;
+                }
+
+                scheduledPeriods.push({
+                    period: pNum,
+                    code,
+                    name: cname,
+                    smartTrackerLog: alreadyLogged ? alreadyLogged.status : 'Not logged in Smart Tracker'
+                });
+            });
+
+            if (scheduledPeriods.length > 0) {
+                gapWorkingDaysSchedule.push({
+                    dateISO: dISO,
+                    dayName,
+                    label: cursor.toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'short' }),
+                    calendarEvent: calEv ? `${calEv.name} (${calEv.type})` : null,
+                    periods: scheduledPeriods
+                });
+            }
+        }
+        cursor.setDate(cursor.getDate() + 1);
+    }
+
+    // 1. Enriched Subjects & Safe Bunk Math + Up-To-Today Prediction
+    const subjectsList = (state.subjects || []).map(raw => {
+        const sub = getSubjectStats(raw.code) || {
+            code: raw.code,
+            name: raw.name,
+            att: raw.attended || 0,
+            tot: raw.total || 0,
+            pct: raw.percentage || 0
+        };
+        const safeBunks75 = sub.pct >= 75
+            ? Math.floor((sub.att - 0.75 * sub.tot) / 0.75)
+            : 0;
+        const mustAttendFor75 = sub.pct < 75
+            ? Math.max(1, Math.ceil((0.75 * sub.tot - sub.att) / 0.25))
+            : 0;
+        const safeBunks65 = sub.pct >= 65
+            ? Math.floor((sub.att - 0.65 * sub.tot) / 0.65)
+            : 0;
+        const mustAttendFor65 = sub.pct < 65
+            ? Math.max(1, Math.ceil((0.65 * sub.tot - sub.att) / 0.35))
+            : 0;
+
+        const unloggedGapPeriods = unloggedSubjectCounts[sub.code] || 0;
+        const predAttIfAllAttended = sub.att + unloggedGapPeriods;
+        const predTotUpToToday = sub.tot + unloggedGapPeriods;
+        const predPctIfAllAttended = predTotUpToToday > 0
+            ? Number(((predAttIfAllAttended / predTotUpToToday) * 100).toFixed(2))
+            : Number(sub.pct.toFixed(2));
+
+        return {
+            code: sub.code,
+            name: sub.name,
+            portalAttendedPeriods: raw.attended || 0,
+            portalTotalPeriods: raw.total || 0,
+            portalPercentage: Number((raw.percentage || 0).toFixed(2)),
+            currentTrackedAttended: sub.att,
+            currentTrackedTotal: sub.tot,
+            currentTrackedPercentage: Number(sub.pct.toFixed(2)),
+            status75: sub.pct >= 75 ? `Safe to bunk ${safeBunks75}` : `Attend next ${mustAttendFor75}`,
+            safeBunks75,
+            mustAttendFor75,
+            safeBunks65,
+            mustAttendFor65,
+            unloggedPeriodsSinceLastPortalUpdate: unloggedGapPeriods,
+            predictedUpToTodayIfUnloggedAttended: {
+                attended: predAttIfAllAttended,
+                total: predTotUpToToday,
+                percentage: predPctIfAllAttended
+            },
+            exemptionPeriods: raw.exemption || 0,
+            pctWithExemption: raw.pct_exemp,
+            pctWithMedical: raw.pct_medical
+        };
+    });
+
+    // 2. Weekly Timetable with Course Names
+    const readableTimetable = {};
+    if (state.timetable) {
+        Object.keys(state.timetable).forEach(day => {
+            const periods = state.timetable[day] || [];
+            readableTimetable[day] = periods.map((code, idx) => {
+                if (!code || code === 'Free') return `P${idx + 1}: Free`;
+                const s = state.subjects.find(x => x.code === code);
+                const cname = s ? s.name : (state.courseMapping && state.courseMapping[code]) || code;
+                return `P${idx + 1}: ${cname} (${code})`;
+            });
+        });
+    }
+
+    // 3. Internal CA Marks & 40:60 Pass Target
+    let internalsList = [];
+    if (state.academics && Array.isArray(state.academics.internals)) {
+        internalsList = state.academics.internals.map(item => {
+            const caTotal = parseFloat(item.total);
+            let minExamForPass = null;
+            if (!isNaN(caTotal) && !item.is_lab) {
+                const caCeil = Math.ceil(caTotal);
+                const neededFrom60 = Math.max(0, 50 - caCeil);
+                const rawExam = Math.ceil((neededFrom60 - 0.99) / 0.6);
+                minExamForPass = Math.max(45, rawExam);
+            }
+            return {
+                code: item.course_code,
+                name: item.course_name,
+                caTotal: isNaN(caTotal) ? item.total : caTotal,
+                maxCA: item.is_lab ? 50 : 40,
+                isLab: !!item.is_lab,
+                minFinalExamOutOf100ToPass: minExamForPass,
+                breakdown: item.row_data || []
+            };
+        });
+    }
+
+    // 4. Semester Results & CGPA
+    const resultsSummary = {};
+    if (state.academics && state.academics.cgpa) {
+        resultsSummary.cgpa = state.academics.cgpa.cgpa;
+        resultsSummary.totalCredits = state.academics.cgpa.total_credits;
+        resultsSummary.semesterSGPA = state.academics.cgpa.semester_gpa || [];
+    }
+    if (state.academics && state.academics.gpa) {
+        resultsSummary.latestSemGPA = state.academics.gpa.gpa;
+        resultsSummary.latestSemCourses = (state.academics.gpa.courses || []).map(c => ({
+            code: c.course_code || c.code,
+            name: c.course_name || c.title,
+            grade: c.grade,
+            credits: c.credits
+        }));
+    }
+
+    // 5. Academic Calendar Upcoming Events
+    const calEvents = (ACADEMIC_DATA && Array.isArray(ACADEMIC_DATA.fullCalendar))
+        ? ACADEMIC_DATA.fullCalendar.slice(0, 40).map(e => ({
+            date: String(e.date).slice(0, 10),
+            name: e.name,
+            type: e.type
+        }))
+        : [];
+
+    // 6. Manual Tracker Logs
+    const manualLogs = (state.manual || []).slice(0, 35).map(m => ({
+        date: resolveManualEntryDateKey(m),
+        period: extractEntryPeriodNumber(m),
+        code: m.code,
+        name: m.name,
+        status: m.status === 'Present' ? 'Attended' : 'Bunked'
+    }));
+
+    return {
+        today: todayObj.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+        todayISO,
+        lastOfficialPortalUpdateDate: lastOfficialUpdateRaw,
+        lastOfficialPortalUpdateISO: lastUpdateISO,
+        student: {
+            roll,
+            name,
+            displayBranch: info ? info.displayBranch : 'PSG College of Technology',
+            yearOfStudy: info ? info.yearOfStudy : '',
+            batch: info ? info.batch : '',
+            attendanceMode: state.attendanceMode || 'normal'
+        },
+        subjects: subjectsList,
+        previousStoredAttendance,
+        gapWorkingDaysSchedule,
+        timetable: readableTimetable,
+        manualTrackerLogs: manualLogs,
+        calendar: {
+            semesterName: ACADEMIC_DATA ? ACADEMIC_DATA.name : '',
+            startDate: ACADEMIC_DATA ? ACADEMIC_DATA.startDate : '',
+            lastDate: ACADEMIC_DATA ? ACADEMIC_DATA.lastDate : '',
+            events: calEvents
+        },
+        internals: internalsList,
+        results: resultsSummary
+    };
+}
+
+function openBunkAiPage() {
+    hydrateAcademicsFromPhoneCache();
+    const modal = document.getElementById('bunkai-modal');
+    if (!modal) return;
+
+    const { roll, name, info } = getStudentDisplayNameAndRoll();
+    const greetingTitle = document.getElementById('bunkai-greeting-title');
+    const greetingSub = document.getElementById('bunkai-greeting-sub');
+
+    if (greetingTitle) {
+        greetingTitle.textContent = `Hey, ${name ? `${name} (${roll})` : roll}! 👋`;
+    }
+    if (greetingSub) {
+        const branchText = info && info.displayBranch ? info.displayBranch : 'PSG College of Technology';
+        const subCount = (state.subjects || []).length;
+        greetingSub.textContent = `${branchText} • ${subCount > 0 ? `${subCount} Courses Synced` : 'eCampus Live Data Ready'}`;
+    }
+
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+
+    setTimeout(() => {
+        const input = document.getElementById('bunkai-input');
+        if (input && window.innerWidth > 640) input.focus();
+    }, 150);
+}
+window.openBunkAiPage = openBunkAiPage;
+
+function closeBunkAiPage() {
+    const modal = document.getElementById('bunkai-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+}
+window.closeBunkAiPage = closeBunkAiPage;
+
+function resetBunkAiChat() {
+    bunkAiHistory = [];
+    const msgs = document.getElementById('bunkai-messages');
+    if (msgs) msgs.innerHTML = '';
+    showToast('BunkAi chat reset');
+}
+window.resetBunkAiChat = resetBunkAiChat;
+
+function formatBunkAiMarkdown(rawText) {
+    if (!rawText) return '';
+    let safe = String(rawText)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    // Bold **text**
+    safe = safe.replace(/\*\*([^*]+)\*\*/g, '<strong class="text-white font-extrabold">$1</strong>');
+    // Inline code `code`
+    safe = safe.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-200 font-mono text-[10.5px] border border-indigo-500/30">$1</code>');
+
+    const lines = safe.split('\n');
+    const out = [];
+    let inList = false;
+
+    lines.forEach(line => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            if (inList) {
+                out.push('</ul>');
+                inList = false;
+            }
+            return;
+        }
+        if (/^###\s+(.+)/.test(trimmed)) {
+            if (inList) { out.push('</ul>'); inList = false; }
+            out.push(`<h4 class="text-xs font-black text-indigo-300 uppercase tracking-wider mt-3 mb-1">${trimmed.replace(/^###\s+/, '')}</h4>`);
+        } else if (/^##\s+(.+)/.test(trimmed)) {
+            if (inList) { out.push('</ul>'); inList = false; }
+            out.push(`<h3 class="text-xs sm:text-sm font-black text-white uppercase tracking-wide mt-3 mb-1">${trimmed.replace(/^##\s+/, '')}</h3>`);
+        } else if (/^[-*•]\s+(.+)/.test(trimmed)) {
+            if (!inList) {
+                out.push('<ul class="space-y-1.5 my-1.5 pl-1">');
+                inList = true;
+            }
+            const itemContent = trimmed.replace(/^[-*•]\s+/, '');
+            out.push(`<li class="flex items-start gap-2 text-xs text-gray-200 leading-relaxed"><span class="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 shrink-0"></span><span class="flex-1">${itemContent}</span></li>`);
+        } else {
+            if (inList) { out.push('</ul>'); inList = false; }
+            out.push(`<p class="text-xs text-gray-200 leading-relaxed my-1.5">${trimmed}</p>`);
+        }
+    });
+    if (inList) out.push('</ul>');
+    return out.join('');
+}
+
+function scrollBunkAiToBottom() {
+    const scroller = document.getElementById('bunkai-chat-scroll');
+    if (scroller) {
+        requestAnimationFrame(() => {
+            scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+        });
+    }
+}
+
+function sendBunkAiPrompt(promptText) {
+    const input = document.getElementById('bunkai-input');
+    if (input) input.value = promptText;
+    submitBunkAiMessage(promptText);
+}
+window.sendBunkAiPrompt = sendBunkAiPrompt;
+
+function handleBunkAiSubmit(e) {
+    if (e) e.preventDefault();
+    const input = document.getElementById('bunkai-input');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    submitBunkAiMessage(text);
+}
+window.handleBunkAiSubmit = handleBunkAiSubmit;
+
+async function submitBunkAiMessage(userText) {
+    if (bunkAiBusy || !userText) return;
+    bunkAiBusy = true;
+
+    const msgsContainer = document.getElementById('bunkai-messages');
+    const sendBtn = document.getElementById('bunkai-send-btn');
+    if (!msgsContainer) {
+        bunkAiBusy = false;
+        return;
+    }
+
+    // Append user bubble
+    const userBubble = document.createElement('div');
+    userBubble.className = 'flex justify-end';
+    userBubble.innerHTML = `
+        <div class="max-w-[84%] px-4 py-3 rounded-[22px] rounded-br-md bg-gradient-to-tr from-indigo-600 to-violet-600 text-white text-xs font-semibold leading-relaxed shadow-lg shadow-indigo-500/20">
+            ${userText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+        </div>
+    `;
+    msgsContainer.appendChild(userBubble);
+
+    // Append Ghost thinking bubble
+    const thinkingBubble = document.createElement('div');
+    thinkingBubble.className = 'flex items-start gap-2.5';
+    thinkingBubble.innerHTML = `
+        <div class="w-8 h-8 rounded-2xl bg-gradient-to-tr from-indigo-600 via-violet-500 to-cyan-400 flex items-center justify-center text-white text-xs shrink-0 shadow-md shadow-indigo-500/25 mt-0.5">
+            <i class="fas fa-ghost animate-bounce"></i>
+        </div>
+        <div class="px-4 py-3 rounded-[22px] rounded-tl-md bg-white/[0.05] border border-white/10 flex items-center gap-2 text-xs text-indigo-200 font-bold">
+            <span>BunkAi is checking your eCampus data</span>
+            <span class="inline-flex gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping"></span>
+            </span>
+        </div>
+    `;
+    msgsContainer.appendChild(thinkingBubble);
+    scrollBunkAiToBottom();
+
+    if (sendBtn) sendBtn.disabled = true;
+
+    const HIGH_TRAFFIC_FALLBACK = 'Due to high traffic in Bunker, we facing some issue so please try later.';
+
+    try {
+        let contextPayload = {};
+        try {
+            contextPayload = buildBunkAiLiveContext();
+        } catch (ctxErr) {
+            console.warn('BunkAi context fallback:', ctxErr);
+            const { roll, name, info } = getStudentDisplayNameAndRoll();
+            contextPayload = {
+                today: new Date().toDateString(),
+                student: { roll, name, displayBranch: info ? info.displayBranch : 'PSG College of Technology' },
+                subjects: (typeof state !== 'undefined' && state.subjects) || [],
+                timetable: (typeof state !== 'undefined' && state.timetable) || {}
+            };
+        }
+        const res = await fetch('/api/bunkai', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: userText,
+                history: bunkAiHistory,
+                context: contextPayload
+            })
+        });
+
+        let data = null;
+        try {
+            data = await res.json();
+        } catch {
+            data = null;
+        }
+
+        thinkingBubble.remove();
+
+        if (!res.ok || !data || !data.success || !data.reply) {
+            const errBubble = document.createElement('div');
+            errBubble.className = 'flex items-start gap-2.5';
+            errBubble.innerHTML = `
+                <div class="w-8 h-8 rounded-2xl bg-amber-500/20 border border-amber-500/35 flex items-center justify-center text-amber-300 text-xs shrink-0 mt-0.5">
+                    <i class="fas fa-ghost"></i>
+                </div>
+                <div class="flex-1 p-3.5 rounded-[22px] rounded-tl-md bg-amber-500/12 border border-amber-500/30 text-amber-200 text-xs font-bold leading-relaxed">
+                    <div class="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-amber-300 mb-1">
+                        <i class="fas fa-bolt"></i>
+                        <span>High Traffic Notice</span>
+                    </div>
+                    <p>${HIGH_TRAFFIC_FALLBACK}</p>
+                </div>
+            `;
+            msgsContainer.appendChild(errBubble);
+        } else {
+            bunkAiHistory.push({ role: 'user', text: userText });
+            bunkAiHistory.push({ role: 'model', text: data.reply });
+
+            const aiBubble = document.createElement('div');
+            aiBubble.className = 'flex items-start gap-2.5';
+            aiBubble.innerHTML = `
+                <div class="w-8 h-8 rounded-2xl bg-gradient-to-tr from-indigo-600 via-violet-500 to-cyan-400 flex items-center justify-center text-white text-xs shrink-0 shadow-md shadow-indigo-500/25 mt-0.5">
+                    <i class="fas fa-ghost"></i>
+                </div>
+                <div class="flex-1 p-4 rounded-[24px] rounded-tl-md bg-white/[0.05] border border-white/10 shadow-xl overflow-hidden">
+                    ${formatBunkAiMarkdown(data.reply)}
+                </div>
+            `;
+            msgsContainer.appendChild(aiBubble);
+        }
+    } catch (err) {
+        thinkingBubble.remove();
+        const errBubble = document.createElement('div');
+        errBubble.className = 'flex items-start gap-2.5';
+        errBubble.innerHTML = `
+            <div class="w-8 h-8 rounded-2xl bg-amber-500/20 border border-amber-500/35 flex items-center justify-center text-amber-300 text-xs shrink-0 mt-0.5">
+                <i class="fas fa-ghost"></i>
+            </div>
+            <div class="flex-1 p-3.5 rounded-[22px] rounded-tl-md bg-amber-500/12 border border-amber-500/30 text-amber-200 text-xs font-bold leading-relaxed">
+                <div class="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-amber-300 mb-1">
+                    <i class="fas fa-bolt"></i>
+                    <span>High Traffic Notice</span>
+                </div>
+                <p>${HIGH_TRAFFIC_FALLBACK}</p>
+            </div>
+        `;
+        msgsContainer.appendChild(errBubble);
+    } finally {
+        bunkAiBusy = false;
+        if (sendBtn) sendBtn.disabled = false;
+        scrollBunkAiToBottom();
+    }
 }
 
 // ================================================================
@@ -5258,49 +6356,88 @@ function toggleOtherFeedbackPw() {
     if (icon) icon.className = isPw ? 'fas fa-eye-slash' : 'fas fa-eye';
 }
 
-async function submitFeedbackCore(rollno, password, mode, btn) {
+async function submitFeedbackCore(rollno, password, mode, btn, ratingStyle = 'max') {
     const originalBtnHTML = btn ? btn.innerHTML : '';
     const statusBox = document.getElementById('feedback-status-box');
     const statusText = document.getElementById('feedback-status-text');
 
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i><span>Submitting 5-Star Ratings...</span>';
+        btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i><span>Submitting &amp; Verifying...</span>';
     }
 
     if (statusBox && statusText) {
         statusBox.className = 'mt-4 p-4 rounded-2xl border text-xs leading-relaxed border-purple-500/30 bg-purple-500/10 text-purple-200';
         statusBox.classList.remove('hidden');
-        statusText.innerHTML = `<div class="flex items-center gap-2"><i class="fas fa-circle-notch fa-spin text-purple-400"></i><span>Authenticating ${rollno} &amp; auto-evaluating courses...</span></div>`;
+        statusText.innerHTML = `<div class="flex items-center gap-2"><i class="fas fa-circle-notch fa-spin text-purple-400"></i><span>Authenticating ${rollno} &amp; evaluating Intermediate + End-Sem courses...</span></div>`;
     }
 
     const startTime = Date.now();
+    const MAX_PASSES = 3; // Automatic continuation if Studzone is slow on Vercel Hobby (10s maxDuration)
+    let pass = 0;
+    let totalCompleted = 0;
+    let finalData = null;
+    let finalOk = false;
 
     try {
-        const sessionToken = localStorage.getItem('bunker_session_token') || '';
-        const res = await fetch('/api/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ rollno, password, mode, rating_style: 'max', session_token: sessionToken })
-        });
+        while (pass < MAX_PASSES) {
+            pass++;
+            const sessionToken = localStorage.getItem('bunker_session_token') || '';
+            const res = await fetch('/api/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    rollno,
+                    password,
+                    mode: mode || 'auto',
+                    rating_style: ratingStyle || 'max',
+                    session_token: sessionToken
+                })
+            });
 
-        const data = await res.json();
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            const data = await res.json();
+            finalData = data;
+            finalOk = res.ok;
 
-        if (data.session_token) {
-            localStorage.setItem('bunker_session_token', data.session_token);
+            if (data.session_token) {
+                localStorage.setItem('bunker_session_token', data.session_token);
+            }
+
+            if (!res.ok || !data.success) {
+                break;
+            }
+
+            totalCompleted += Number(data.completed_count || 0);
+
+            if (data.partial && Number(data.remaining_count || 0) > 0 && pass < MAX_PASSES) {
+                if (statusBox && statusText) {
+                    statusText.innerHTML = `<div class="flex items-center gap-2"><i class="fas fa-circle-notch fa-spin text-purple-400"></i><span>Batch ${pass} complete (${totalCompleted} courses saved). Finishing remaining ${data.remaining_count} course(s)...</span></div>`;
+                }
+                continue;
+            }
+            break;
         }
 
-        if (res.ok && data.success) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        if (finalOk && finalData && finalData.success) {
+            const isSelf = (typeof state !== 'undefined' && state.rollNumber && state.rollNumber.toUpperCase() === rollno.toUpperCase());
             try {
                 sessionStorage.setItem(`bunker_fb_checked_${rollno}`, JSON.stringify({ ts: Date.now(), has_pending: false, completed: true }));
                 sessionStorage.setItem(`bunker_fb_dismissed_${rollno}`, '1');
             } catch {}
+            if (isSelf) {
+                const autoBanner = document.getElementById('feedback-auto-banner');
+                if (autoBanner) autoBanner.classList.add('hidden');
+            }
+            const summaryMsg = pass > 1 && totalCompleted > 0
+                ? `All ${totalCompleted} course evaluations verified &amp; completed across ${pass} passes.`
+                : (finalData.message || 'Feedback submitted and verified!');
             if (statusBox && statusText) {
                 statusBox.className = 'mt-4 p-4 rounded-2xl border text-xs leading-relaxed border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
-                statusText.innerHTML = `<div class="flex items-start gap-2.5"><i class="fas fa-check-circle text-emerald-400 text-sm mt-0.5 shrink-0"></i><div><b class="text-emerald-300">Success for ${rollno} (${elapsed}s)!</b><div class="mt-1 text-[11px] leading-normal opacity-90">${data.message || 'Feedback submitted successfully!'}</div></div></div>`;
+                statusText.innerHTML = `<div class="flex items-start gap-2.5"><i class="fas fa-check-circle text-emerald-400 text-sm mt-0.5 shrink-0"></i><div><b class="text-emerald-300">Success for ${rollno} (${elapsed}s)!</b><div class="mt-1 text-[11px] leading-normal opacity-90">${summaryMsg}</div></div></div>`;
             }
-            showToast(`🎉 Feedback submitted for ${rollno}!`, 'success');
+            showToast(`🎉 Feedback verified & submitted for ${rollno}!`, 'success');
             if (typeof confetti === 'function') {
                 confetti({
                     particleCount: 110,
@@ -5309,11 +6446,12 @@ async function submitFeedbackCore(rollno, password, mode, btn) {
                 });
             }
         } else {
+            const errMsg = (finalData && finalData.error) ? finalData.error : 'Server rejected submission';
             if (statusBox && statusText) {
                 statusBox.className = 'mt-4 p-4 rounded-2xl border text-xs leading-relaxed border-rose-500/30 bg-rose-500/10 text-rose-200';
-                statusText.innerHTML = `<div class="flex items-start gap-2.5"><i class="fas fa-exclamation-triangle text-rose-400 text-sm mt-0.5 shrink-0"></i><div><b class="text-rose-300">Submission Failed:</b><div class="mt-1 text-[11px] leading-normal opacity-90">${data.error || 'Server rejected submission'}</div></div></div>`;
+                statusText.innerHTML = `<div class="flex items-start gap-2.5"><i class="fas fa-exclamation-triangle text-rose-400 text-sm mt-0.5 shrink-0"></i><div><b class="text-rose-300">Submission Failed:</b><div class="mt-1 text-[11px] leading-normal opacity-90">${errMsg}</div></div></div>`;
             }
-            showToast(data.error || 'Feedback submission failed', 'error');
+            showToast(errMsg, 'error');
         }
     } catch (err) {
         if (statusBox && statusText) {
@@ -5355,27 +6493,34 @@ async function executeCurrentFeedback() {
         return;
     }
 
+    const typeEl = document.getElementById('feedback-self-type');
+    const ratingEl = document.getElementById('feedback-self-rating');
+    const mode = typeEl ? typeEl.value : 'auto';
+    const ratingStyle = ratingEl ? ratingEl.value : '5';
+
     const btn = document.getElementById('feedback-confirm-btn');
-    await submitFeedbackCore(roll, password, 'auto', btn);
+    await submitFeedbackCore(roll, password, mode, btn, ratingStyle);
 }
 
 async function executeOtherFeedback(e) {
     if (e) e.preventDefault();
     const rollEl = document.getElementById('feedback-other-roll');
     const pwEl = document.getElementById('feedback-other-password');
-    const modeEl = document.getElementById('feedback-other-mode');
+    const typeEl = document.getElementById('feedback-other-type');
+    const ratingEl = document.getElementById('feedback-other-mode');
     const btn = document.getElementById('feedback-other-submit-btn');
 
     const rollno = rollEl ? rollEl.value.trim().toUpperCase() : '';
     const password = pwEl ? pwEl.value.trim() : '';
-    const mode = modeEl ? modeEl.value : 'auto';
+    const mode = typeEl ? typeEl.value : 'auto';
+    const ratingStyle = ratingEl ? ratingEl.value : '5';
 
     if (!rollno || !password) {
         showToast('Roll number & password are required', 'error');
         return;
     }
 
-    await submitFeedbackCore(rollno, password, mode, btn);
+    await submitFeedbackCore(rollno, password, mode, btn, ratingStyle);
 }
 
 // Background check with 24-hour phone cooldown to preserve Vercel quota
@@ -5400,6 +6545,7 @@ window.openFeedbackModal = openFeedbackModal;
 window.closeFeedbackModal = closeFeedbackModal;
 window.switchFeedbackMode = switchFeedbackMode;
 window.toggleOtherFeedbackPw = toggleOtherFeedbackPw;
+window.toggleOtherFeedbackPassword = toggleOtherFeedbackPw;
 window.executeCurrentFeedback = executeCurrentFeedback;
 window.executeOtherFeedback = executeOtherFeedback;
 window.checkPendingFeedbackInBackground = checkPendingFeedbackInBackground;
@@ -5526,11 +6672,11 @@ function computeSubjectDifferences(oldSubs, curSubs) {
                 badgeText = `+${totDelta} Missed`;
                 badgeClass = 'bg-rose-500/20 text-rose-300 border border-rose-500/30';
             } else {
-                badgeText = `+${attDelta} / +${totDelta} Classes`;
+                badgeText = `+${attDelta} / +${totDelta} Periods`;
                 badgeClass = 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
             }
         } else if (attDelta !== 0) {
-            badgeText = attDelta > 0 ? `+${attDelta} Attended` : `${attDelta} Classes`;
+            badgeText = attDelta > 0 ? `+${attDelta} Attended` : `${attDelta} Periods`;
             badgeClass = attDelta > 0 
                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
                 : 'bg-rose-500/20 text-rose-300 border border-rose-500/30';
@@ -5581,10 +6727,10 @@ function extractAttendanceDayKey(dStr) {
 }
 
 function isSameAttendanceDate(date1, date2) {
-    if (!date1 || !date2) return true;
+    if (!date1 || !date2) return false;
     const key1 = extractAttendanceDayKey(date1);
     const key2 = extractAttendanceDayKey(date2);
-    if (!key1 || !key2) return true;
+    if (!key1 || !key2) return String(date1).trim() === String(date2).trim();
     return key1 === key2;
 }
 
@@ -5615,8 +6761,8 @@ function getAttendanceComparisonData(roll) {
             hasComparison: true,
             isSameDate: false,
             isDemo: true,
-            oldDate: '16 Sep 2026, 04:30 PM',
-            currentDate: '18 Sep 2026, 05:45 PM',
+            oldDate: '16 Sep 2026',
+            currentDate: '18 Sep 2026',
             oldSubjects: oldSubs,
             currentSubjects: curSubs,
             differences: computeSubjectDifferences(oldSubs, curSubs)
@@ -5630,8 +6776,8 @@ function getAttendanceComparisonData(roll) {
 
     let curSubs = [];
     let oldSubs = [];
-    let curDate = localStorage.getItem(curDateKey) || localStorage.getItem('bunker_last_update') || 'Not recorded';
-    let oldDate = localStorage.getItem(oldDateKey) || localStorage.getItem(`bunker_previous_update_${roll}`) || null;
+    let curDate = localStorage.getItem(curDateKey) || localStorage.getItem('bunker_last_update') || localStorage.getItem(`bunker_previous_update_${roll}`) || '--';
+    let oldDate = localStorage.getItem(oldDateKey) || null;
 
     try {
         curSubs = JSON.parse(localStorage.getItem(curKey) || 'null') || (state && state.subjects) || [];
@@ -5651,11 +6797,10 @@ function getAttendanceComparisonData(roll) {
         } catch {}
     }
 
-    // 2. Fallback to older snapshot keys or previous attendance from server
+    // 2. Fallback to older snapshot keys
     if (!oldSubs || oldSubs.length === 0) {
         try {
-            oldSubs = JSON.parse(localStorage.getItem(oldKey) || 'null') ||
-                      JSON.parse(localStorage.getItem(`bunker_previous_attendance_${roll}`) || 'null') || [];
+            oldSubs = JSON.parse(localStorage.getItem(oldKey) || 'null') || [];
         } catch {
             oldSubs = [];
         }
@@ -5664,14 +6809,28 @@ function getAttendanceComparisonData(roll) {
     curSubs = Array.isArray(curSubs) ? curSubs : [];
     oldSubs = Array.isArray(oldSubs) ? oldSubs : [];
 
-    const isSameDate = (!oldDate || oldSubs.length === 0 || isSameAttendanceDate(oldDate, curDate));
-    const hasComparison = !isSameDate && oldSubs.length > 0 && curSubs.length > 0;
+    // Resolve full subject names if any subject only has course code
+    const resolveSubName = (s) => {
+        if (!s) return 'Subject';
+        if (s.name && s.name !== s.code) return s.name;
+        const code = s.code;
+        return (state.courseMapping && state.courseMapping[code]) ||
+            (Array.isArray(state.academics?.internals) && state.academics.internals.find(x => x.course_code === code)?.course_name) ||
+            s.name || code || 'Subject';
+    };
+    curSubs = curSubs.map(s => ({ ...s, name: resolveSubName(s) }));
+    oldSubs = oldSubs.map(s => ({ ...s, name: resolveSubName(s) }));
+
+    const hasSubjectDiff = oldSubs.length > 0 && curSubs.length > 0 && checkAttendanceDifference(oldSubs, curSubs);
+    const hasDifferentDates = Boolean(oldDate && curDate && !isSameAttendanceDate(oldDate, curDate));
+    const hasComparison = oldSubs.length > 0 && curSubs.length > 0 && (hasSubjectDiff || hasDifferentDates);
+    const isSameDate = !hasComparison;
 
     return {
         hasComparison,
         isSameDate,
         isDemo: false,
-        oldDate: isSameDate ? 'No old attendance stored' : (oldDate || 'Previous Update'),
+        oldDate: hasComparison ? (oldDate || 'Previous') : 'Old attendance is not available',
         currentDate: curDate,
         oldSubjects: oldSubs,
         currentSubjects: curSubs,
@@ -5682,7 +6841,6 @@ function getAttendanceComparisonData(roll) {
 function renderAttendanceComparisonCard() {
     const card = document.getElementById('others-attendance-compare-card') || document.getElementById('settings-attendance-compare-card');
     const badge = document.getElementById('compare-change-badge');
-    const preview = document.getElementById('compare-dates-preview');
     if (!card) return;
 
     const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
@@ -5690,7 +6848,7 @@ function renderAttendanceComparisonCard() {
 
     const data = getAttendanceComparisonData(roll);
 
-    if (data.hasComparison && !data.isSameDate) {
+    if (data.hasComparison) {
         const changesCount = data.differences.filter(d => d.hasChanged).length;
         if (badge) {
             badge.classList.remove('hidden');
@@ -5702,17 +6860,11 @@ function renderAttendanceComparisonCard() {
                 badge.textContent = 'SYNCED';
             }
         }
-        if (preview) {
-            preview.innerHTML = `Old: <span class="text-amber-300 font-bold">${data.oldDate}</span> &bull; Now: <span class="text-emerald-300 font-bold">${data.currentDate}</span>`;
-        }
     } else {
         if (badge) {
             badge.classList.remove('hidden');
             badge.className = 'text-[9.5px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-[#362514] text-[#fde68a] border border-[#78481a] shrink-0';
             badge.textContent = 'CURRENT ONLY';
-        }
-        if (preview) {
-            preview.innerHTML = `<span class="text-amber-300/90 font-medium">No old attendance of yours stored</span>`;
         }
     }
 }
@@ -5725,152 +6877,77 @@ function openAttendanceComparisonModal() {
 
     const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
     const data = getAttendanceComparisonData(roll);
-
-    // Populate dates
-    const oldDateEl = document.getElementById('compare-old-date');
-    const curDateEl = document.getElementById('compare-current-date');
-    if (oldDateEl) {
-        if (data.isSameDate) {
-            oldDateEl.innerHTML = `<span class="text-amber-300/90 font-medium text-[11px]">No old attendance stored</span>`;
-        } else {
-            oldDateEl.textContent = data.oldDate || 'Previous Update';
-        }
-    }
-    if (curDateEl) curDateEl.textContent = data.currentDate || 'Latest Log';
-
-    // Overall stats & elements
-    const currentOnlyBanner = document.getElementById('compare-current-only-banner');
-    const overallBanner = document.getElementById('compare-overall-banner');
-    const overallText = document.getElementById('compare-overall-text');
-    const overallChip = document.getElementById('compare-overall-chip');
     const listEl = document.getElementById('compare-subjects-list');
-    const emptyEl = document.getElementById('compare-empty-note');
 
-    if (data.hasComparison && !data.isSameDate && data.differences.length > 0) {
-        if (currentOnlyBanner) currentOnlyBanner.classList.add('hidden');
-        if (emptyEl) emptyEl.classList.add('hidden');
-        if (listEl) listEl.classList.remove('hidden');
-        if (overallBanner) overallBanner.classList.remove('hidden');
-
-        let oldTotAtt = 0, oldTotHrs = 0;
-        let curTotAtt = 0, curTotHrs = 0;
-
-        data.differences.forEach(d => {
-            oldTotAtt += d.oldAttended;
-            oldTotHrs += d.oldTotal;
-            curTotAtt += d.curAttended;
-            curTotHrs += d.curTotal;
-        });
-
-        const oldOverallPct = oldTotHrs > 0 ? ((oldTotAtt / oldTotHrs) * 100).toFixed(1) : '0.0';
-        const curOverallPct = curTotHrs > 0 ? ((curTotAtt / curTotHrs) * 100).toFixed(1) : '0.0';
-        const overallPctDelta = (parseFloat(curOverallPct) - parseFloat(oldOverallPct)).toFixed(1);
-
-        if (overallText) {
-            overallText.innerHTML = `<span class="text-gray-400 font-bold">${oldTotAtt}/${oldTotHrs} (${oldOverallPct}%)</span> <span class="text-gray-500 font-bold mx-1">&rarr;</span> <span class="text-white font-black">${curTotAtt}/${curTotHrs} (${curOverallPct}%)</span>`;
-        }
-        if (overallChip) {
-            const num = parseFloat(overallPctDelta);
-            if (num > 0) {
-                overallChip.className = 'px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
-                overallChip.innerHTML = `<i class="fas fa-arrow-up mr-1 text-[10px]"></i>+${overallPctDelta}%`;
-            } else if (num < 0) {
-                overallChip.className = 'px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30';
-                overallChip.innerHTML = `<i class="fas fa-arrow-down mr-1 text-[10px]"></i>${overallPctDelta}%`;
-            } else {
-                overallChip.className = 'px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-white/10 text-gray-300 border border-white/10';
-                overallChip.innerHTML = `No Change`;
-            }
-        }
-
-        // Render subject comparison cards
-        if (listEl) {
+    if (listEl) {
+        if (data.hasComparison && data.differences.length > 0) {
             listEl.innerHTML = data.differences.map(s => {
-                const isHigher = parseFloat(s.curPct) >= 75;
-                const pctColor = isHigher ? 'text-emerald-400' : 'text-rose-400';
+                const curOk = parseFloat(s.curPct) >= 75;
+                const oldOk = parseFloat(s.oldPct) >= 75;
                 return `
-                <div class="p-4 rounded-2xl bg-white/5 border ${s.hasChanged ? 'border-indigo-500/30 bg-indigo-500/5' : 'border-white/10'} transition-all space-y-2.5">
-                    <div class="flex items-start justify-between gap-2">
-                        <div class="min-w-0">
-                            <div class="text-xs font-black text-white tracking-tight truncate">${s.name}</div>
-                            <div class="text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-0.5">${s.code}</div>
-                        </div>
-                        <span class="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider shrink-0 ${s.badgeClass}">
-                            ${s.badgeText}
-                        </span>
-                    </div>
-
-                    <div class="grid grid-cols-2 gap-2 pt-2 border-t border-white/5 text-xs">
-                        <div class="bg-black/30 p-2.5 rounded-xl border border-white/5">
-                            <div class="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">Before</div>
-                            <div class="font-black text-gray-300 text-sm">
-                                ${s.oldAttended} <span class="text-gray-500 font-bold text-xs">/ ${s.oldTotal}</span>
+                <div class="p-3.5 rounded-2xl border border-sky-500/25 space-y-2.5" style="background: linear-gradient(145deg, rgba(14,165,233,0.16) 0%, rgba(99,102,241,0.08) 55%, rgba(14,13,26,0.95) 100%);">
+                    <h4 class="text-xs font-extrabold text-white truncate">${s.name}</h4>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="p-2.5 rounded-xl bg-black/45 border border-white/10 flex flex-col justify-between">
+                            <div class="flex items-center justify-between gap-1">
+                                <span class="text-[9px] font-bold text-gray-400 uppercase">Old</span>
+                                <span class="text-[9px] font-medium text-amber-300/90 truncate">${data.oldDate}</span>
                             </div>
-                            <div class="text-[10px] text-gray-400 font-bold mt-0.5">${s.oldPct}%</div>
-                        </div>
-                        <div class="bg-black/30 p-2.5 rounded-xl border border-white/5">
-                            <div class="text-[9px] font-bold text-indigo-300 uppercase tracking-wider mb-1">Now</div>
-                            <div class="font-black text-white text-sm">
-                                ${s.curAttended} <span class="text-gray-400 font-bold text-xs">/ ${s.curTotal}</span>
+                            <div class="mt-1 flex items-baseline justify-between">
+                                <span class="text-sm font-black ${oldOk ? 'text-gray-200' : 'text-rose-300'} tabular-nums">${s.oldPct}%</span>
+                                <span class="text-[10px] font-bold text-gray-500 tabular-nums">${s.oldAttended}/${s.oldTotal}</span>
                             </div>
-                            <div class="text-[10px] font-bold mt-0.5 ${pctColor}">${s.curPct}% <span class="text-gray-500 font-normal">(${s.pctDelta >= 0 ? '+' : ''}${s.pctDelta}%)</span></div>
+                        </div>
+                        <div class="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/25 flex flex-col justify-between">
+                            <div class="flex items-center justify-between gap-1">
+                                <span class="text-[9px] font-bold text-indigo-300 uppercase">Current</span>
+                                <span class="text-[9px] font-medium text-emerald-300/90 truncate">${data.currentDate}</span>
+                            </div>
+                            <div class="mt-1 flex items-baseline justify-between">
+                                <span class="text-sm font-black ${curOk ? 'text-emerald-400' : 'text-rose-400'} tabular-nums">${s.curPct}%</span>
+                                <span class="text-[10px] font-bold text-gray-400 tabular-nums">${s.curAttended}/${s.curTotal}</span>
+                            </div>
                         </div>
                     </div>
                 </div>`;
             }).join('');
-        }
-    } else {
-        // Same date or no old attendance stored: Show ONLY current attendance available
-        if (currentOnlyBanner) currentOnlyBanner.classList.remove('hidden');
-        if (overallBanner) overallBanner.classList.add('hidden');
-        if (emptyEl) emptyEl.classList.add('hidden');
+        } else {
+            const curSubs = (data.currentSubjects && data.currentSubjects.length > 0)
+                ? data.currentSubjects
+                : ((state && state.subjects) || []);
 
-        const curSubs = (data.currentSubjects && data.currentSubjects.length > 0) 
-            ? data.currentSubjects 
-            : ((state && state.subjects) || []);
-
-        if (listEl) {
             if (curSubs.length > 0) {
-                listEl.classList.remove('hidden');
-                listEl.innerHTML = `
-                <div class="text-[10px] font-black uppercase tracking-widest text-gray-400 px-1 mb-1">Current Attendance Only (${curSubs.length} Subjects)</div>
-                ` + curSubs.map(s => {
+                listEl.innerHTML = curSubs.map(s => {
                     const att = Number(s.attended || 0);
                     const tot = Number(s.total || 0);
-                    const pct = (s.percentage !== undefined && s.percentage !== null) 
-                        ? parseFloat(s.percentage).toFixed(1) 
+                    const pct = (s.percentage !== undefined && s.percentage !== null)
+                        ? parseFloat(s.percentage).toFixed(1)
                         : (tot > 0 ? ((att / tot) * 100).toFixed(1) : '0.0');
-                    const isEligible = parseFloat(pct) >= 75.0;
-                    const badgeClass = isEligible 
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
-                        : 'bg-rose-500/20 text-rose-300 border border-rose-500/30';
-                    const pctColor = isEligible ? 'text-emerald-400' : 'text-rose-400';
+                    const curOk = parseFloat(pct) >= 75.0;
 
                     return `
-                    <div class="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5">
-                        <div class="flex items-start justify-between gap-2">
-                            <div class="min-w-0">
-                                <div class="text-xs font-black text-white tracking-tight truncate">${s.name || s.code || 'Subject'}</div>
-                                <div class="text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-0.5">${s.code || ''}</div>
+                    <div class="p-3.5 rounded-2xl border border-sky-500/25 space-y-2.5" style="background: linear-gradient(145deg, rgba(14,165,233,0.16) 0%, rgba(99,102,241,0.08) 55%, rgba(14,13,26,0.95) 100%);">
+                        <h4 class="text-xs font-extrabold text-white truncate">${s.name || s.code || 'Subject'}</h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="p-2.5 rounded-xl bg-black/45 border border-white/10 flex flex-col justify-between">
+                                <span class="text-[9px] font-bold text-gray-400 uppercase">Old</span>
+                                <span class="text-[10.5px] font-bold text-amber-300/90 mt-1 leading-tight">Old attendance is not available</span>
                             </div>
-                            <span class="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider shrink-0 ${badgeClass}">
-                                ${pct}%
-                            </span>
-                        </div>
-                        <div class="p-2.5 rounded-xl bg-black/30 border border-white/5 flex items-center justify-between text-xs">
-                            <div class="text-[11px] font-bold text-gray-400">
-                                Current Attended Hours
-                            </div>
-                            <div class="font-black text-white text-sm">
-                                ${att} <span class="text-gray-400 font-bold text-xs">/ ${tot} hrs</span>
-                                <span class="ml-2 font-black ${pctColor}">(${pct}%)</span>
+                            <div class="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/25 flex flex-col justify-between">
+                                <div class="flex items-center justify-between gap-1">
+                                    <span class="text-[9px] font-bold text-indigo-300 uppercase">Current</span>
+                                    <span class="text-[9px] font-medium text-emerald-300/90 truncate">${data.currentDate}</span>
+                                </div>
+                                <div class="mt-1 flex items-baseline justify-between">
+                                    <span class="text-sm font-black ${curOk ? 'text-emerald-400' : 'text-rose-400'} tabular-nums">${pct}%</span>
+                                    <span class="text-[10px] font-bold text-gray-400 tabular-nums">${att}/${tot}</span>
+                                </div>
                             </div>
                         </div>
                     </div>`;
                 }).join('');
             } else {
-                listEl.classList.add('hidden');
-                if (emptyEl) emptyEl.classList.remove('hidden');
+                listEl.innerHTML = `<div class="p-6 text-center text-xs font-bold text-gray-400">Old attendance is not available</div>`;
             }
         }
     }
@@ -5935,6 +7012,118 @@ function switchAcadTab(tab) {
     openOthersSubView(tab);
 }
 
+// Normalize & recompute semester SGPA / CGPA using official PSG College of Technology 2023 Regulation Grade Certificates:
+// O = 10, A+ = 9, A = 8, B+ = 7, B = 6.5, C+ = 6, C = 5, RA/U/W/SA/WD = 0, Completed = Non-CGPA
+function normalizePsgResultsData(gpaData) {
+    if (!gpaData || typeof gpaData !== 'object') return gpaData;
+    const gMap = { S: 10, O: 10, 'A+': 9, A: 8, 'B+': 7, B: 6.5, 'C+': 6, C: 5, D: 6, E: 5, P: 5, RA: 0, U: 0, W: 0, SA: 0, WD: 0 };
+    const parseCr = (v) => {
+        const n = parseFloat(String(v ?? '').trim());
+        return Number.isFinite(n) && n > 0 ? n : 0;
+    };
+    const subs = Array.isArray(gpaData.all_subjects) ? gpaData.all_subjects : (Array.isArray(gpaData.table) ? gpaData.table : []);
+    if (!subs.length) return gpaData;
+
+    subs.forEach(c => {
+        const cr = parseCr(c.credits);
+        const gClean = String(c.grade || '').trim().toUpperCase();
+        const isComp = gClean === 'COMPLETED' || cr === 0;
+        c.is_non_cgpa = isComp;
+        if (isComp) {
+            c.grade_points = null;
+            if (gClean === 'COMPLETED') c.grade = 'Completed';
+        } else if (gMap[gClean] !== undefined) {
+            c.grade_points = gMap[gClean];
+        }
+    });
+
+    const semsFound = [...new Set(subs.map(c => Number(c.sem) || 1))].sort((a, b) => a - b);
+    const semwiseData = [];
+    const semwiseGpa = {};
+    const semwiseCredits = {};
+
+    semsFound.forEach(sem => {
+        const semCourses = subs.filter(c => (Number(c.sem) || 1) === sem);
+        const creditCourses = semCourses.filter(c => !c.is_non_cgpa && parseCr(c.credits) > 0 && c.grade_points !== null && c.grade_points !== undefined);
+        const semCr = creditCourses.reduce((acc, c) => acc + parseCr(c.credits), 0);
+        const semEarnedCr = creditCourses
+            .filter(c => (!c.result || c.result.toLowerCase() === 'pass') && !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade || '').trim().toUpperCase()) && c.grade_points > 0)
+            .reduce((acc, c) => acc + parseCr(c.credits), 0);
+        const semCp = creditCourses.reduce((acc, c) => acc + parseCr(c.credits) * Number(c.grade_points), 0);
+        const semHasRa = semCourses.some(c => {
+            const gUp = String(c.grade || '').trim().toUpperCase();
+            return ['RA', 'U', 'SA', 'W'].includes(gUp) || gUp.startsWith('RA') || (c.result && c.result.toLowerCase() === 'fail');
+        });
+
+        const sgpaVal = semCr > 0 ? Number((semCp / semCr).toFixed(2)) : 0;
+        const sgpaDisp = semHasRa ? 'RA' : sgpaVal.toFixed(2);
+
+        const cumCourses = subs.filter(c => (Number(c.sem) || 1) <= sem && !c.is_non_cgpa && parseCr(c.credits) > 0 && c.grade_points !== null && c.grade_points !== undefined);
+        const cumCr = cumCourses.reduce((acc, c) => acc + parseCr(c.credits), 0);
+        const cumEarnedCr = cumCourses
+            .filter(c => (!c.result || c.result.toLowerCase() === 'pass') && !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade || '').trim().toUpperCase()) && c.grade_points > 0)
+            .reduce((acc, c) => acc + parseCr(c.credits), 0);
+        const cumCp = cumCourses.reduce((acc, c) => acc + parseCr(c.credits) * Number(c.grade_points), 0);
+        const cumHasRa = subs.filter(c => (Number(c.sem) || 1) <= sem).some(c => {
+            const gUp = String(c.grade || '').trim().toUpperCase();
+            return ['RA', 'U', 'SA', 'W'].includes(gUp) || gUp.startsWith('RA') || (c.result && c.result.toLowerCase() === 'fail');
+        });
+
+        const cgpaVal = cumCr > 0 ? Number((cumCp / cumCr).toFixed(2)) : 0;
+        const cgpaDisp = cumHasRa ? 'RA' : cgpaVal.toFixed(2);
+
+        semwiseGpa[String(sem)] = sgpaDisp;
+        semwiseCredits[String(sem)] = semCr;
+        semwiseData.push({
+            sem,
+            sgpa: sgpaDisp,
+            sgpa_numeric: sgpaVal,
+            cgpa: cgpaDisp,
+            cgpa_numeric: cgpaVal,
+            credits: semCr,
+            credits_enrolled: semCr,
+            credits_earned: semEarnedCr,
+            cum_credits_enrolled: cumCr,
+            cum_credits_earned: cumEarnedCr,
+            has_ra: semHasRa,
+            total_subjects: semCourses.length
+        });
+    });
+
+    const latestSem = semsFound.length ? semsFound[semsFound.length - 1] : 1;
+    const totalEarned = subs
+        .filter(c => !c.is_non_cgpa && parseCr(c.credits) > 0 && (!c.result || c.result.toLowerCase() === 'pass') && !['RA', 'U', 'W', 'SA', 'WD'].includes(String(c.grade || '').trim().toUpperCase()) && c.grade_points > 0)
+        .reduce((acc, c) => acc + parseCr(c.credits), 0);
+    const totalEnrolled = subs
+        .filter(c => !c.is_non_cgpa && parseCr(c.credits) > 0)
+        .reduce((acc, c) => acc + parseCr(c.credits), 0);
+    const cpTotal = subs
+        .filter(c => !c.is_non_cgpa && parseCr(c.credits) > 0 && c.grade_points !== null && c.grade_points !== undefined)
+        .reduce((acc, c) => acc + parseCr(c.credits) * Number(c.grade_points), 0);
+
+    const hasAnyRa = semwiseData.some(s => s.has_ra) || totalEarned < totalEnrolled;
+    const overallCgpa = hasAnyRa ? 'RA' : (semwiseData.length ? semwiseData[semwiseData.length - 1].cgpa : '0.00');
+    const overallCgpaNumeric = semwiseData.length ? semwiseData[semwiseData.length - 1].cgpa_numeric : 0;
+
+    gpaData.all_subjects = subs;
+    gpaData.table = subs;
+    gpaData.semwise_data = semwiseData;
+    gpaData.semwise_gpa = semwiseGpa;
+    gpaData.semwise_credits = semwiseCredits;
+    gpaData.latest_sem = latestSem;
+    gpaData.latest_gpa = semwiseGpa[String(latestSem)] ?? '0.00';
+    gpaData.gpa = gpaData.latest_gpa;
+    gpaData.cgpa = overallCgpa;
+    gpaData.overall_cgpa = overallCgpa;
+    gpaData.overall_cgpa_numeric = overallCgpaNumeric;
+    gpaData.has_arrears = hasAnyRa;
+    gpaData.cgpa_note = hasAnyRa ? 'CGPA is computed only if candidate passes all the courses registered.' : '';
+    gpaData.total_credits = totalEarned;
+    gpaData.total_enrolled_credits = totalEnrolled;
+    gpaData.credit_points_total = cpTotal;
+    return gpaData;
+}
+
 function hydrateAcademicsFromPhoneCache() {
     const roll = state.rollNumber || (() => { try { return JSON.parse(localStorage.getItem('bunker_credentials') || '{}').roll; } catch { return null; } })();
     if (!roll) return false;
@@ -5951,8 +7140,15 @@ function hydrateAcademicsFromPhoneCache() {
         if (rawInt) internalsVault = JSON.parse(rawInt);
     } catch {}
 
-    // Ignore empty resultsVault if a previous attempt cached 0 subjects
-    if (resultsVault && (!resultsVault.data || !Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) || (resultsVault.data.table || resultsVault.data.all_subjects).length === 0)) {
+    // Discard empty resultsVault if 0 subjects and 0 studying_courses were previously cached
+    if (
+        resultsVault &&
+        (!resultsVault.data ||
+            ((!Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) ||
+                (resultsVault.data.table || resultsVault.data.all_subjects).length === 0) &&
+                (!Array.isArray(resultsVault.data.studying_courses) ||
+                    resultsVault.data.studying_courses.length === 0)))
+    ) {
         resultsVault = null;
     }
 
@@ -5963,7 +7159,8 @@ function hydrateAcademicsFromPhoneCache() {
                 const legacy = JSON.parse(legacyRaw);
                 const legTime = parseInt(localStorage.getItem(`bunker_acad_fetch_time_${roll}`) || '0') || Date.now();
                 const legSubs = legacy.gpa && (legacy.gpa.table || legacy.gpa.all_subjects);
-                if (!resultsVault && legacy.gpa && Array.isArray(legSubs) && legSubs.length > 0) {
+                const legStud = legacy.gpa && legacy.gpa.studying_courses;
+                if (!resultsVault && legacy.gpa && ((Array.isArray(legSubs) && legSubs.length > 0) || (Array.isArray(legStud) && legStud.length > 0))) {
                     resultsVault = { data: legacy.gpa, timestamp: legTime };
                 }
                 if (!internalsVault && Array.isArray(legacy.internals) && legacy.internals.length > 0) {
@@ -5974,7 +7171,7 @@ function hydrateAcademicsFromPhoneCache() {
     }
 
     if (resultsVault && resultsVault.data && !state.academics.gpa) {
-        const gpaData = resultsVault.data;
+        const gpaData = normalizePsgResultsData(resultsVault.data);
         state.academics.gpa = gpaData;
         state.academics.cgpa = {
             cgpa: gpaData.cgpa || gpaData.overall_cgpa,
@@ -5997,6 +7194,7 @@ function hydrateAcademicsFromPhoneCache() {
     if (state.academics.gpa || (state.academics.internals && state.academics.internals.length > 0)) {
         state.academics.loaded = true;
         state.academics.fromCache = true;
+        state.academics.error = false;
         return true;
     }
     return false;
@@ -6025,8 +7223,15 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
         if (rawInt) internalsVault = JSON.parse(rawInt);
     } catch {}
 
-    // Discard empty resultsVault if 0 subjects were previously cached
-    if (resultsVault && (!resultsVault.data || !Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) || (resultsVault.data.table || resultsVault.data.all_subjects).length === 0)) {
+    // Discard empty resultsVault if 0 subjects and 0 studying_courses were previously cached
+    if (
+        resultsVault &&
+        (!resultsVault.data ||
+            ((!Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) ||
+                (resultsVault.data.table || resultsVault.data.all_subjects).length === 0) &&
+                (!Array.isArray(resultsVault.data.studying_courses) ||
+                    resultsVault.data.studying_courses.length === 0)))
+    ) {
         resultsVault = null;
     }
 
@@ -6038,7 +7243,8 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
                 const legacy = JSON.parse(legacyRaw);
                 const legTime = parseInt(localStorage.getItem(`bunker_acad_fetch_time_${roll}`) || '0') || Date.now();
                 const legSubs = legacy.gpa && (legacy.gpa.table || legacy.gpa.all_subjects);
-                if (!resultsVault && legacy.gpa && Array.isArray(legSubs) && legSubs.length > 0) {
+                const legStud = legacy.gpa && legacy.gpa.studying_courses;
+                if (!resultsVault && legacy.gpa && ((Array.isArray(legSubs) && legSubs.length > 0) || (Array.isArray(legStud) && legStud.length > 0))) {
                     resultsVault = { data: legacy.gpa, timestamp: legTime };
                 }
                 if (!internalsVault && Array.isArray(legacy.internals) && legacy.internals.length > 0) {
@@ -6052,8 +7258,10 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
     const hasFreshResults = Boolean(
         resultsVault &&
         resultsVault.data &&
-        Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) &&
-        (resultsVault.data.table || resultsVault.data.all_subjects).length > 0 &&
+        ((Array.isArray(resultsVault.data.table || resultsVault.data.all_subjects) &&
+            (resultsVault.data.table || resultsVault.data.all_subjects).length > 0) ||
+            (Array.isArray(resultsVault.data.studying_courses) &&
+                resultsVault.data.studying_courses.length > 0)) &&
         (now - (resultsVault.timestamp || 0) < RESULTS_TTL)
     );
     const hasFreshInternals = Boolean(
@@ -6065,7 +7273,7 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
 
     // If cached results or internals exist, load and render immediately for 0ms visual load
     if (resultsVault && resultsVault.data) {
-        const gpaData = resultsVault.data;
+        const gpaData = normalizePsgResultsData(resultsVault.data);
         state.academics.gpa = gpaData;
         state.academics.cgpa = {
             cgpa: gpaData.cgpa || gpaData.overall_cgpa,
@@ -6088,7 +7296,9 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
     if (state.academics.gpa || (state.academics.internals && state.academics.internals.length > 0)) {
         state.academics.loaded = true;
         state.academics.fromCache = true;
+        state.academics.error = false;
         document.getElementById('acad-loading')?.classList.add('hidden');
+        document.getElementById('acad-error')?.classList.add('hidden');
         if (state.academics.internals && state.academics.internals.length > 0) renderInternals(state.academics.internals);
         if (state.academics.gpa) renderGPA(state.academics.gpa);
         if (state.academics.cgpa) renderCGPA(state.academics.cgpa);
@@ -6105,37 +7315,34 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
 
     if (state.academics.loading) return; // Prevent duplicate requests
     state.academics.loading = true;
+    state.academics.error = false;
+    document.getElementById('acad-error')?.classList.add('hidden');
+    renderOthersOverview();
 
-    // Show non-blocking inline loading states inside empty containers (never hide acad-panel-results!)
+    // Show non-blocking inline loading states inside empty containers (keep data cards hidden until data arrives!)
     document.getElementById('acad-panel-results')?.classList.remove('hidden');
     document.getElementById('acad-panel-internals')?.classList.remove('hidden');
 
     if (!state.academics.internals || state.academics.internals.length === 0) {
+        document.getElementById('internals-predictor-card')?.classList.add('hidden');
         const intList = document.getElementById('internals-list');
         if (intList) {
             intList.innerHTML = `
                 <div class="bento-card p-8 text-center space-y-3">
-                    <div class="w-10 h-10 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto animate-spin">
-                        <i class="fas fa-circle-notch text-sm"></i>
+                    <div class="w-10 h-10 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto">
+                        <i class="fas fa-circle-notch fa-spin text-sm"></i>
                     </div>
-                    <p class="text-xs font-black text-white uppercase tracking-wider">Syncing Internal CA Marks...</p>
-                    <p class="text-[10px] text-gray-400">Fetching latest test, tutorial &amp; lab marks from PSG eCampus</p>
+                    <p class="text-xs font-black text-white uppercase tracking-wider">Loading Internal Marks...</p>
+                    <p class="text-[10px] text-gray-400">Fetching latest CA test, tutorial &amp; lab marks from PSG eCampus</p>
                 </div>`;
         }
     }
 
     if (!state.academics.gpa) {
-        const resList = document.getElementById('results-sem-list');
-        if (resList) {
-            resList.innerHTML = `
-                <div class="bento-card p-8 text-center space-y-3">
-                    <div class="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mx-auto animate-spin">
-                        <i class="fas fa-circle-notch text-sm"></i>
-                    </div>
-                    <p class="text-xs font-black text-white uppercase tracking-wider">Syncing Semester Results &amp; CGPA...</p>
-                    <p class="text-[10px] text-gray-400">Fetching official semester grades &amp; credits from PSG eCampus</p>
-                </div>`;
-        }
+        document.getElementById('results-data-container')?.classList.add('hidden');
+        document.getElementById('results-error-state')?.classList.add('hidden');
+        document.getElementById('results-cgpa-pill')?.classList.add('hidden');
+        document.getElementById('results-loading-state')?.classList.remove('hidden');
     }
 
     const authToken = getAuthToken();
@@ -6155,6 +7362,7 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
 
         if (!needInternals && !needResults) {
             state.academics.loading = false;
+            renderOthersOverview();
             return;
         }
 
@@ -6170,6 +7378,9 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
                 force: force
             })
         });
+
+        const uiVerHeader = acadRes.headers.get('X-Bunker-UI-Version');
+        if (uiVerHeader) checkAndRolloutUIUpdate(uiVerHeader);
 
         const newTok = acadRes.headers.get('X-Session-Token');
         if (newTok) localStorage.setItem('bunker_session_token', newTok);
@@ -6228,8 +7439,9 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
         }
 
         if (needResults && acadPayload.results) {
-            const gpaData = acadPayload.results;
+            const gpaData = normalizePsgResultsData(acadPayload.results);
             const subs = gpaData.all_subjects || gpaData.table || [];
+            const studSubs = gpaData.studying_courses || [];
             state.academics.gpa = gpaData;
             state.academics.cgpa = {
                 cgpa: gpaData.cgpa || gpaData.overall_cgpa,
@@ -6243,8 +7455,8 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
                 semwise_data: gpaData.semwise_data,
                 all_subjects: subs
             };
-            // Only persist to 30-day phone vault if subjects were actually returned
-            if (Array.isArray(subs) && subs.length > 0) {
+            // Persist to 30-day phone vault if subjects or studying_courses were returned
+            if ((Array.isArray(subs) && subs.length > 0) || (Array.isArray(studSubs) && studSubs.length > 0)) {
                 resultsVault = { data: gpaData, timestamp: Date.now() };
                 localStorage.setItem(`bunker_results_vault_${roll}`, JSON.stringify(resultsVault));
                 resultsUpdated = true;
@@ -6264,8 +7476,10 @@ async function loadAcademics(force = false, silent = false, scope = 'all') {
         state.academics.loaded = true;
         state.academics.loading = false;
         state.academics.fromCache = false;
+        state.academics.error = false;
 
         document.getElementById('acad-loading')?.classList.add('hidden');
+        document.getElementById('acad-error')?.classList.add('hidden');
         if (state.academics.internals) renderInternals(state.academics.internals);
         if (state.academics.gpa) renderGPA(state.academics.gpa);
         if (state.academics.cgpa) renderCGPA(state.academics.cgpa);
@@ -6289,10 +7503,13 @@ async function revalidateAcademicsInBackground() {
 
 function showAcadError(msg) {
     document.getElementById('acad-loading')?.classList.add('hidden');
-    const errEl = document.getElementById('acad-error');
-    const msgEl = document.getElementById('acad-error-msg');
-    if (errEl) errEl.classList.remove('hidden');
-    if (msgEl) msgEl.textContent = msg;
+    document.getElementById('acad-error')?.classList.add('hidden');
+    if (!state.academics) state.academics = {};
+    state.academics.loading = false;
+    state.academics.error = true;
+    state.academics.errorMsg = msg || 'Failed to load academic data';
+
+    renderOthersOverview();
     showToast(msg || 'Could not load academic marks', 'error');
 
     const retryHtml = `
@@ -6300,19 +7517,25 @@ function showAcadError(msg) {
             <div class="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mx-auto">
                 <i class="fas fa-exclamation-triangle text-sm"></i>
             </div>
-            <p class="text-xs font-black text-white">${msg || 'Unable to sync marks'}</p>
+            <p class="text-xs font-black text-white">${msg || 'Failed to load marks'}</p>
             <button type="button" onclick="loadAcademics(true, false, 'all')" class="px-4 py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-[11px] font-black uppercase tracking-wider active:scale-95 transition">
                 <i class="fas fa-sync-alt mr-1.5"></i>Retry Sync
             </button>
         </div>`;
 
-    if (!state.academics || !state.academics.internals || state.academics.internals.length === 0) {
+    if (!state.academics.internals || state.academics.internals.length === 0) {
+        document.getElementById('internals-predictor-card')?.classList.add('hidden');
         const intList = document.getElementById('internals-list');
         if (intList) intList.innerHTML = retryHtml;
     }
-    if (!state.academics || !state.academics.gpa) {
-        const resList = document.getElementById('results-sem-list');
-        if (resList) resList.innerHTML = retryHtml;
+    if (!state.academics.gpa) {
+        document.getElementById('results-loading-state')?.classList.add('hidden');
+        document.getElementById('results-data-container')?.classList.add('hidden');
+        document.getElementById('results-cgpa-pill')?.classList.add('hidden');
+        const resErr = document.getElementById('results-error-state');
+        const resErrMsg = document.getElementById('results-error-msg');
+        if (resErrMsg) resErrMsg.textContent = msg || 'Failed to load Semester Marks';
+        if (resErr) resErr.classList.remove('hidden');
     }
 }
 
@@ -6332,15 +7555,15 @@ const PSG_PASS_TABLE = [
     { ca40: 20, sem100: 50, sem60: 30.0, roundUp: 30, final: 50 },
     { ca40: 21, sem100: 48, sem60: 28.8, roundUp: 29, final: 50 },
     { ca40: 22, sem100: 46, sem60: 27.6, roundUp: 28, final: 50 },
-    { ca40: 23, sem100: 44, sem60: 26.4, roundUp: 27, final: 50 },
-    { ca40: 24, sem100: 42, sem60: 25.2, roundUp: 26, final: 50 }
+    { ca40: 23, sem100: 45, sem60: 27.0, roundUp: 27, final: 50 },
+    { ca40: 24, sem100: 45, sem60: 27.0, roundUp: 27, final: 51 }
 ];
 
 function getSemPassDetails(ca40) {
     const numCA = Math.max(0, Number(ca40) || 0);
     const roundedCA = Math.round(numCA);
 
-    // Exact lookup from PSG official table for integer 12..24
+    // Exact lookup from PSG official table for integer 12..24 (enforcing Section 8(v)(a) min 45/100 in Final Exam)
     if (Math.abs(numCA - roundedCA) < 0.05 && roundedCA >= 12 && roundedCA <= 24) {
         const found = PSG_PASS_TABLE.find(item => item.ca40 === roundedCA);
         if (found) {
@@ -6355,20 +7578,8 @@ function getSemPassDetails(ca40) {
         }
     }
 
-    // Edge case: Already passed (e.g. CA >= 50)
-    if (numCA >= 50) {
-        return {
-            ca40: Number(numCA.toFixed(1)),
-            sem100: 0,
-            sem60: 0,
-            roundUp: 0,
-            final: Math.round(numCA),
-            alreadyPassed: true
-        };
-    }
-
-    // Dynamic calculation with PSG Tech 60% conversion & ceil rounding
-    for (let s = 0; s <= 100; s++) {
+    // Dynamic calculation with PSG Tech 60% conversion, ceil rounding, and mandatory >= 45/100 Final Exam minimum (Section 8(v)(a))
+    for (let s = 45; s <= 100; s++) {
         const sem60 = Number((s * 0.6).toFixed(1));
         const ru = Math.ceil(sem60 - 1e-6);
         if (numCA + ru >= 50) {
@@ -6392,11 +7603,12 @@ function getSemPassDetails(ca40) {
     };
 }
 
-// Exact PSG 40:60 (Theory) or 60:40 (Lab) Ceiled Sem Score needed for target total out of 100
+// Exact PSG 40:60 (Theory, min 45 FE) or 60:40 (Lab, min 50 FE) Ceiled Sem Score needed for target total out of 100
 function calcSemNeededForTarget(caScore, targetTotal, isLab = false) {
     const numCA = Number(caScore) || 0;
     const scale = isLab ? 0.4 : 0.6;
-    for (let s = 0; s <= 100; s++) {
+    const minSem = isLab ? 50 : 45;
+    for (let s = minSem; s <= 100; s++) {
         const ru = Math.ceil(Number((s * scale).toFixed(1)) - 1e-6);
         if (numCA + ru >= targetTotal) return s;
     }
@@ -6408,10 +7620,11 @@ function getSemNeededForGrade(ca40, targetTotal, isLab = false) {
     const numCA = Math.max(0, Number(ca40) || 0);
     if (targetTotal <= 50 && !isLab) {
         const pass = getSemPassDetails(numCA);
-        return pass.alreadyPassed ? 0 : (pass.impossible ? null : pass.sem100);
+        return pass.impossible ? null : pass.sem100;
     }
     const factor = isLab ? 0.4 : 0.6;
-    for (let s = 0; s <= 100; s++) {
+    const minSem = isLab ? 50 : 45;
+    for (let s = minSem; s <= 100; s++) {
         const sScaled = s * factor;
         const sCeil = Math.ceil(Number(sScaled.toFixed(1)) - 1e-6);
         if (numCA + sCeil >= targetTotal) {
@@ -6430,43 +7643,16 @@ function openPassMatrixModal(courseCode = null, initialCA = null) {
     const b = document.getElementById('pass-matrix-backdrop');
     if (!m || !p || !b) return;
 
+    if (typeof hydrateAcademicsFromPhoneCache === 'function') {
+        hydrateAcademicsFromPhoneCache();
+    }
+
     activePassMatrixCourse = courseCode;
     renderPassMatrixAutoSubjects();
 
-    // Course badge handling
-    const courseBadge = document.getElementById('pass-matrix-course-badge');
-    const activeCodeEl = document.getElementById('pass-matrix-active-code');
-    const activeNameEl = document.getElementById('pass-matrix-active-name');
-    if (courseCode && state && state.academics && state.academics.internals) {
-        const sub = state.academics.internals.find(s => s.course_code === courseCode);
-        if (sub) {
-            if (activeCodeEl) activeCodeEl.innerText = sub.course_code;
-            if (activeNameEl) activeNameEl.innerText = sub.course_name;
-            if (courseBadge) courseBadge.classList.remove('hidden');
-        } else {
-            if (courseBadge) courseBadge.classList.add('hidden');
-        }
-    } else {
-        if (courseBadge) courseBadge.classList.add('hidden');
+    if ((!state.academics || !Array.isArray(state.academics.internals) || state.academics.internals.length === 0) && typeof loadAcademics === 'function') {
+        loadAcademics(false, false, 'internals');
     }
-
-    // Determine initial CA value
-    let targetCA = 24;
-    if (initialCA !== null && !isNaN(parseFloat(initialCA))) {
-        targetCA = Math.max(0, Math.min(40, Number(parseFloat(initialCA).toFixed(1))));
-    } else if (courseCode && window.simState && window.simState[courseCode]) {
-        const sub = state.academics.internals.find(s => s.course_code === courseCode);
-        if (sub) {
-            const numCols = sub.row_data.length;
-            const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
-            const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
-            const totalCA = calcCATotal(sub.is_lab, simKeys, window.simState[courseCode]);
-            targetCA = Number((sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40)).toFixed(1));
-        }
-    }
-
-    // Set slider & calculator
-    setPassMatrixCA(targetCA, courseCode);
 
     // Show modal
     m.classList.remove('hidden');
@@ -6504,66 +7690,58 @@ function closePassMatrixModal() {
     }, 280);
 }
 
-function switchPassMatrixTab(tab) {
-    // Stub kept for compatibility
-}
-
-function updatePassMatrixFromSlider(val) {
-    const caVal = Number(Number(val).toFixed(1));
-    setPassMatrixCA(caVal, activePassMatrixCourse);
-}
-
-function stepPassMatrixCA(delta) {
-    const pmSlider = document.getElementById("pass-matrix-slider") || document.getElementById("pm-ca-slider");
-    const cur = pmSlider ? parseFloat(pmSlider.value) : 24;
-    const next = Math.max(0, Math.min(40, Number((cur + delta).toFixed(1))));
-    setPassMatrixCA(next, activePassMatrixCourse);
-}
+function switchPassMatrixTab(tab) {}
+function updatePassMatrixFromSlider(val) {}
+function stepPassMatrixCA(delta) {}
 window.stepPassMatrixCA = stepPassMatrixCA;
 
 function renderPassMatrixAutoSubjects() {
     const listEl = document.getElementById("pm-auto-subjects-list");
     if (!listEl) return;
     if (!state.academics || !state.academics.internals || state.academics.internals.length === 0) {
-        listEl.innerHTML = '<div class="text-center text-xs text-gray-500 py-3">No subjects synced yet — open Internal Marks first</div>';
+        listEl.innerHTML = '<div class="text-center text-xs font-bold text-gray-400 py-6">Syncing subjects...</div>';
         return;
     }
-    const nonLab = state.academics.internals.filter(x => !x.is_lab && !isZeroCreditCourse(x.course_code));
-    const targetList = nonLab.length > 0 ? nonLab : state.academics.internals;
-    listEl.innerHTML = targetList.map(item => {
-        let ca40 = 24;
-        const convVal = parseFloat(item.total_converted);
-        if (window.simState && window.simState[item.course_code]) {
-            const numCols = item.row_data.length;
-            const expectedKeys = getSchemaKeys(item.is_lab, numCols);
-            const simKeys = expectedKeys.filter(k => !["best2t", "bestmcq", "total", "conv", "rt", "rt1", "rt2"].includes(k));
-            const totalCA = calcCATotal(item.is_lab, simKeys, window.simState[item.course_code]);
-            ca40 = item.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
-        } else if (!isNaN(convVal)) {
-            ca40 = convVal;
-        } else if (item.total && !isNaN(parseFloat(item.total))) {
-            const rawTot = parseFloat(item.total);
-            ca40 = item.is_lab ? Math.min(60, rawTot * 1.2) : Math.min(40, (rawTot / 50) * 40);
-        }
 
-        ca40 = Math.max(0, Math.min(40, Number(ca40.toFixed(1))));
-        const passMark = calcSemNeededForTarget(ca40, 50, item.is_lab) ?? 100;
-        const isActive = activePassMatrixCourse === item.course_code;
+    const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
+    let savedSim = null;
+    try {
+        const rawSim = localStorage.getItem(`bunker_internals_sim_${roll}`);
+        if (rawSim) savedSim = JSON.parse(rawSim);
+    } catch {}
+
+    const validList = state.academics.internals.filter(x => x.course_code && !isZeroCreditCourse(x.course_code) && getSubjectMaxOut(x) !== 100);
+    const targetList = validList.length > 0 ? validList : state.academics.internals.filter(x => x.course_code);
+
+    listEl.innerHTML = targetList.map(item => {
+        const rowData = item.row_data || [];
+        const numCols = rowData.length;
+        const expectedKeys = getSchemaKeys(item.is_lab, numCols);
+        const simKeys = expectedKeys.filter(k => !["best2t", "bestmcq", "total", "conv", "rt", "rt1", "rt2"].includes(k));
+
+        const d = {};
+        expectedKeys.forEach((k, i) => {
+            const val = rowData[i];
+            d[k] = (!val || val === '*' || String(val).trim() === '') ? null : parseFloat(val);
+        });
+        ensureSubjectSimState(item, d, simKeys, savedSim);
+
+        const portalConv = parseFloat(item.total_converted);
+        const caScaled = !isNaN(portalConv)
+            ? portalConv
+            : computeCAScaled(item, simKeys, (window.simState && window.simState[item.course_code]) || d);
+
+        const passMark = getMinSemToPassForSubject(item, caScaled);
+        const isSafe = passMark <= 50;
+        const rowGrad = isSafe
+            ? 'background: linear-gradient(135deg, rgba(16,185,129,0.16) 0%, rgba(15,14,28,0.92) 70%); border-color: rgba(16,185,129,0.32);'
+            : 'background: linear-gradient(135deg, rgba(244,63,94,0.16) 0%, rgba(15,14,28,0.92) 70%); border-color: rgba(244,63,94,0.32);';
 
         return `
-        <div onclick="updatePassMatrix(${ca40}, '${item.course_code}')" class="p-3 rounded-2xl ${isActive ? 'bg-rose-500/15 border-rose-500/40' : 'bg-black/45 border-white/10 hover:border-rose-500/30'} border flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.98] transition">
-            <div class="min-w-0 pr-1">
-                <div class="flex items-center gap-1.5">
-                    <span class="text-[9.5px] font-black text-indigo-400 uppercase font-mono">${item.course_code}</span>
-                    <span class="text-[9px] font-black text-emerald-300 bg-emerald-500/15 border-emerald-500/30 px-1.5 py-0.5 rounded-md border tabular-nums">
-                        CA ${ca40.toFixed(1)}/40
-                    </span>
-                </div>
-                <p class="text-[11.5px] font-bold text-white truncate mt-0.5">${item.course_name}</p>
-            </div>
-            <div class="text-right shrink-0 bg-white/[0.03] px-2.5 py-1.5 rounded-xl border border-white/5">
-                <span class="text-[8px] font-black text-gray-400 uppercase block">Min Sem</span>
-                <span class="text-xs font-black tabular-nums ${passMark <= 50 ? "text-emerald-400" : "text-rose-300"}">${passMark}/100</span>
+        <div class="p-3.5 rounded-2xl border flex items-center justify-between gap-3" style="${rowGrad}">
+            <h4 class="text-xs sm:text-[13px] font-extrabold text-white truncate flex-1">${item.course_name}</h4>
+            <div class="shrink-0 px-3 py-1.5 rounded-xl ${isSafe ? 'bg-emerald-500/20 border-emerald-500/35 text-emerald-300' : 'bg-rose-500/20 border-rose-500/35 text-rose-300'} border text-xs font-black tabular-nums">
+                ${passMark} / 100
             </div>
         </div>`;
     }).join("");
@@ -6571,9 +7749,6 @@ function renderPassMatrixAutoSubjects() {
 window.renderPassMatrixAutoSubjects = renderPassMatrixAutoSubjects;
 
 function updatePassMatrix(ca, codeLabel = null) {
-    activePassMatrixCourse = codeLabel;
-    const caVal = Math.max(0, Math.min(40, Number(Number(ca).toFixed(1))));
-    setPassMatrixCA(caVal, codeLabel);
     renderPassMatrixAutoSubjects();
 }
 window.updatePassMatrix = updatePassMatrix;
@@ -6608,7 +7783,7 @@ function setPassMatrixCA(caVal, codeLabel = null) {
     const proofEl = document.getElementById("pm-formula-proof");
     if (proofEl) proofEl.innerText = `${passInfo.sem100} × 0.6 = ${passInfo.sem60} ➔ ${passInfo.roundUp} + ${Number.isInteger(numCA) ? numCA : numCA.toFixed(1)} CA = ${passInfo.final} (PASS)`;
 
-    // Update 6 Target grade cards
+    // Update 6 Target grade cards (PSG 2023 Regulations: C >= 50, B >= 56, B+ >= 61, A >= 71, A+ >= 81, O >= 91)
     const cpEl = document.getElementById("pm-grade-cplus");
     const bEl = document.getElementById("pm-grade-b");
     const bpEl = document.getElementById("pm-grade-bplus");
@@ -6616,9 +7791,9 @@ function setPassMatrixCA(caVal, codeLabel = null) {
     const apEl = document.getElementById("pm-grade-aplus");
     const sEl = document.getElementById("pm-grade-s");
 
-    const reqCp = calcSemNeededForTarget(numCA, 56);
-    const reqB = calcSemNeededForTarget(numCA, 61);
-    const reqBp = calcSemNeededForTarget(numCA, 66);
+    const reqCp = calcSemNeededForTarget(numCA, 50);
+    const reqB = calcSemNeededForTarget(numCA, 56);
+    const reqBp = calcSemNeededForTarget(numCA, 61);
     const reqA = calcSemNeededForTarget(numCA, 71);
     const reqAp = calcSemNeededForTarget(numCA, 81);
     const reqS = calcSemNeededForTarget(numCA, 91);
@@ -6759,63 +7934,130 @@ window.copyPassMatrixSummary = copyPassMatrixSummary;
 window.getSemPassDetails = getSemPassDetails;
 
 // ---- INTERNALS ----
+let activeInternalModalCode = null;
+let activeInternalModalMode = 'details';
+
+function getSubjectMaxOut(sub) {
+    if (!sub) return 40;
+    if (sub.target_max && [40, 60, 100].includes(Number(sub.target_max))) return Number(sub.target_max);
+    if (sub.is_lab) return 60;
+    const code = String(sub.course_code || '').toUpperCase();
+    const name = String(sub.course_name || '').toUpperCase();
+    if (code === '23K312' || name.includes('ENVIRONMENTAL') || code === '23U315' || name.includes('ACTIVITY POINT')) return 100;
+    return 40;
+}
+
+function computeCAScaled(sub, simKeys, valuesObj) {
+    const rawCA = calcCATotal(sub.is_lab, simKeys, valuesObj);
+    const maxOut = getSubjectMaxOut(sub);
+    if (sub.is_lab || maxOut === 60) return Math.min(60, Number((rawCA * 1.2).toFixed(2)));
+    if (maxOut === 100) {
+        if (simKeys.includes('eh')) return Math.min(100, Number(((rawCA / 150) * 100).toFixed(2)));
+        return Math.min(100, Number(rawCA.toFixed(2)));
+    }
+    return Math.min(40, Number(((rawCA / 50) * 40).toFixed(2)));
+}
+
+function getMinSemToPassForSubject(sub, caScaled) {
+    const maxOut = getSubjectMaxOut(sub);
+    if (maxOut === 100) return 50;
+    if (sub.is_lab) {
+        return calcSemNeededForTarget(caScaled, 50, true) ?? 50;
+    }
+    const passInfo = getSemPassDetails(caScaled);
+    return passInfo.sem100;
+}
+
+function ensureSubjectSimState(sub, d, simKeys, savedSim) {
+    const code = sub.course_code;
+    if (!window.simState) window.simState = {};
+    const courseSaved = (savedSim && savedSim[code]) ? savedSim[code] : null;
+    if (!window.simState[code]) window.simState[code] = {};
+
+    simKeys.forEach(k => {
+        const actual = d[k];
+        const meta = window.METADATA[k] || window.METADATA['c1'];
+        if (actual !== null && !isNaN(actual)) {
+            // Uploaded in eCampus -> strictly locked to official mark!
+            window.simState[code][k] = actual;
+        } else if (courseSaved && courseSaved[k] !== undefined && !isNaN(Number(courseSaved[k]))) {
+            window.simState[code][k] = Number(courseSaved[k]);
+        } else if (window.simState[code][k] === undefined) {
+            // Default pending mark to 0 so initial state reflects uploaded marks + min pass
+            window.simState[code][k] = 0;
+        }
+    });
+
+    const caScaled = computeCAScaled(sub, simKeys, window.simState[code]);
+    const minPassSem = getMinSemToPassForSubject(sub, caScaled);
+
+    if (courseSaved && courseSaved.sem !== undefined && courseSaved.userSimulatedSem) {
+        window.simState[code].sem = Number(courseSaved.sem);
+        window.simState[code].userSimulatedSem = true;
+    } else if (!window.simState[code].userSimulatedSem) {
+        // Default simulation to minimum marks needed to pass in final exam
+        window.simState[code].sem = minPassSem;
+        window.simState[code].userSimulatedSem = false;
+    }
+}
+
 function renderInternals(internals) {
     const list = document.getElementById('internals-list');
-    const statusEl = document.getElementById('internals-status');
+    const predCard = document.getElementById('internals-predictor-card');
     if (!list) return;
 
-    // Show all courses with a valid course_code so students can simulate even before marks are entered
     const mainSubjects = (internals || []).filter(s => Boolean(s.course_code));
 
-    // Count updated subjects
-    const withTotals = mainSubjects.filter(s => {
-        const t = parseFloat(s.total);
-        return !isNaN(t) || (Array.isArray(s.row_data) && s.row_data.some(v => v && v !== '*' && v.trim() !== ''));
-    });
-    if (withTotals.length > 0) {
-        if (statusEl) statusEl.textContent = `${withTotals.length} of ${mainSubjects.length} courses have portal entries • Tap any course to simulate`;
-    } else {
-        if (statusEl) statusEl.textContent = `${mainSubjects.length} courses ready • Tap any course to simulate CA & Sem marks`;
-    }
-
     if (mainSubjects.length === 0) {
-        list.innerHTML = `<div class="text-center py-10 opacity-50"><div class="text-4xl mb-3">📝</div><p class="text-xs font-bold uppercase tracking-widest text-gray-500">No Courses Found Yet</p></div>`;
+        if (predCard) predCard.classList.add('hidden');
+        list.innerHTML = `<div class="text-center py-10 opacity-50"><p class="text-xs font-bold uppercase tracking-widest text-gray-500">No Courses Found Yet</p></div>`;
         return;
     }
 
-    list.innerHTML = '';
+    // Unhide SGPA & CGPA Predictor card ONLY after internal marks data has arrived
+    if (predCard) predCard.classList.remove('hidden');
 
-    // Initialize global METADATA for simulation
     if (typeof window.METADATA === 'undefined') {
         window.METADATA = {
-            t1:   { label: 'Test 1 (CA 1)', max: 30, weight: 30, color: 'text-blue-400', accent: 'bg-blue-500' },
-            t2:   { label: 'Test 2 (CA 2)', max: 30, weight: 30, color: 'text-indigo-400', accent: 'bg-indigo-500' },
-            rt:   { label: 'Retest', max: 30, weight: 30, color: 'text-orange-400', accent: 'bg-orange-500' },
-            ap:   { label: 'Assignment / Presentation', max: 10, weight: 10, color: 'text-purple-400', accent: 'bg-purple-500' },
-            ap1:  { label: 'Tutorial 1 (AT 1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
-            ap2:  { label: 'Tutorial 2 (AT 2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
-            at1:  { label: 'Tutorial 1 (AT 1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
-            at2:  { label: 'Tutorial 2 (AT 2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
-            rt1:  { label: 'Retest 1', max: 30, weight: 30, color: 'text-orange-400', accent: 'bg-orange-500' },
-            rt2:  { label: 'Retest 2', max: 30, weight: 30, color: 'text-orange-400', accent: 'bg-orange-500' },
-            a1:   { label: 'Assessment 1', max: 50, weight: 50, color: 'text-emerald-400', accent: 'bg-emerald-500' },
-            a2:   { label: 'Assessment 2', max: 50, weight: 50, color: 'text-teal-400', accent: 'bg-teal-500' },
-            eh:   { label: 'Activity Hours', max: 150, weight: 150, color: 'text-amber-400', accent: 'bg-amber-500' },
-            mq1:  { label: 'Quiz / MCQ 1', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
-            mq2:  { label: 'Quiz / MCQ 2', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
-            ir1:  { label: 'Lab Cycle I Report', max: 15, weight: 15, color: 'text-emerald-400', accent: 'bg-emerald-500' },
-            ir2:  { label: 'Lab Cycle II Report', max: 15, weight: 15, color: 'text-emerald-400', accent: 'bg-emerald-500' },
-            plro1: { label: 'Pre-Lab / Viva I', max: 10, weight: 10, color: 'text-teal-400', accent: 'bg-teal-500' },
-            plro2: { label: 'Pre-Lab / Viva II', max: 10, weight: 10, color: 'text-teal-400', accent: 'bg-teal-500' },
-            c1: { label: 'Component 1', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c2: { label: 'Component 2', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c3: { label: 'Component 3', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c4: { label: 'Component 4', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c5: { label: 'Component 5', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
-            c6: { label: 'Component 6', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' }
+            t1:    { label: 'Test 1 (T1)', max: 30, weight: 15, color: 'text-blue-400', accent: 'bg-blue-500' },
+            t2:    { label: 'Test 2 (T2)', max: 30, weight: 15, color: 'text-indigo-400', accent: 'bg-indigo-500' },
+            rt:    { label: 'Retest (RT)', max: 30, weight: 15, color: 'text-orange-400', accent: 'bg-orange-500' },
+            rt1:   { label: 'Retest 1 (RT 1)', max: 30, weight: 15, color: 'text-orange-400', accent: 'bg-orange-500' },
+            rt2:   { label: 'Retest 2 (RT 2)', max: 30, weight: 15, color: 'text-orange-400', accent: 'bg-orange-500' },
+            best2t:{ label: 'Total (Best 2 Tests)', max: 30, weight: 30, color: 'text-sky-400', accent: 'bg-sky-500' },
+            ap:    { label: 'Assignment / Presentation (AP)', max: 10, weight: 10, color: 'text-purple-400', accent: 'bg-purple-500' },
+            ap1:   { label: 'Assessment Tutorial 1 (AT 1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            ap2:   { label: 'Assessment Tutorial 2 (AT 2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            at1:   { label: 'Assessment Tutorial 1 (AT 1)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            at2:   { label: 'Assessment Tutorial 2 (AT 2)', max: 5, weight: 5, color: 'text-purple-400', accent: 'bg-purple-500' },
+            mq1:   { label: 'MCQ Quiz 1 (MQ 1)', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
+            mq2:   { label: 'MCQ Quiz 2 (MQ 2)', max: 10, weight: 5, color: 'text-pink-400', accent: 'bg-pink-500' },
+            bestmcq:{ label: 'Total (Best 2 MCQs)', max: 10, weight: 10, color: 'text-pink-300', accent: 'bg-pink-500' },
+            ir1:   { label: 'Internal Review I (IR I)', max: 15, weight: 15, color: 'text-emerald-400', accent: 'bg-emerald-500' },
+            ir2:   { label: 'Internal Review II (IR II)', max: 15, weight: 15, color: 'text-emerald-400', accent: 'bg-emerald-500' },
+            plro1: { label: 'PLRO I', max: 10, weight: 10, color: 'text-teal-400', accent: 'bg-teal-500' },
+            plro2: { label: 'PLRO II', max: 10, weight: 10, color: 'text-teal-400', accent: 'bg-teal-500' },
+            a1:    { label: 'Assessment I (A I)', max: 50, weight: 50, color: 'text-emerald-400', accent: 'bg-emerald-500' },
+            a2:    { label: 'Assessment II (A II)', max: 50, weight: 50, color: 'text-teal-400', accent: 'bg-teal-500' },
+            eh:    { label: 'Activity Hours (EH)', max: 150, weight: 150, color: 'text-amber-400', accent: 'bg-amber-500' },
+            total: { label: 'Raw Total', max: 50, weight: 50, color: 'text-white', accent: 'bg-indigo-500' },
+            conv:  { label: 'Converted Total', max: 40, weight: 40, color: 'text-indigo-300', accent: 'bg-indigo-500' },
+            c1:    { label: 'Component 1', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c2:    { label: 'Component 2', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c3:    { label: 'Component 3', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c4:    { label: 'Component 4', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c5:    { label: 'Component 5', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' },
+            c6:    { label: 'Component 6', max: 30, weight: 10, color: 'text-gray-400', accent: 'bg-gray-500' }
         };
-        window.simState = {};
     }
+    if (!window.simState) window.simState = {};
+
+    const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
+    let savedSim = null;
+    try {
+        const rawSim = localStorage.getItem(`bunker_internals_sim_${roll}`);
+        if (rawSim) savedSim = JSON.parse(rawSim);
+    } catch {}
 
     let listHTML = '';
 
@@ -6827,121 +8069,43 @@ function renderInternals(internals) {
         const d = {};
         expectedKeys.forEach((k, i) => {
             const val = rowData[i];
-            d[k] = (!val || val === '*' || val.trim() === '') ? null : parseFloat(val);
+            d[k] = (!val || val === '*' || String(val).trim() === '') ? null : parseFloat(val);
         });
 
         const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
-        const missingKeys = simKeys.filter(k => d[k] === null);
-        const enteredKeys = simKeys.filter(k => d[k] !== null);
+        ensureSubjectSimState(sub, d, simKeys, savedSim);
 
-        // Build simulator initial state before computing card preview
-        const fullSimHTML = renderFullSimulator(sub, d, simKeys);
-
+        const displayMax = getSubjectMaxOut(sub);
         const portalTotalConverted = parseFloat(sub.total_converted);
-        const portalTotalRaw = parseFloat(sub.total);
-        const hasPortalTotal = !isNaN(portalTotalConverted);
+        const hasPortalConv = !isNaN(portalTotalConverted);
 
-        const simTotalCA = calcCATotal(sub.is_lab, simKeys, window.simState[sub.course_code] || d);
-        const simOutOf40 = sub.is_lab ? Math.min(60, simTotalCA * 1.2) : Math.min(40, (simTotalCA / 50) * 40);
-        const currentOutOf40 = hasPortalTotal ? portalTotalConverted : simOutOf40;
-        const displayMax = sub.is_lab ? 60 : 40;
+        const simCaScaled = computeCAScaled(sub, simKeys, window.simState[sub.course_code] || d);
+        const currentScore = hasPortalConv ? portalTotalConverted : simCaScaled;
+        const pct = Math.min(100, Math.max(0, (currentScore / displayMax) * 100));
+        const theme = getInternalCardTheme(pct);
 
-        const isTheory = !sub.is_lab;
-        const iconName = isTheory ? 'fa-book-open' : 'fa-flask';
-        const typeColor = isTheory ? 'indigo' : 'teal';
-
-        const passInfo = isTheory ? getSemPassDetails(currentOutOf40) : null;
-        const reqB = isTheory ? getSemNeededForGrade(currentOutOf40, 61, sub.is_lab) : null;
-        const reqA = isTheory ? getSemNeededForGrade(currentOutOf40, 71, sub.is_lab) : null;
-        const reqAp = isTheory ? getSemNeededForGrade(currentOutOf40, 81, sub.is_lab) : null;
-
-        // Compact component pills on card front so student sees all entered/pending marks at a glance
-        const compPillsHTML = simKeys.map(k => {
-            const meta = window.METADATA[k] || window.METADATA['c1'];
-            const shortLabel = k.toUpperCase();
-            const hasVal = d[k] !== null && !isNaN(d[k]);
-            return hasVal
-                ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/[0.05] border border-white/10 text-[9.5px] font-bold text-gray-200 tabular-nums"><span class="text-gray-500 font-black">${shortLabel}</span> ${d[k]}/${meta.max}</span>`
-                : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[9.5px] font-bold text-amber-300 tabular-nums"><span class="text-amber-400/80 font-black">${shortLabel}</span> <span id="pill-val-${sub.course_code}-${k}">~${window.simState[sub.course_code]?.[k] ?? 0}</span>/${meta.max}</span>`;
-        }).join('');
-
-        let statusStripHTML = '';
-        if (isTheory && passInfo && !isZeroCreditCourse(sub.course_code)) {
-            statusStripHTML = `
-            <div class="mt-3 p-2.5 rounded-2xl bg-black/35 border border-white/[0.07] flex items-center justify-between gap-2">
-                <div class="flex items-center gap-2 min-w-0">
-                    <span class="w-6 h-6 rounded-lg bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 text-[10px] shrink-0">
-                        <i class="fas fa-bullseye"></i>
-                    </span>
-                    <div class="min-w-0">
-                        <span class="text-[8.5px] font-black text-gray-400 uppercase tracking-wider block">Min Sem to Pass (50%)</span>
-                        <span class="text-xs font-black text-white tabular-nums"><span id="card-pass-req-${sub.course_code}" class="text-rose-400">${passInfo.sem100}</span> / 100</span>
-                    </div>
-                </div>
-                <div class="flex items-center gap-1.5 shrink-0 text-center">
-                    <div class="px-2 py-1 rounded-lg bg-white/[0.03] border border-white/5">
-                        <span class="text-[7.5px] font-black text-gray-500 uppercase block">B</span>
-                        <span class="text-[10px] font-black text-teal-300 tabular-nums" id="card-b-req-${sub.course_code}">${reqB !== null ? reqB : '—'}</span>
-                    </div>
-                    <div class="px-2 py-1 rounded-lg bg-white/[0.03] border border-white/5">
-                        <span class="text-[7.5px] font-black text-gray-500 uppercase block">A</span>
-                        <span class="text-[10px] font-black text-indigo-300 tabular-nums" id="card-a-req-${sub.course_code}">${reqA !== null ? reqA : '—'}</span>
-                    </div>
-                    <div class="px-2 py-1 rounded-lg bg-white/[0.03] border border-white/5">
-                        <span class="text-[7.5px] font-black text-gray-500 uppercase block">A+</span>
-                        <span class="text-[10px] font-black text-purple-300 tabular-nums" id="card-ap-req-${sub.course_code}">${reqAp !== null ? reqAp : '—'}</span>
-                    </div>
-                </div>
-            </div>`;
-        }
-
+        // Gradient card matching Attendance Card style: ONLY Subject Name, Total Marks (out of 40 or 60), Progress Bar, and Simulate Marks button
         listHTML += `
-        <div id="card-${sub.course_code}" class="glass-panel rounded-[26px] overflow-hidden transition-all duration-300 mb-3.5 border border-white/10">
-            <div class="p-4 sm:p-5 relative overflow-hidden cursor-pointer active:scale-[0.99] transition-all" onclick="toggleInternalCard('${sub.course_code}')">
-                <div class="flex justify-between items-start gap-3">
-                    <div class="flex-1 min-w-0 z-10">
-                        <div class="flex flex-wrap items-center gap-1.5 mb-1">
-                            <span class="text-[9.5px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border bg-${typeColor}-500/15 text-${typeColor}-300 border-${typeColor}-500/25 font-mono">${sub.course_code}</span>
-                            <span class="text-[9px] font-bold text-gray-400 uppercase tracking-wider">${isTheory ? 'Theory • 40:60' : 'Lab • 60:40'}</span>
-                            ${missingKeys.length > 0 
-                                ? `<span class="text-[8.5px] text-amber-300 font-black bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/25">${missingKeys.length} Pending</span>`
-                                : `<span class="text-[8.5px] text-emerald-300 font-black bg-emerald-500/15 px-1.5 py-0.5 rounded border border-emerald-500/25">Official In</span>`
-                            }
-                        </div>
-                        <h3 class="font-extrabold text-white text-[13.5px] leading-snug">${sub.course_name}</h3>
+        <div id="card-${sub.course_code}" onclick="openInternalModal('${sub.course_code}', 'details')" class="glass-panel rounded-[32px] overflow-hidden transition-all duration-300 cursor-pointer active:scale-[0.98]" style="background: linear-gradient(135deg, ${theme.hex}18 0%, rgba(15, 14, 28, 0.82) 65%); border-color: ${theme.hex}35;">
+            <div class="p-5 relative overflow-hidden">
+                <div id="glow-${sub.course_code}" class="absolute -right-6 -top-6 w-28 h-28 rounded-full ${theme.glow} opacity-20 blur-2xl pointer-events-none"></div>
+                <div class="flex justify-between items-start gap-3 mb-4 relative z-10">
+                    <div class="min-w-0 flex-1 pr-2">
+                        <h4 class="font-extrabold text-white text-[15px] sm:text-base uppercase tracking-wide leading-snug drop-shadow-md truncate w-full block">${sub.course_name}</h4>
                     </div>
-                    <div class="flex flex-col items-end shrink-0 z-10 bg-black/35 px-3 py-1.5 rounded-2xl border border-white/10">
-                        <div class="flex items-baseline gap-0.5">
-                            <span id="card-ca-score-${sub.course_code}" class="text-xl font-black tabular-nums ${missingKeys.length > 0 ? 'text-amber-300' : 'text-indigo-300'}">
-                                ${missingKeys.length > 0 && !hasPortalTotal ? '~' : ''}${currentOutOf40.toFixed(1)}
-                            </span>
-                            <span class="text-[9.5px] font-bold text-gray-500">/ ${displayMax}</span>
-                        </div>
-                        <span class="text-[8px] font-black text-gray-400 uppercase tracking-wider">${hasPortalTotal ? 'Official CA' : 'Est. CA'}</span>
+                    <div class="flex items-baseline gap-1 shrink-0 z-10 tabular-nums">
+                        <span id="card-ca-score-${sub.course_code}" class="text-2xl sm:text-[26px] font-black ${theme.col} tracking-tighter leading-none" style="text-shadow: 0 0 20px ${theme.hex}40;">${currentScore.toFixed(1)}</span>
+                        <span class="text-xs font-bold text-gray-400">/ ${displayMax}</span>
                     </div>
                 </div>
-
-                ${compPillsHTML ? `<div class="mt-2.5 flex flex-wrap gap-1.5">${compPillsHTML}</div>` : ''}
-                ${statusStripHTML}
-
-                <div class="mt-3 flex items-center justify-between gap-3">
-                    <div class="flex-1 h-1.5 bg-black/50 rounded-full overflow-hidden" id="bar-${sub.course_code}">
-                         <div id="bar-fill-${sub.course_code}" class="h-full bg-gradient-to-r from-${typeColor}-500 to-purple-500 transition-all duration-500" style="width: ${Math.min(100,(currentOutOf40/displayMax)*100).toFixed(1)}%"></div>
-                    </div>
-                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 text-[9px] font-black uppercase tracking-wider shrink-0 transition">
-                        <i class="fas fa-sliders text-indigo-400 text-[9px]"></i>
-                        <span>Simulate Marks</span>
-                        <i class="fas fa-chevron-down text-[8px] opacity-75"></i>
-                    </div>
+                <div class="w-full bg-black/40 h-2 rounded-full overflow-hidden mb-4 border border-white/5 shadow-inner relative" id="bar-${sub.course_code}">
+                    <div id="bar-fill-${sub.course_code}" class="h-full ${theme.bar} rounded-full transition-all duration-700 ease-out" style="width:${pct.toFixed(1)}%; box-shadow: 0 0 10px ${theme.hex}80;"></div>
                 </div>
-            </div>
-
-            <div class="expandable-content" id="content-${sub.course_code}">
-                <div class="expandable-inner cursor-default">
-                    <div class="px-4 pb-4 sm:px-5 sm:pb-5">
-                        <div class="w-full h-px bg-gradient-to-r from-transparent via-white/10 to-transparent mb-4"></div>
-                        ${fullSimHTML}
-                    </div>
+                <div class="flex justify-end items-center z-10 relative">
+                    <button type="button" onclick="event.stopPropagation(); openInternalModal('${sub.course_code}', 'simulate')" class="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20 hover:text-white transition-all active:scale-95 shrink-0">
+                        <i class="fas fa-wand-magic-sparkles text-[10px] text-indigo-400"></i>
+                        <span class="text-[9.5px] font-black uppercase tracking-wider">Simulate Marks</span>
+                    </button>
                 </div>
             </div>
         </div>`;
@@ -6949,49 +8113,43 @@ function renderInternals(internals) {
 
     list.innerHTML = listHTML;
 
-    // Show predictor card
-    const predictorCard = document.getElementById('cgpa-predictor');
-    if (predictorCard) {
-        predictorCard.classList.remove('hidden');
-    }
-
-    // Render list of subjects for predictor
+    // Render list of subjects inside the collapsible credits drawer
     const predList = document.getElementById('predictor-subjects-list');
     if (predList) {
         let predHTML = '';
+        let creditsMap = {};
+        try {
+            creditsMap = JSON.parse(localStorage.getItem(`bunker_predicted_credits_${state.rollNumber}`) || '{}');
+        } catch (e) {}
+
         mainSubjects.forEach(sub => {
             const courseCode = sub.course_code;
-            
-            let creditsMap = {};
-            try {
-                creditsMap = JSON.parse(localStorage.getItem(`bunker_predicted_credits_${state.rollNumber}`) || '{}');
-            } catch (e) {}
-            let credits = creditsMap[courseCode];
             const isZero = isZeroCreditCourse(courseCode);
+            let credits = creditsMap[courseCode];
             if (isZero) {
                 credits = 0;
                 creditsMap[courseCode] = 0;
             } else if (credits === undefined) {
-                credits = sub.is_lab ? 2 : 3;
+                credits = getOfficialCourseCredits(sub);
                 creditsMap[courseCode] = credits;
             }
 
             const adjusterHTML = isZero
-                ? `<span class="text-[8px] font-black text-gray-500 uppercase tracking-widest bg-white/[0.02] px-2 py-1 rounded-lg border border-white/5">Non-GPA</span>`
+                ? `<span class="text-[9px] font-bold text-gray-500 px-2 py-1">0 Cr</span>`
                 : `<div class="flex items-center bg-black/40 rounded-xl p-1 border border-white/10">
-                        <button onclick="changeSubjectCredits('${courseCode}', -1)" class="w-7 h-7 rounded-lg bg-white/5 text-white hover:bg-white/10 active:scale-90 transition flex items-center justify-center text-xs font-bold">-</button>
+                        <button type="button" onclick="changeSubjectCredits('${courseCode}', -1)" class="w-6 h-6 rounded-lg bg-white/5 text-white hover:bg-white/10 active:scale-90 transition flex items-center justify-center text-xs font-bold">-</button>
                         <span id="pred-credits-${courseCode}" class="w-6 text-center text-xs font-black text-white tabular-nums">${credits}</span>
-                        <button onclick="changeSubjectCredits('${courseCode}', 1)" class="w-7 h-7 rounded-lg bg-white/5 text-white hover:bg-white/10 active:scale-90 transition flex items-center justify-center text-xs font-bold">+</button>
+                        <button type="button" onclick="changeSubjectCredits('${courseCode}', 1)" class="w-6 h-6 rounded-lg bg-white/5 text-white hover:bg-white/10 active:scale-90 transition flex items-center justify-center text-xs font-bold">+</button>
                     </div>`;
 
             predHTML += `
             <div class="flex justify-between items-center p-2.5 rounded-2xl bg-white/[0.02] border border-white/5">
                 <div class="flex-1 pr-2 min-w-0">
-                    <p class="text-[11px] font-bold text-white truncate">${sub.course_name}</p>
-                    <p class="text-[9px] text-gray-500 font-bold uppercase tracking-wider font-mono">${courseCode}</p>
+                    <p class="text-xs font-bold text-white truncate">${sub.course_name}</p>
+                    <p class="text-[10px] text-gray-500 font-mono">${courseCode}</p>
                 </div>
-                <div class="flex items-center gap-2.5 shrink-0">
-                    <span id="pred-badge-${courseCode}" class="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md border">--</span>
+                <div class="flex items-center gap-2 shrink-0">
+                    <span id="pred-badge-${courseCode}" class="text-[10px] font-bold text-indigo-300 tabular-nums">--</span>
                     ${adjusterHTML}
                 </div>
             </div>`;
@@ -6999,252 +8157,288 @@ function renderInternals(internals) {
         predList.innerHTML = predHTML;
     }
 
-    // Initial calculation run for all simulators
-    mainSubjects.forEach(sub => {
-        if (window.simState[sub.course_code]) calculateSimOutputs(sub.course_code, sub);
-    });
-
     recalculateCGPAPrediction();
+    renderPassMatrixAutoSubjects();
 }
 
-function renderFullSimulator(subject, d, expectedKeys) {
+function getInternalCardTheme(pctVal) {
+    if (pctVal >= 90) return { col: 'text-[#10B981]', bar: 'bg-[#10B981]', glow: 'bg-[#10B981]', hex: '#10B981' };
+    if (pctVal >= 80) return { col: 'text-[#22C55E]', bar: 'bg-[#22C55E]', glow: 'bg-[#22C55E]', hex: '#22C55E' };
+    if (pctVal >= 70) return { col: 'text-[#3B82F6]', bar: 'bg-[#3B82F6]', glow: 'bg-[#3B82F6]', hex: '#3B82F6' };
+    if (pctVal >= 60) return { col: 'text-[#EAB308]', bar: 'bg-[#EAB308]', glow: 'bg-[#EAB308]', hex: '#EAB308' };
+    if (pctVal >= 50) return { col: 'text-[#F97316]', bar: 'bg-[#F97316]', glow: 'bg-[#F97316]', hex: '#F97316' };
+    return { col: 'text-[#EF4444]', bar: 'bg-[#EF4444]', glow: 'bg-[#EF4444]', hex: '#EF4444' };
+}
+window.getInternalCardTheme = getInternalCardTheme;
+
+function getShortMarkLabel(rawHeader, fallbackKey) {
+    const h = String(rawHeader || '').trim();
+    if (!h) return fallbackKey.toUpperCase();
+    const map = {
+        'Test 1': 'Test 1',
+        'Test 2': 'Test 2',
+        'Retest': 'Retest',
+        'Retest 1': 'Retest 1',
+        'Retest 2': 'Retest 2',
+        'Best of 2 Tests': 'Best 2T',
+        'Assignment / Presentation': 'Assgn',
+        'Assignment 1': 'Assgn 1',
+        'Assignment 2': 'Assgn 2',
+        'MCQ / Quiz 1': 'MCQ 1',
+        'MCQ / Quiz 2': 'MCQ 2',
+        'Best MCQ': 'Best MCQ',
+        'Conv. Total': 'Converted',
+        'Int. Review 1': 'Review 1',
+        'Int. Review 2': 'Review 2',
+        'Lab Record 1': 'Record 1',
+        'Lab Record 2': 'Record 2'
+    };
+    return map[h] || h;
+}
+
+function getOfficialCourseCredits(sub) {
+    if (!sub) return 3;
+    const courseCode = String(sub.course_code || '').toUpperCase();
+    if (isZeroCreditCourse(courseCode)) return 0;
+
+    // 1. Check studying_courses scraped from eCampus Course Selection
+    if (state && state.academics && state.academics.gpa && Array.isArray(state.academics.gpa.studying_courses)) {
+        const studMatch = state.academics.gpa.studying_courses.find(x => String(x.course).toUpperCase() === courseCode);
+        if (studMatch && studMatch.credits !== undefined && !isNaN(Number(studMatch.credits))) {
+            return Number(studMatch.credits);
+        }
+    }
+    // 2. Check all_subjects if present
+    if (state && state.academics && state.academics.cgpa && Array.isArray(state.academics.cgpa.all_subjects)) {
+        const subjMatch = state.academics.cgpa.all_subjects.find(x => String(x.course).toUpperCase() === courseCode);
+        if (subjMatch && subjMatch.credits !== undefined && !isNaN(Number(subjMatch.credits))) {
+            return Number(subjMatch.credits);
+        }
+    }
+    // 3. Check sub.credits from server.js parser
+    if (sub.credits !== undefined && !isNaN(Number(sub.credits))) {
+        return Number(sub.credits);
+    }
+    return sub.is_lab ? 2 : 3;
+}
+
+function openInternalModal(courseCode, mode = 'details') {
+    if (!state || !state.academics || !Array.isArray(state.academics.internals)) return;
+    const sub = state.academics.internals.find(s => s.course_code === courseCode);
+    if (!sub) return;
+
+    activeInternalModalCode = courseCode;
+    activeInternalModalMode = mode;
+
+    const modal = document.getElementById('internals-detail-modal');
+    const backdrop = document.getElementById('internals-detail-backdrop');
+    const panel = document.getElementById('internals-detail-panel');
+    const codeEl = document.getElementById('int-modal-code');
+    const titleEl = document.getElementById('int-modal-title');
+    const bodyEl = document.getElementById('int-modal-body');
+    if (!modal || !bodyEl) return;
+
+    if (codeEl) codeEl.textContent = sub.course_code;
+    if (titleEl) titleEl.textContent = sub.course_name;
+
+    bodyEl.innerHTML = buildInternalModalContent(sub, mode);
+
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    requestAnimationFrame(() => {
+        if (backdrop) backdrop.classList.remove('opacity-0');
+        if (panel) {
+            panel.classList.remove('opacity-0', 'translate-y-4', 'sm:scale-95');
+            panel.classList.add('translate-y-0', 'sm:scale-100');
+        }
+    });
+
+    calculateSimOutputs(courseCode, sub);
+}
+window.openInternalModal = openInternalModal;
+
+function closeInternalModal() {
+    const modal = document.getElementById('internals-detail-modal');
+    const backdrop = document.getElementById('internals-detail-backdrop');
+    const panel = document.getElementById('internals-detail-panel');
+    if (!modal) return;
+
+    if (backdrop) backdrop.classList.add('opacity-0');
+    if (panel) {
+        panel.classList.remove('translate-y-0', 'sm:scale-100');
+        panel.classList.add('opacity-0', 'translate-y-4', 'sm:scale-95');
+    }
+    setTimeout(() => {
+        modal.classList.add('hidden');
+        document.body.style.overflow = '';
+        activeInternalModalCode = null;
+    }, 200);
+}
+window.closeInternalModal = closeInternalModal;
+
+function buildInternalModalContent(subject, mode = 'details') {
     const courseCode = subject.course_code;
+    const rowData = subject.row_data || [];
+    const headers = Array.isArray(subject.headers) && subject.headers.length === rowData.length ? subject.headers : [];
+    const maxMarks = Array.isArray(subject.max_marks) && subject.max_marks.length === rowData.length ? subject.max_marks : [];
+    const numCols = rowData.length;
+    const expectedKeys = getSchemaKeys(subject.is_lab, numCols);
+    const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
+
+    const d = {};
+    expectedKeys.forEach((k, i) => {
+        const val = rowData[i];
+        d[k] = (!val || val === '*' || String(val).trim() === '') ? null : parseFloat(val);
+    });
+
     const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
     let savedSim = null;
     try {
         const rawSim = localStorage.getItem(`bunker_internals_sim_${roll}`);
         if (rawSim) savedSim = JSON.parse(rawSim);
     } catch {}
+    ensureSubjectSimState(subject, d, simKeys, savedSim);
 
-    const courseSaved = (savedSim && savedSim[courseCode]) ? savedSim[courseCode] : null;
+    // 1. Official eCampus Marks shown beautifully in compact small boxes
+    let ecampusBoxesHTML = '';
+    expectedKeys.forEach((k, idx) => {
+        const rawVal = rowData[idx];
+        const rawHeader = headers[idx] || (window.METADATA[k]?.label || k.toUpperCase());
+        const shortLabel = getShortMarkLabel(rawHeader, k);
+        const maxStr = maxMarks[idx] ? maxMarks[idx].replace(/Max:\s*/i, '').trim() : (window.METADATA[k]?.max || '');
+        const isEntered = rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== '' && String(rawVal).trim() !== '*';
+        const displayVal = isEntered ? String(rawVal).trim() : '-';
 
-    window.simState[courseCode] = { sem: (courseSaved && courseSaved.sem !== undefined) ? courseSaved.sem : 75 };
-    expectedKeys.forEach(k => { 
-        const actual = d[k];
+        ecampusBoxesHTML += `
+        <div class="p-2.5 rounded-2xl ${isEntered ? 'bg-emerald-500/[0.07] border-emerald-500/20' : 'bg-white/[0.03] border-white/[0.07]'} border flex flex-col justify-between text-center">
+            <span class="text-[10px] font-bold text-gray-400 truncate block">${shortLabel}</span>
+            <div class="mt-1 tabular-nums">
+                <span class="text-sm font-black ${isEntered ? 'text-emerald-300' : 'text-gray-500'}">${displayVal}</span>
+                ${maxStr ? `<span class="text-[9.5px] font-semibold text-gray-500">/${maxStr}</span>` : ''}
+            </div>
+        </div>`;
+    });
+
+    // 2. Interactive Simulator Section (Uploaded marks are LOCKED; only missing marks have sliders)
+    let simInputsHTML = '';
+    simKeys.forEach((k) => {
         const meta = window.METADATA[k] || window.METADATA['c1'];
-        if (courseSaved && courseSaved[k] !== undefined) {
-            window.simState[courseCode][k] = Number(courseSaved[k]);
-        } else if (actual !== null) {
-            window.simState[courseCode][k] = actual;
-        } else {
-            window.simState[courseCode][k] = Math.round(meta.max * 0.75);
+        const actual = d[k];
+        const isUploaded = actual !== null && !isNaN(actual);
+        const curVal = isUploaded ? actual : (window.simState[courseCode][k] ?? 0);
+        const stepSize = meta.max <= 10 ? 0.5 : 1;
+
+        if (!isUploaded) {
+            simInputsHTML += `
+            <div class="p-3 rounded-2xl bg-black/40 border border-indigo-500/25">
+                <div class="flex items-center justify-between gap-2 mb-2">
+                    <div>
+                        <span class="text-xs font-bold text-white block">${meta.label}</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 shrink-0">
+                        <button type="button" onclick="stepSimMark('${courseCode}', '${k}', -${stepSize})" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-bold text-xs flex items-center justify-center active:scale-90 transition">-</button>
+                        <div class="min-w-[54px] text-center bg-black/60 px-2 py-1 rounded-lg border border-white/10 tabular-nums">
+                            <span id="val-${courseCode}-${k}" class="text-xs font-black text-white">${curVal}</span>
+                            <span class="text-[9.5px] text-gray-500 font-bold">/${meta.max}</span>
+                        </div>
+                        <button type="button" onclick="stepSimMark('${courseCode}', '${k}', ${stepSize})" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-bold text-xs flex items-center justify-center active:scale-90 transition">+</button>
+                    </div>
+                </div>
+                <input type="range" id="slider-${courseCode}-${k}" min="0" max="${meta.max}" step="${stepSize}" value="${curVal}" 
+                    oninput="updateSim('${courseCode}', '${k}', this.value)"
+                    class="w-full bg-black/60 rounded-lg appearance-none cursor-pointer accent-indigo-500 acad-slider" style="height: 6px;" />
+            </div>`;
         }
     });
 
-    // Build interactive sliders + tactile -/+ steppers for ALL components (both official and pending)
-    let componentsHTML = '';
-    expectedKeys.forEach(key => {
-        const meta = window.METADATA[key] || window.METADATA['c1'];
-        const actual = d[key];
-        const isMissing = actual === null;
-        const curVal = window.simState[courseCode][key];
-        const isModified = !isMissing && Math.abs(curVal - actual) > 0.01;
-        const stepSize = meta.max <= 10 ? 0.5 : 1;
+    const maxOut = getSubjectMaxOut(subject);
+    const caScaled = computeCAScaled(subject, simKeys, window.simState[courseCode]);
+    const minPassSem = getMinSemToPassForSubject(subject, caScaled);
+    const curSem = window.simState[courseCode].sem ?? minPassSem;
 
-        const badgeHTML = isMissing
-            ? `<span id="badge-${courseCode}-${key}" class="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Pending</span>`
-            : isModified
-                ? `<span id="badge-${courseCode}-${key}" class="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Simulated (Official: ${actual})</span>`
-                : `<span id="badge-${courseCode}-${key}" class="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">Official: ${actual}</span>`;
-
-        componentsHTML += `
-        <div class="bg-black/40 p-3 rounded-2xl border ${isMissing ? 'border-amber-500/20' : 'border-white/10'}">
-            <div class="flex items-center justify-between gap-2 mb-2">
-                <div class="flex items-center gap-2 min-w-0">
-                    <span class="text-xs font-extrabold ${meta.color} truncate">${meta.label}</span>
-                    ${badgeHTML}
-                </div>
-                <div class="flex items-center gap-1.5 shrink-0">
-                    <button type="button" onclick="stepSimMark('${courseCode}', '${key}', -${stepSize})" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-black text-xs flex items-center justify-center active:scale-90 transition">-</button>
-                    <div class="min-w-[58px] text-center bg-black/60 px-2 py-1 rounded-xl border border-white/10 tabular-nums">
-                        <span id="val-${courseCode}-${key}" class="text-sm font-black text-white">${curVal}</span>
-                        <span class="text-[9.5px] text-gray-500 font-bold">/${meta.max}</span>
-                    </div>
-                    <button type="button" onclick="stepSimMark('${courseCode}', '${key}', ${stepSize})" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-black text-xs flex items-center justify-center active:scale-90 transition">+</button>
-                </div>
-            </div>
-            <input type="range" id="slider-${courseCode}-${key}" min="0" max="${meta.max}" step="${stepSize}" value="${curVal}" 
-                oninput="updateSim('${courseCode}', '${key}', this.value)"
-                class="w-full bg-black/60 rounded-lg appearance-none cursor-pointer accent-indigo-500 acad-slider" style="height: 8px;" />
-        </div>`;
-    });
-
-    const internalsSimSection = `
-    <div class="mb-4">
-        <div class="flex items-center justify-between gap-2 mb-2.5">
-            <span class="text-[10px] text-indigo-300 uppercase tracking-widest font-black flex items-center gap-1.5">
-                <i class="fas fa-sliders text-[10px]"></i>
-                <span>CA Components (Tap -/+ or Slide)</span>
-            </span>
-            <div class="flex items-center gap-1">
-                <button type="button" onclick="setPresetPendingMarks('${courseCode}', 0.60, true)" class="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[8.5px] font-black text-gray-300 border border-white/10 active:scale-95 transition">60%</button>
-                <button type="button" onclick="setPresetPendingMarks('${courseCode}', 0.80, true)" class="px-2 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-[8.5px] font-black text-indigo-200 border border-indigo-500/30 active:scale-95 transition">80%</button>
-                <button type="button" onclick="setPresetPendingMarks('${courseCode}', 1.0, true)" class="px-2 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-[8.5px] font-black text-emerald-200 border border-emerald-500/30 active:scale-95 transition">Max</button>
-            </div>
-        </div>
-        <div class="grid grid-cols-1 gap-2.5">${componentsHTML}</div>
-    </div>`;
-
-    if (isZeroCreditCourse(courseCode)) {
-        return `
-        <div class="bg-black/40 p-4 rounded-3xl border border-indigo-500/20 relative" onclick="event.stopPropagation()">
-            <div class="flex items-center justify-between mb-3 border-b border-white/5 pb-2.5">
-                <div class="flex items-center gap-2">
-                    <i class="fas fa-info-circle text-indigo-400 text-xs"></i>
-                    <h4 class="text-xs font-bold text-indigo-300 uppercase tracking-widest">Course Information</h4>
-                </div>
-                <button onclick="resetSim('${courseCode}')" class="text-[10px] bg-white/10 hover:bg-white/20 text-gray-300 px-2.5 py-1 rounded-lg font-bold transition active:scale-95">Reset</button>
-            </div>
-            ${internalsSimSection}
-            <div class="bg-indigo-500/10 border border-indigo-500/20 rounded-2xl p-3.5 text-center">
-                <p class="text-xs font-black text-indigo-300 uppercase tracking-wider mb-1">Non-GPA / Mandatory Course</p>
-                <p class="text-[10px] text-gray-400 font-medium">Evaluated for completion; does not affect SGPA/CGPA.</p>
-            </div>
-        </div>`;
-    }
-
-    const isTh = !subject.is_lab;
-    const curCA = calcCATotal(subject.is_lab, expectedKeys, window.simState[courseCode]);
-    const curCa40 = subject.is_lab ? Math.min(60, curCA * 1.2) : Math.min(40, (curCA / 50) * 40);
-    const pInfo = isTh ? getSemPassDetails(curCa40) : null;
-
-    return `
-    <div class="bg-black/45 p-4 rounded-3xl border border-indigo-500/20 relative" onclick="event.stopPropagation()">
-        <div class="flex items-center justify-between mb-3.5 border-b border-white/5 pb-2.5">
-            <div class="flex items-center gap-2">
-                <i class="fas fa-wand-magic-sparkles text-indigo-400 text-xs"></i>
-                <h4 class="text-xs font-black text-white uppercase tracking-wider">Interactive Marks Simulator</h4>
-            </div>
-            <button type="button" onclick="resetSim('${courseCode}')" class="text-[10px] bg-white/10 hover:bg-white/15 text-gray-200 px-2.5 py-1 rounded-xl font-bold border border-white/10 transition active:scale-95 flex items-center gap-1">
-                <i class="fas fa-rotate-left text-[9px]"></i> Reset Official
-            </button>
-        </div>
-
-        ${internalsSimSection}
-
-        <!-- Final Sem Exam Simulator with Stepper + Grade Targets -->
-        <div class="mb-4 bg-gradient-to-br from-purple-950/35 to-indigo-950/30 p-3.5 rounded-2xl border border-purple-500/25">
-            <div class="flex items-center justify-between mb-2.5">
+    const finalExamSimulatorHTML = isZeroCreditCourse(courseCode) ? '' : `
+    <div class="space-y-3">
+        <div class="p-3.5 rounded-2xl bg-indigo-950/25 border border-indigo-500/25">
+            <div class="flex items-center justify-between mb-2">
                 <div>
-                    <span class="text-xs font-black text-white flex items-center gap-1.5">
-                        <i class="fas fa-graduation-cap text-purple-400 text-xs"></i>
-                        Final Sem Exam
-                    </span>
-                    <span class="text-[9px] text-gray-400 font-semibold">${isTh ? 'Scaled to 60% (Ceil Rounded)' : 'Scaled to 40% (Lab Exam)'}</span>
+                    <span class="text-xs font-bold text-white block">Final Semester Exam</span>
                 </div>
                 <div class="flex items-center gap-1.5">
-                    <button type="button" onclick="stepSimMark('${courseCode}', 'sem', -1)" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-black text-xs flex items-center justify-center active:scale-90 transition">-</button>
-                    <div class="min-w-[64px] text-center bg-black/60 px-2.5 py-1 rounded-xl border border-purple-500/30 tabular-nums">
-                        <span class="text-base font-black text-purple-300" id="val-${courseCode}-sem">${window.simState[courseCode].sem}</span>
+                    <button type="button" onclick="stepSimMark('${courseCode}', 'sem', -1)" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-bold text-xs flex items-center justify-center active:scale-90 transition">-</button>
+                    <div class="min-w-[60px] text-center bg-black/60 px-2 py-1 rounded-lg border border-indigo-500/30 tabular-nums">
+                        <span class="text-sm font-black text-indigo-300" id="val-${courseCode}-sem">${curSem}</span>
                         <span class="text-[9.5px] font-bold text-gray-500">/100</span>
                     </div>
-                    <button type="button" onclick="stepSimMark('${courseCode}', 'sem', 1)" class="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-black text-xs flex items-center justify-center active:scale-90 transition">+</button>
+                    <button type="button" onclick="stepSimMark('${courseCode}', 'sem', 1)" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 font-bold text-xs flex items-center justify-center active:scale-90 transition">+</button>
                 </div>
             </div>
-            <input type="range" min="0" max="100" value="${window.simState[courseCode].sem}" id="slider-${courseCode}-sem"
+            <input type="range" min="0" max="100" value="${curSem}" id="slider-${courseCode}-sem"
                 oninput="updateSim('${courseCode}', 'sem', this.value)"
-                class="w-full bg-black/60 rounded-lg appearance-none cursor-pointer accent-purple-500 acad-slider mb-3" style="height: 8px;" />
+                class="w-full bg-black/60 rounded-lg appearance-none cursor-pointer accent-indigo-500 acad-slider" style="height: 6px;" />
+        </div>
 
-            <!-- 1-Tap Grade Target Buttons -->
-            <div class="pt-2 border-t border-white/10">
-                <div class="flex items-center justify-between mb-1.5">
-                    <span class="text-[8.5px] font-black text-gray-400 uppercase tracking-widest">1-Tap Target Grade (Auto-sets Sem Exam)</span>
-                    ${isTh && pInfo ? `<button type="button" onclick="openPassMatrixModal('${courseCode}', ${curCa40.toFixed(1)})" class="text-[8.5px] font-black text-rose-300 underline">40:60 Proof</button>` : ''}
-                </div>
-                <div class="grid grid-cols-5 gap-1.5">
-                    ${(() => {
-                        const isAbs = isAbsoluteGradingSystem(state.rollNumber);
-                        const passMarkLabel = pInfo ? pInfo.sem100 : 50;
-                        const topGrade = isAbs ? { lbl: 'S', min: 91 } : { lbl: 'O', min: 90 };
-                        const apGrade  = isAbs ? { lbl: 'A+', min: 81 } : { lbl: 'A+', min: 80 };
-                        const aGrade   = isAbs ? { lbl: 'A', min: 71 } : { lbl: 'A', min: 70 };
-                        const bpGrade  = isAbs ? { lbl: 'B+', min: 66 } : { lbl: 'B+', min: 60 };
-                        return `
-                            <button type="button" onclick="targetGrade('${courseCode}', 50)" class="py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-200 active:scale-95 transition flex flex-col items-center">
-                                <span class="text-[9px] font-black uppercase">Pass</span>
-                                <span class="text-[10px] font-black text-rose-300 tabular-nums" id="sim-target-pass-sub-${courseCode}">${passMarkLabel}</span>
-                            </button>
-                            <button type="button" onclick="targetGrade('${courseCode}', ${bpGrade.min})" class="py-2 rounded-xl bg-teal-500/10 border border-teal-500/25 text-teal-200 active:scale-95 transition flex flex-col items-center">
-                                <span class="text-[9px] font-black uppercase">${bpGrade.lbl}</span>
-                                <span class="text-[10px] font-bold text-teal-300 tabular-nums">≥${bpGrade.min}%</span>
-                            </button>
-                            <button type="button" onclick="targetGrade('${courseCode}', ${aGrade.min})" class="py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-200 active:scale-95 transition flex flex-col items-center">
-                                <span class="text-[9px] font-black uppercase">${aGrade.lbl}</span>
-                                <span class="text-[10px] font-bold text-indigo-300 tabular-nums">≥${aGrade.min}%</span>
-                            </button>
-                            <button type="button" onclick="targetGrade('${courseCode}', ${apGrade.min})" class="py-2 rounded-xl bg-purple-500/10 border border-purple-500/25 text-purple-200 active:scale-95 transition flex flex-col items-center">
-                                <span class="text-[9px] font-black uppercase">${apGrade.lbl}</span>
-                                <span class="text-[10px] font-bold text-purple-300 tabular-nums">≥${apGrade.min}%</span>
-                            </button>
-                            <button type="button" onclick="targetGrade('${courseCode}', ${topGrade.min})" class="py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-200 active:scale-95 transition flex flex-col items-center">
-                                <span class="text-[9px] font-black uppercase">${topGrade.lbl}</span>
-                                <span class="text-[10px] font-bold text-amber-300 tabular-nums">≥${topGrade.min}%</span>
-                            </button>
-                        `;
-                    })()}
-                </div>
+        <!-- Clean Result Summary in 3 small boxes -->
+        <div class="grid grid-cols-3 gap-2">
+            <div class="bg-black/45 p-3 rounded-2xl border border-white/10 text-center flex flex-col justify-center">
+                <span class="text-[10px] text-gray-400 font-medium block">Internal CA</span>
+                <span class="text-sm sm:text-base font-black text-white tabular-nums mt-0.5 block"><span id="out-${courseCode}-ca">${caScaled.toFixed(1)}</span> / ${maxOut}</span>
+            </div>
+            <div class="bg-black/45 p-3 rounded-2xl border border-white/10 text-center flex flex-col justify-center">
+                <span class="text-[10px] text-gray-400 font-medium block">Min Final</span>
+                <span class="text-sm sm:text-base font-black text-rose-300 tabular-nums mt-0.5 block"><span id="out-${courseCode}-minpass">${minPassSem}</span> / 100</span>
+            </div>
+            <div id="out-${courseCode}-box" class="bg-black/45 p-3 rounded-2xl border border-white/10 text-center flex flex-col justify-center">
+                <span id="out-${courseCode}-grade" class="text-sm sm:text-base font-black text-emerald-400 tabular-nums block">--</span>
+                <span id="out-${courseCode}-total" class="text-[10px] text-gray-400 font-bold tabular-nums mt-0.5 block">--</span>
+            </div>
+        </div>
+    </div>`;
+
+    return `
+    <div class="space-y-4">
+        <!-- eCampus Marks in Small Boxes -->
+        <div>
+            <div class="flex items-center justify-end mb-2.5">
+                <span class="text-[11px] font-bold text-indigo-300 tabular-nums"><span id="modal-top-ca-${courseCode}">${caScaled.toFixed(1)}</span> / ${maxOut}</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+                ${ecampusBoxesHTML}
             </div>
         </div>
 
-        <!-- Live Result Strip -->
-        <div class="flex items-stretch justify-between bg-black/50 p-2 rounded-2xl border border-white/10 relative">
-            <div class="flex-1 flex flex-col items-center justify-center p-2">
-                <span class="text-[8.5px] text-gray-400 font-bold uppercase tracking-wider mb-0.5">CA (${isTh ? '40' : '60'})</span>
-                <span class="text-lg font-black text-indigo-300 tabular-nums" id="out-${courseCode}-ca">--</span>
-                <span class="text-[8px] text-gray-500 mt-0.5 tabular-nums" id="out-${courseCode}-ca-raw">--</span>
+        <!-- Simulate Marks Section -->
+        <div class="pt-3 border-t border-white/10 space-y-2.5">
+            <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-white">Simulate Marks</span>
+                <button type="button" onclick="resetSim('${courseCode}')" class="text-[10px] text-gray-400 hover:text-white px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 transition">Reset</button>
             </div>
-            <div class="w-px bg-white/10 my-2"></div>
-            <div class="flex-1 flex flex-col items-center justify-center p-2">
-                <span class="text-[8.5px] text-gray-400 font-bold uppercase tracking-wider mb-0.5">Sem (${isTh ? '60' : '40'})</span>
-                <span class="text-lg font-black text-purple-300 tabular-nums" id="out-${courseCode}-sem">--</span>
-                <span class="text-[8px] text-gray-500 mt-0.5 tabular-nums" id="out-${courseCode}-sem-raw">--</span>
-            </div>
-            <div class="w-px bg-white/10 my-2"></div>
-            <div id="out-${courseCode}-box" class="flex-[1.25] flex flex-col items-center justify-center p-2.5 rounded-xl border">
-                <span class="text-[8.5px] text-gray-300 font-bold uppercase tracking-wider mb-0.5">Final Total</span>
-                <span class="text-2xl font-black tabular-nums" id="out-${courseCode}-total">--%</span>
-                <span id="out-${courseCode}-grade" class="text-[9.5px] font-black mt-1 px-2 py-0.5 rounded bg-black/30 text-center leading-tight"></span>
-            </div>
+            ${simInputsHTML ? `<div class="space-y-2">${simInputsHTML}</div>` : ''}
+            ${finalExamSimulatorHTML}
         </div>
     </div>`;
 }
 
-function getGradeInfo(total, roll = null) {
-    const rollNum = roll || state.rollNumber;
-    if (isAbsoluteGradingSystem(rollNum)) {
-        if (total >= 91) return { grade: 'S', gp: 10, color: 'text-amber-400', bg: 'bg-amber-400/10', border: 'border-amber-400/30' };
-        if (total >= 81) return { grade: 'A+', gp: 9, color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/30' };
-        if (total >= 71) return { grade: 'A', gp: 8, color: 'text-indigo-400', bg: 'bg-indigo-400/10', border: 'border-indigo-400/30' };
-        if (total >= 66) return { grade: 'B+', gp: 7, color: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/30' };
-        if (total >= 61) return { grade: 'B', gp: 6, color: 'text-teal-400', bg: 'bg-teal-400/10', border: 'border-teal-400/30' };
-        if (total >= 56) return { grade: 'C+', gp: 6, color: 'text-blue-400', bg: 'bg-blue-400/10', border: 'border-blue-400/30' };
-        if (total >= 50) return { grade: 'C', gp: 5, color: 'text-cyan-400', bg: 'bg-cyan-400/10', border: 'border-cyan-400/30' };
-        return { grade: 'U', gp: 0, color: 'text-rose-400', bg: 'bg-rose-400/10', border: 'border-rose-400/30' };
-    } else {
-        if (total >= 90) return { grade: 'O', gp: 10, color: 'text-amber-400', bg: 'bg-amber-400/10', border: 'border-amber-400/30' };
-        if (total >= 80) return { grade: 'A+', gp: 9, color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/30' };
-        if (total >= 70) return { grade: 'A', gp: 8, color: 'text-indigo-400', bg: 'bg-indigo-400/10', border: 'border-indigo-400/30' };
-        if (total >= 60) return { grade: 'B+', gp: 7, color: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/30' };
-        if (total >= 55) return { grade: 'B', gp: 6, color: 'text-teal-400', bg: 'bg-teal-400/10', border: 'border-teal-400/30' };
-        if (total >= 50) return { grade: 'C', gp: 5, color: 'text-cyan-400', bg: 'bg-cyan-400/10', border: 'border-cyan-400/30' };
-        return { grade: 'U', gp: 0, color: 'text-rose-400', bg: 'bg-rose-400/10', border: 'border-rose-400/30' };
+// Official PSG College of Technology 2023 Regulations Absolute Grading Scale:
+// O: 91–100 (10 GP), A+: 81–90 (9 GP), A: 71–80 (8 GP), B+: 66–70 (7 GP), B: 61–65 (6.5 GP), C+: 56–60 (6 GP), C: 50–55 (5 GP), RA: <50 or <45% in Theory FE / <50% in Lab FE (0 GP)
+function getGradeInfo(total, roll = null, semExam = null, isLab = false) {
+    if (semExam !== null && semExam !== undefined) {
+        const minFE = isLab ? 50 : 45;
+        if (Number(semExam) < minFE) {
+            return { grade: 'RA', gp: 0, color: 'text-rose-400', bg: 'bg-rose-400/10', border: 'border-rose-400/30', failedFE: true };
+        }
     }
+    if (total >= 91) return { grade: 'O', gp: 10, color: 'text-amber-400', bg: 'bg-amber-400/10', border: 'border-amber-400/30' };
+    if (total >= 81) return { grade: 'A+', gp: 9, color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/30' };
+    if (total >= 71) return { grade: 'A', gp: 8, color: 'text-indigo-400', bg: 'bg-indigo-400/10', border: 'border-indigo-400/30' };
+    if (total >= 66) return { grade: 'B+', gp: 7, color: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/30' };
+    if (total >= 61) return { grade: 'B', gp: 6.5, color: 'text-teal-400', bg: 'bg-teal-400/10', border: 'border-teal-400/30' };
+    if (total >= 56) return { grade: 'C+', gp: 6, color: 'text-sky-400', bg: 'bg-sky-400/10', border: 'border-sky-400/30' };
+    if (total >= 50) return { grade: 'C', gp: 5, color: 'text-cyan-400', bg: 'bg-cyan-400/10', border: 'border-cyan-400/30' };
+    return { grade: 'RA', gp: 0, color: 'text-rose-400', bg: 'bg-rose-400/10', border: 'border-rose-400/30' };
 }
 
 function toggleInternalCard(code) {
-    const expand = document.getElementById(`content-${code}`);
-    const card = document.getElementById(`card-${code}`);
-    const bar = document.getElementById(`bar-${code}`);
-    if (!expand) return;
-    
-    expand.classList.toggle('expanded');
-    if (expand.classList.contains('expanded')) {
-        card.classList.add('border-indigo-500/30', 'ring-1', 'ring-indigo-500/20');
-        if (bar) bar.style.display = 'none';
-    } else {
-        card.classList.remove('border-indigo-500/30', 'ring-1', 'ring-indigo-500/20');
-        if (bar) bar.style.display = 'block';
-    }
+    openInternalModal(code, 'details');
 }
 
 function stepSimMark(courseCode, key, delta) {
@@ -7257,9 +8451,39 @@ function stepSimMark(courseCode, key, delta) {
 window.stepSimMark = stepSimMark;
 
 function updateSim(courseCode, key, val) {
+    const subject = state.academics && state.academics.internals
+        ? state.academics.internals.find(s => s.course_code === courseCode)
+        : null;
+    if (!subject) return;
+
+    // Block modifying marks that are already uploaded in eCampus
+    if (key !== 'sem') {
+        const expectedKeys = getSchemaKeys(subject.is_lab, subject.row_data.length);
+        const idx = expectedKeys.indexOf(key);
+        const rawVal = idx >= 0 ? subject.row_data[idx] : null;
+        const actual = (!rawVal || rawVal === '*' || String(rawVal).trim() === '') ? null : parseFloat(rawVal);
+        if (actual !== null && !isNaN(actual)) {
+            return; // Locked because already uploaded in eCampus
+        }
+    }
+
     const numVal = Number(val);
-    if (!window.simState[courseCode]) window.simState[courseCode] = { sem: 75 };
+    if (!window.simState[courseCode]) window.simState[courseCode] = {};
     window.simState[courseCode][key] = numVal;
+    if (key === 'sem') {
+        window.simState[courseCode].userSimulatedSem = true;
+    } else if (!window.simState[courseCode].userSimulatedSem) {
+        // When user simulates internal CA marks and hasn't manually overridden final exam, keep final exam synced to min pass
+        const expectedKeys = getSchemaKeys(subject.is_lab, subject.row_data.length);
+        const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
+        const newCaScaled = computeCAScaled(subject, simKeys, window.simState[courseCode]);
+        const newMinPass = getMinSemToPassForSubject(subject, newCaScaled);
+        window.simState[courseCode].sem = newMinPass;
+        const semSlider = document.getElementById(`slider-${courseCode}-sem`);
+        const semValEl = document.getElementById(`val-${courseCode}-sem`);
+        if (semSlider) semSlider.value = newMinPass;
+        if (semValEl) semValEl.innerText = newMinPass;
+    }
 
     const valEl = document.getElementById(`val-${courseCode}-${key}`);
     if (valEl) valEl.innerText = numVal;
@@ -7267,31 +8491,7 @@ function updateSim(courseCode, key, val) {
     const sliderEl = document.getElementById(`slider-${courseCode}-${key}`);
     if (sliderEl && Number(sliderEl.value) !== numVal) sliderEl.value = numVal;
 
-    const pillValEl = document.getElementById(`pill-val-${courseCode}-${key}`);
-    if (pillValEl) pillValEl.innerText = `~${numVal}`;
-
-    // Update Official vs Simulated badge if this component had an official mark
-    if (key !== 'sem' && state.academics && state.academics.internals) {
-        const sub = state.academics.internals.find(s => s.course_code === courseCode);
-        if (sub) {
-            const expectedKeys = getSchemaKeys(sub.is_lab, sub.row_data.length);
-            const idx = expectedKeys.indexOf(key);
-            const rawVal = idx >= 0 ? sub.row_data[idx] : null;
-            const actual = (!rawVal || rawVal === '*' || rawVal.trim() === '') ? null : parseFloat(rawVal);
-            const badgeEl = document.getElementById(`badge-${courseCode}-${key}`);
-            if (badgeEl && actual !== null) {
-                if (Math.abs(numVal - actual) > 0.01) {
-                    badgeEl.innerText = `Simulated (Official: ${actual})`;
-                    badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30';
-                } else {
-                    badgeEl.innerText = `Official: ${actual}`;
-                    badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25';
-                }
-            }
-        }
-    }
-
-    calculateSimOutputs(courseCode);
+    calculateSimOutputs(courseCode, subject);
 
     const roll = (typeof state !== 'undefined' && state.rollNumber) ? state.rollNumber : localStorage.getItem('bunker_roll') || '';
     if (roll) {
@@ -7309,7 +8509,15 @@ function resetAllInternalsSim() {
     if (state.academics && Array.isArray(state.academics.internals)) {
         window.simState = {};
         renderInternals(state.academics.internals);
-        showToast('Reset all courses to official portal marks');
+        if (activeInternalModalCode) {
+            const sub = state.academics.internals.find(s => s.course_code === activeInternalModalCode);
+            const bodyEl = document.getElementById('int-modal-body');
+            if (sub && bodyEl) {
+                bodyEl.innerHTML = buildInternalModalContent(sub, activeInternalModalMode);
+                calculateSimOutputs(activeInternalModalCode, sub);
+            }
+        }
+        showToast('Reset simulator to official eCampus marks & min pass');
     }
 }
 window.resetAllInternalsSim = resetAllInternalsSim;
@@ -7321,7 +8529,7 @@ function resetSim(courseCode) {
     }
     const subject = state.academics.internals.find(s => s.course_code === courseCode);
     if (!subject) return;
-    const rowData = subject.row_data;
+    const rowData = subject.row_data || [];
     const numCols = rowData.length;
     const expectedKeys = getSchemaKeys(subject.is_lab, numCols);
     const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
@@ -7329,35 +8537,23 @@ function resetSim(courseCode) {
     const d = {};
     expectedKeys.forEach((k, i) => {
         const val = rowData[i];
-        d[k] = (!val || val === '*' || val.trim() === '') ? null : parseFloat(val);
+        d[k] = (!val || val === '*' || String(val).trim() === '') ? null : parseFloat(val);
     });
 
-    window.simState[courseCode] = { sem: 75 };
-    simKeys.forEach(k => { 
+    window.simState[courseCode] = { userSimulatedSem: false };
+    simKeys.forEach(k => {
         const actual = d[k];
-        const meta = window.METADATA[k] || window.METADATA['c1'];
-        window.simState[courseCode][k] = actual !== null ? actual : Math.round(meta.max * 0.75); 
-        
-        const slider = document.getElementById(`slider-${courseCode}-${k}`);
-        if (slider) slider.value = window.simState[courseCode][k];
-        const textVal = document.getElementById(`val-${courseCode}-${k}`);
-        if (textVal) textVal.innerText = window.simState[courseCode][k];
-        const badgeEl = document.getElementById(`badge-${courseCode}-${k}`);
-        if (badgeEl) {
-            if (actual !== null) {
-                badgeEl.innerText = `Official: ${actual}`;
-                badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25';
-            } else {
-                badgeEl.innerText = 'Pending';
-                badgeEl.className = 'text-[8.5px] font-black px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30';
-            }
-        }
+        window.simState[courseCode][k] = (actual !== null && !isNaN(actual)) ? actual : 0;
     });
 
-    const semSlider = document.getElementById(`slider-${courseCode}-sem`);
-    if (semSlider) semSlider.value = 75;
-    const semVal = document.getElementById(`val-${courseCode}-sem`);
-    if (semVal) semVal.innerText = 75;
+    const caScaled = computeCAScaled(subject, simKeys, window.simState[courseCode]);
+    const minPassSem = getMinSemToPassForSubject(subject, caScaled);
+    window.simState[courseCode].sem = minPassSem;
+
+    const bodyEl = document.getElementById('int-modal-body');
+    if (activeInternalModalCode === courseCode && bodyEl) {
+        bodyEl.innerHTML = buildInternalModalContent(subject, activeInternalModalMode);
+    }
 
     calculateSimOutputs(courseCode, subject);
 
@@ -7367,19 +8563,23 @@ function resetSim(courseCode) {
             localStorage.setItem(`bunker_internals_sim_${roll}`, JSON.stringify(window.simState));
         } catch {}
     }
-    showToast(`Reset ${courseCode} to official marks`);
+    showToast(`Reset ${courseCode} to official marks & min pass`);
 }
 
 /**
- * Identify zero-credit/non-GPA courses (e.g. Activity Point Programme).
+ * Identify zero-credit/non-GPA courses (e.g. Activity Point Programme, Environmental Science).
  */
 function isZeroCreditCourse(courseCode) {
     if (!courseCode) return false;
     const code = courseCode.toUpperCase();
-    if (code === '23U215' || code === '23Q213' || code === '23IP15') return true;
+    if (code === '23U315' || code === '23U215' || code === '23Q213' || code === '23IP15' || code === '23K312') return true;
     if (state && state.academics) {
+        if (state.academics.gpa && Array.isArray(state.academics.gpa.studying_courses)) {
+            const stud = state.academics.gpa.studying_courses.find(s => String(s.course).toUpperCase() === code);
+            if (stud && Number(stud.credits) === 0) return true;
+        }
         if (state.academics.cgpa && state.academics.cgpa.all_subjects) {
-            const match = state.academics.cgpa.all_subjects.find(s => s.course === courseCode);
+            const match = state.academics.cgpa.all_subjects.find(s => String(s.course).toUpperCase() === code);
             if (match) {
                 const mCr = parseInt(match.credits, 10);
                 if (!isNaN(mCr) && mCr === 0) return true;
@@ -7387,26 +8587,24 @@ function isZeroCreditCourse(courseCode) {
             }
         }
         if (state.academics.internals) {
-            const sub = state.academics.internals.find(s => s.course_code === courseCode);
-            if (sub && sub.course_name && (sub.course_name.toUpperCase().includes('ACTIVITY POINT') || sub.course_name.toUpperCase().includes('INDUCTION PROGRAMME'))) {
-                return true;
+            const sub = state.academics.internals.find(s => String(s.course_code).toUpperCase() === code);
+            if (sub && sub.course_name) {
+                const up = sub.course_name.toUpperCase();
+                if (up.includes('ACTIVITY POINT') || up.includes('INDUCTION PROGRAMME') || up.includes('ENVIRONMENTAL SCIENCE')) {
+                    return true;
+                }
             }
         }
     }
     return false;
 }
 
-/**
- * Get the expected key schema for a subject's row_data columns.
- * Centralised so all simulators use the same column detection.
- */
 function getSchemaKeys(isLab, numCols) {
     if (isLab) {
         if (numCols === 6) return ['ir1', 'ir2', 'plro1', 'plro2', 'total', 'conv'];
         if (numCols === 5) return ['ir1', 'ir2', 'plro1', 'plro2', 'total'];
         return Array.from({length: numCols}, (_, i) => `c${i+1}`);
     }
-    // PSG portal actual column schemas (theory, lab, non-cgpa courses)
     if (numCols === 3)  return ['eh', 'total', 'conv']; // Activity Point Programme (23U315)
     if (numCols === 4)  return ['a1', 'a2', 'total', 'conv']; // Environmental Science (23K312)
     if (numCols === 10) return ['t1', 't2', 'rt', 'best2t', 'ap',  'mq1', 'mq2', 'bestmcq', 'total', 'conv'];
@@ -7418,146 +8616,104 @@ function getSchemaKeys(isLab, numCols) {
     return Array.from({length: numCols}, (_, i) => `c${i+1}`);
 }
 
-/**
- * Core CA calculation using correct PSG portal data structure:
- * 
- * Portal stores T1, T2 ALREADY SCALED to max:30 (tests conducted for 50, scaled to 30 by college)
- * Portal also gives best2t = pre-calculated average/best of tests (max 30)
- * Portal MCQ values are out of 10, BestMCQ = average of MQ1, MQ2
- * AP = Assignment (max 10) for non-tutorial, AT1/AT2 = Assessment Tutorials (max 5 each)
- *
- * So total out of 50 = best2t(30) + ap/at1+at2(10) + bestMCQ(10)
- * Then scaled to 40 = total * 0.8
- * 
- * For simulation (when marks are pending), we use component values directly as already-scaled.
- */
 function calcCATotal(isLab, simKeys, values) {
     if (isLab) {
-        // Lab: sum all components (max 50 total: ir1+ir2=30, plro1+plro2=20)
         const labKeys = ['ir1', 'ir2', 'plro1', 'plro2'];
-        return labKeys.reduce((sum, k) => sum + (simKeys.includes(k) ? (values[k] || 0) : 0), 0);
+        return labKeys.reduce((sum, k) => sum + (simKeys.includes(k) ? (Number(values[k]) || 0) : 0), 0);
     }
     if (simKeys.includes('eh')) {
-        return values['eh'] || 0;
+        return Number(values['eh']) || 0;
     }
     if (simKeys.includes('a1') || simKeys.includes('a2')) {
-        return (values['a1'] || 0) + (values['a2'] || 0);
+        return (Number(values['a1']) || 0) + (Number(values['a2']) || 0);
     }
-    // Theory: T1, T2 are stored as max:30 by portal (already scaled from 50)
-    // best2t is the pre-calculated portal value (average, max 30) - use if simulated
-    const t1 = values['t1'] || 0;   // out of 30
-    const t2 = values['t2'] || 0;   // out of 30
-    const best2t = (t1 + t2) / 2;   // average → out of 30
-    // Tutorials or Assignment
-    const ap = (values['ap'] || 0) + (values['at1'] || values['ap1'] || 0) + (values['at2'] || values['ap2'] || 0); // out of 10
-    // MCQ average
-    const mq1 = values['mq1'] || 0;
-    const mq2 = values['mq2'] || 0;
-    const bestMCQ = (mq1 + mq2) / 2; // out of 10
-    return best2t + ap + bestMCQ;    // total out of 50
+    const t1 = Number(values['t1']) || 0;
+    const t2 = Number(values['t2']) || 0;
+    const best2t = (t1 + t2) / 2;
+    const ap = (Number(values['ap']) || 0) + (Number(values['at1'] ?? values['ap1']) || 0) + (Number(values['at2'] ?? values['ap2']) || 0);
+    const mq1 = Number(values['mq1']) || 0;
+    const mq2 = Number(values['mq2']) || 0;
+    const bestMCQ = (mq1 + mq2) / 2;
+    return best2t + ap + bestMCQ;
 }
 
 function calculateSimOutputs(courseCode, subjectObj) {
-    const subject = subjectObj || state.academics.internals.find(s => s.course_code === courseCode);
-    if(!subject) return;
+    const subject = subjectObj || (state.academics && state.academics.internals ? state.academics.internals.find(s => s.course_code === courseCode) : null);
+    if (!subject || !window.simState || !window.simState[courseCode]) return;
     
     const numCols = subject.row_data.length;
     const expectedKeys = getSchemaKeys(subject.is_lab, numCols);
-    const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
+    const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
 
-    const totalCA = calcCATotal(subject.is_lab, simKeys, window.simState[courseCode]);
-    // Lab: CA max=50 scaled UP to 60 (×1.2); Theory: CA max=50 scaled DOWN to 40 (×0.8)
-    const ca40 = subject.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
-    // Lab: FE scaled to 40 (×0.4); Theory: FE scaled to 60 (×0.6) with PSG ceiling rounding
-    const semRaw = (window.simState[courseCode].sem / 100) * (subject.is_lab ? 40 : 60);
-    const sem60 = Math.ceil(Number(semRaw.toFixed(1)) - 1e-6);
-    const grandTotal = Math.min(100, Number((ca40 + sem60).toFixed(1)));
-    const info = getGradeInfo(grandTotal);
+    const maxOut = getSubjectMaxOut(subject);
+    const caScaled = computeCAScaled(subject, simKeys, window.simState[courseCode]);
+    const minPassSem = getMinSemToPassForSubject(subject, caScaled);
 
+    const semExamMark = window.simState[courseCode].sem !== undefined ? Number(window.simState[courseCode].sem) : minPassSem;
+    const semRaw = maxOut === 100 ? 0 : (semExamMark / 100) * (subject.is_lab ? 40 : 60);
+    const semScaled = Math.ceil(Number(semRaw.toFixed(1)) - 1e-6);
+    const grandTotal = maxOut === 100 ? Math.min(100, Math.round(caScaled)) : Math.min(100, Number((caScaled + semScaled).toFixed(1)));
+    const info = getGradeInfo(grandTotal, null, maxOut === 100 ? 100 : semExamMark, subject.is_lab);
+
+    // Update modal elements if open
     const caEl = document.getElementById(`out-${courseCode}-ca`);
-    if(caEl) {
-        caEl.innerText = ca40.toFixed(1);
-        document.getElementById(`out-${courseCode}-ca-raw`).innerText = subject.is_lab ? `Lab: ${totalCA.toFixed(1)}→×1.2` : `Theory: ${totalCA.toFixed(1)}/50`;
-        document.getElementById(`out-${courseCode}-sem`).innerText = `${sem60}`;
-        document.getElementById(`out-${courseCode}-sem-raw`).innerText = `${window.simState[courseCode].sem}/100 (${semRaw.toFixed(1)}➔${sem60})`;
-        
-        document.getElementById(`out-${courseCode}-total`).innerText = grandTotal.toFixed(1) + '%';
-        document.getElementById(`out-${courseCode}-total`).className = `text-2xl font-black tabular-nums ${info.color}`;
-        
-        const box = document.getElementById(`out-${courseCode}-box`);
-        if (box) box.className = `flex-[1.25] flex flex-col items-center justify-center p-2.5 rounded-xl border ${info.bg} ${info.border}`;
-        
-        const gradeBadge = document.getElementById(`out-${courseCode}-grade`);
-        if (gradeBadge) {
-            gradeBadge.className = `text-[9.5px] font-black mt-1 px-2 py-0.5 rounded ${info.color} bg-black/30 text-center leading-tight`;
-            gradeBadge.innerHTML = `Grade: ${info.grade} (${info.gp} GP)`;
-        }
+    if (caEl) caEl.innerText = caScaled.toFixed(1);
+    const topCaEl = document.getElementById(`modal-top-ca-${courseCode}`);
+    if (topCaEl) topCaEl.innerText = caScaled.toFixed(1);
+    const minPassEl = document.getElementById(`out-${courseCode}-minpass`);
+    if (minPassEl) minPassEl.innerText = minPassSem;
+
+    const totalEl = document.getElementById(`out-${courseCode}-total`);
+    if (totalEl) totalEl.innerText = `${Math.round(grandTotal)} / 100`;
+
+    const gradeEl = document.getElementById(`out-${courseCode}-grade`);
+    if (gradeEl) {
+        gradeEl.className = `text-sm sm:text-base font-black tabular-nums block ${info.color}`;
+        gradeEl.innerText = info.failedFE ? `RA (<${subject.is_lab ? 50 : 45} FE)` : `${info.grade} (${info.gp} GP)`;
     }
 
-    // Keep course card header CA score & progress bar live-synced while simulating
+    const box = document.getElementById(`out-${courseCode}-box`);
+    if (box) {
+        box.className = `p-3 rounded-2xl border text-center flex flex-col justify-center ${info.bg} ${info.border}`;
+    }
+
+    // Keep gradient course card score, colors & progress bar live-synced
+    const pct = Math.min(100, Math.max(0, (caScaled / maxOut) * 100));
+    const theme = getInternalCardTheme(pct);
+    const cardEl = document.getElementById(`card-${courseCode}`);
+    if (cardEl) {
+        cardEl.style.background = `linear-gradient(135deg, ${theme.hex}18 0%, rgba(15, 14, 28, 0.82) 65%)`;
+        cardEl.style.borderColor = `${theme.hex}35`;
+    }
+    const glowEl = document.getElementById(`glow-${courseCode}`);
+    if (glowEl) {
+        glowEl.className = `absolute -right-6 -top-6 w-28 h-28 rounded-full ${theme.glow} opacity-20 blur-2xl pointer-events-none`;
+    }
     const cardCaScoreEl = document.getElementById(`card-ca-score-${courseCode}`);
-    if (cardCaScoreEl) cardCaScoreEl.innerText = ca40.toFixed(1);
+    if (cardCaScoreEl) {
+        cardCaScoreEl.innerText = caScaled.toFixed(1);
+        cardCaScoreEl.className = `text-2xl sm:text-[26px] font-black ${theme.col} tracking-tighter leading-none`;
+        cardCaScoreEl.style.textShadow = `0 0 20px ${theme.hex}40`;
+    }
     const barFillEl = document.getElementById(`bar-fill-${courseCode}`);
     if (barFillEl) {
-        const maxScale = subject.is_lab ? 60 : 40;
-        const pct = Math.min(100, Math.max(0, Math.round((ca40 / maxScale) * 100)));
-        barFillEl.style.width = `${pct}%`;
-    }
-
-    // Dynamic real-time update for the pass & grade target pills
-    if (!subject.is_lab) {
-        const passReq = getSemPassDetails(ca40);
-        const pCa = document.getElementById(`sim-pass-ca40-${courseCode}`);
-        const pSem = document.getElementById(`sim-pass-sem100-${courseCode}`);
-        const pSem60 = document.getElementById(`sim-pass-sem60-${courseCode}`);
-        const pFinal = document.getElementById(`sim-pass-final-${courseCode}`);
-        const pBtn = document.getElementById(`sim-pass-apply-btn-${courseCode}`);
-        const pTargetSub = document.getElementById(`sim-target-pass-sub-${courseCode}`);
-
-        if (pCa) pCa.innerText = ca40.toFixed(1);
-        if (pSem) pSem.innerHTML = `${passReq.sem100} <span class="text-[9px] text-rose-400 font-bold">/ 100</span>`;
-        if (pSem60) pSem60.innerHTML = `${passReq.sem60} ➔ <span class="text-white">${passReq.roundUp}</span>`;
-        if (pFinal) pFinal.innerHTML = `${passReq.final} <span class="text-[9px] text-gray-400 font-bold">/ 100</span>`;
-        if (pBtn) {
-            pBtn.innerHTML = `<i class="fas fa-bullseye text-[9px]"></i> Set Sem to ${passReq.sem100}`;
-            pBtn.setAttribute('onclick', `applyPassTargetToSim('${courseCode}', ${passReq.sem100})`);
-        }
-        if (pTargetSub) {
-            pTargetSub.innerText = `${passReq.sem100}`;
-        }
-
-        // Keep card-front pass & grade target badges synchronized using official PSG ceiling rule
-        const cardPassReq = document.getElementById(`card-pass-req-${courseCode}`);
-        if (cardPassReq) cardPassReq.innerText = passReq.sem100;
-
-        const reqB = getSemNeededForGrade(ca40, 61, subject.is_lab);
-        const reqA = getSemNeededForGrade(ca40, 71, subject.is_lab);
-        const reqAp = getSemNeededForGrade(ca40, 81, subject.is_lab);
-        const cardBReq = document.getElementById(`card-b-req-${courseCode}`);
-        const cardAReq = document.getElementById(`card-a-req-${courseCode}`);
-        const cardApReq = document.getElementById(`card-ap-req-${courseCode}`);
-        if (cardBReq) cardBReq.innerText = reqB !== null ? reqB : '—';
-        if (cardAReq) cardAReq.innerText = reqA !== null ? reqA : '—';
-        if (cardApReq) cardApReq.innerText = reqAp !== null ? reqAp : '—';
-
-        // Keep pending simulator live bar synchronized
-        const dynCaEl = document.getElementById(`dyn-sim-ca-${courseCode}`);
-        const dynSemEl = document.getElementById(`dyn-sim-sem-${courseCode}`);
-        if (dynCaEl) dynCaEl.innerText = ca40.toFixed(1);
-        if (dynSemEl) dynSemEl.innerText = passReq.sem100;
+        barFillEl.className = `h-full ${theme.bar} rounded-full transition-all duration-700 ease-out`;
+        barFillEl.style.width = `${pct.toFixed(1)}%`;
+        barFillEl.style.boxShadow = `0 0 10px ${theme.hex}80`;
     }
 
     recalculateCGPAPrediction();
 }
 
 function recalculateCGPAPrediction() {
-    if (!state.academics.loaded || !state.academics.internals) return;
+    if (!state.academics || !state.academics.internals) return;
 
     let totalCredits = 0;
     let totalCreditPoints = 0;
+    let maxCredits = 0;
+    let maxCreditPoints = 0;
     let hasUGrade = false;
 
-    // Get the credits map from localStorage or default it
     let creditsMap = {};
     try {
         creditsMap = JSON.parse(localStorage.getItem(`bunker_predicted_credits_${state.rollNumber}`) || '{}');
@@ -7567,187 +8723,112 @@ function recalculateCGPAPrediction() {
 
     state.academics.internals.forEach(sub => {
         const courseCode = sub.course_code;
-        
-        // 1. Get predicted Grade Point
-        let gp = 0;
-        let grade = 'U';
-        if (window.simState && window.simState[courseCode]) {
-            const numCols = sub.row_data.length;
-            const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
-            const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
-            const totalCA = calcCATotal(sub.is_lab, simKeys, window.simState[courseCode]);
-            const ca40 = sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
-            const semExam = window.simState[courseCode].sem !== undefined ? window.simState[courseCode].sem : 75;
-            const semRaw = (semExam / 100) * (sub.is_lab ? 40 : 60);
-            const sem60 = Math.ceil(Number(semRaw.toFixed(1)) - 1e-6);
-            const grandTotal = Math.min(100, Number((ca40 + sem60).toFixed(1)));
-            const info = getGradeInfo(grandTotal);
-            gp = info.gp;
-            grade = info.grade;
-        } else {
-            const info = getGradeInfo(75);
-            gp = info.gp;
-            grade = info.grade;
-        }
+        if (!courseCode) return;
 
-        // 2. Determine official credits (prefer scraped studying_courses / internals credits)
+        const isZero = isZeroCreditCourse(courseCode);
         let credits = creditsMap[courseCode];
-        if (isZeroCreditCourse(courseCode)) {
+        if (isZero) {
             credits = 0;
             creditsMap[courseCode] = 0;
-        } else if (sub.credits !== undefined && !isNaN(Number(sub.credits))) {
-            credits = Number(sub.credits);
+        } else if (credits === undefined || isNaN(Number(credits))) {
+            credits = getOfficialCourseCredits(sub);
             creditsMap[courseCode] = credits;
-        } else if (credits === undefined) {
-            const studMatch = Array.isArray(state.academics?.gpa?.studying_courses)
-                ? state.academics.gpa.studying_courses.find(x => String(x.course).toUpperCase() === String(courseCode).toUpperCase())
-                : null;
-            if (studMatch && studMatch.credits !== undefined) {
-                credits = Number(studMatch.credits);
-            } else {
-                credits = sub.is_lab ? 2 : 3;
-            }
-            creditsMap[courseCode] = credits;
+        } else {
+            credits = Number(credits);
         }
 
-        if (grade === 'U' && !isZeroCreditCourse(courseCode)) {
+        const numCols = (sub.row_data || []).length;
+        const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
+        const simKeys = expectedKeys.filter(k => !['best2t','bestmcq','total','conv','rt','rt1','rt2'].includes(k));
+        const maxOut = getSubjectMaxOut(sub);
+
+        // 1. Current Simulated Grade Point
+        const simValues = (window.simState && window.simState[courseCode]) ? window.simState[courseCode] : {};
+        const caScaled = computeCAScaled(sub, simKeys, simValues);
+        const minPassSem = getMinSemToPassForSubject(sub, caScaled);
+        const semExam = simValues.sem !== undefined ? Number(simValues.sem) : minPassSem;
+        const semRaw = maxOut === 100 ? 0 : (semExam / 100) * (sub.is_lab ? 40 : 60);
+        const semScaled = Math.ceil(Number(semRaw.toFixed(1)) - 1e-6);
+        const grandTotal = maxOut === 100 ? Math.min(100, Math.round(caScaled)) : Math.min(100, Number((caScaled + semScaled).toFixed(1)));
+        const info = getGradeInfo(grandTotal, null, maxOut === 100 ? 100 : semExam, sub.is_lab);
+
+        // Update badge in credits drawer
+        const badgeEl = document.getElementById(`pred-badge-${courseCode}`);
+        if (badgeEl) {
+            badgeEl.className = `text-[10px] font-bold tabular-nums ${info.color}`;
+            badgeEl.textContent = isZero ? 'Non-GPA' : `${info.grade} (${info.gp} GP)`;
+        }
+
+        if (credits <= 0 || isZero) return;
+
+        if (info.grade === 'RA' || info.grade === 'U') {
             hasUGrade = true;
         }
-
         totalCredits += credits;
-        totalCreditPoints += gp * credits;
-    });
+        totalCreditPoints += info.gp * credits;
 
-    // Save updated credits to localStorage
-    localStorage.setItem(`bunker_predicted_credits_${state.rollNumber}`, JSON.stringify(creditsMap));
-
-    // Calculate SGPA
-    const sgpa = totalCredits > 0 ? (totalCreditPoints / totalCredits) : 0;
-    
-    // Calculate CGPA
-    let pastCredits = 0;
-    let pastCreditPoints = 0;
-    if (state.academics.cgpa) {
-        pastCredits = state.academics.cgpa.total_credits || 0;
-        if (state.academics.cgpa.credit_points_total !== undefined && state.academics.cgpa.credit_points_total !== null && state.academics.cgpa.credit_points_total > 0) {
-            pastCreditPoints = state.academics.cgpa.credit_points_total;
-        } else if (state.academics.cgpa.cgpa && !isNaN(parseFloat(state.academics.cgpa.cgpa))) {
-            pastCreditPoints = parseFloat(state.academics.cgpa.cgpa) * pastCredits;
-        } else if (state.academics.cgpa.all_subjects) {
-            pastCreditPoints = state.academics.cgpa.all_subjects.reduce((acc, c) => {
-                const cr = parseInt(c.credits, 10) || 0;
-                return acc + (cr > 0 && c.grade_points != null ? cr * c.grade_points : 0);
-            }, 0);
-        }
-    }
-
-    const predictedCGPA = (pastCredits + totalCredits) > 0 
-        ? ((pastCreditPoints + totalCreditPoints) / (pastCredits + totalCredits)) 
-        : 0;
-
-    // Calculate Max SGPA & Max CGPA (ceiling assuming 100/100 on exam and max remaining pending components)
-    let maxCredits = 0;
-    let maxCreditPoints = 0;
-    state.academics.internals.forEach(sub => {
-        const courseCode = sub.course_code;
-        const isZero = isZeroCreditCourse(courseCode);
-        const credits = isZero ? 0 : (creditsMap[courseCode] !== undefined ? creditsMap[courseCode] : (sub.is_lab ? 2 : 3));
-        if (credits === 0) return;
-
-        const numCols = sub.row_data.length;
-        const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
-        const simKeys = expectedKeys.filter(k => k !== "best2t" && k !== "bestmcq" && k !== "total" && k !== "conv" && k !== "rt" && k !== "rt1" && k !== "rt2");
-        
+        // 2. Max Possible Grade Point (locks already-uploaded eCampus marks, sets pending marks to max, and Final Exam to 100/100)
         const maxMarksObj = {};
         simKeys.forEach(k => {
-            const meta = window.METADATA[k] || window.METADATA["c1"];
+            const meta = window.METADATA[k] || window.METADATA['c1'];
             const idx = expectedKeys.indexOf(k);
             const rawCell = idx >= 0 && Array.isArray(sub.row_data) ? sub.row_data[idx] : null;
-            const parsedCell = (rawCell !== undefined && rawCell !== null && rawCell !== "" && rawCell !== "*") ? parseFloat(rawCell) : null;
+            const parsedCell = (rawCell !== undefined && rawCell !== null && String(rawCell).trim() !== '' && String(rawCell).trim() !== '*') ? parseFloat(rawCell) : null;
             const compVal = (sub.comp && sub.comp[k] !== undefined && sub.comp[k] !== null) ? parseFloat(sub.comp[k]) : parsedCell;
+            // If mark is already uploaded in eCampus, use that exact mark; if pending (*), assume full marks
             maxMarksObj[k] = (compVal !== null && !isNaN(compVal)) ? compVal : (meta ? meta.max : 10);
         });
-        const maxCA = calcCATotal(sub.is_lab, simKeys, maxMarksObj);
-        const maxCA40 = sub.is_lab ? Math.min(60, maxCA * 1.2) : Math.min(40, (maxCA / 50) * 40);
-        const maxSemScore = sub.is_lab ? 40 : 60; // 100/100 on sem exam
-        const maxGrandTotal = Math.min(100, Math.round(maxCA40 + maxSemScore));
-        const maxInfo = getGradeInfo(maxGrandTotal);
+        const maxCAScaled = computeCAScaled(sub, simKeys, maxMarksObj);
+        const maxSemScaled = maxOut === 100 ? 0 : (sub.is_lab ? 40 : 60);
+        const maxGrandTotal = Math.min(100, Math.round(maxCAScaled + maxSemScaled));
+        const maxInfo = getGradeInfo(maxGrandTotal, null, 100, sub.is_lab);
+
         maxCredits += credits;
         maxCreditPoints += maxInfo.gp * credits;
     });
 
+    try {
+        localStorage.setItem(`bunker_predicted_credits_${state.rollNumber}`, JSON.stringify(creditsMap));
+    } catch {}
+
+    const sgpa = totalCredits > 0 ? (totalCreditPoints / totalCredits) : 0;
     const maxSgpa = maxCredits > 0 ? (maxCreditPoints / maxCredits) : 0;
-    const maxCgpa = (pastCredits + maxCredits) > 0 ? ((pastCreditPoints + maxCreditPoints) / (pastCredits + maxCredits)) : 0;
 
-    const maxSgpaEl = document.getElementById("max-sgpa-value");
-    const maxCgpaEl = document.getElementById("max-cgpa-value");
-    if (maxSgpaEl) maxSgpaEl.innerText = maxSgpa.toFixed(2);
-    if (maxCgpaEl) maxCgpaEl.innerText = maxCgpa.toFixed(2);
-
-    // Update UI elements - Official PSG Tech marksheet rule: "***" if any subject is RA/unpassed
-    const sgpaValEl = document.getElementById("predicted-sgpa-value");
-    const cgpaValEl = document.getElementById("predicted-cgpa-value");
-    
-    if (sgpaValEl) {
-        sgpaValEl.textContent = hasUGrade ? "***" : sgpa.toFixed(2);
-    }
-    if (cgpaValEl) {
-        cgpaValEl.textContent = hasUGrade ? "***" : predictedCGPA.toFixed(2);
-    }
-
-    // Calculate SGPA needed for 8.5 CGPA
-    const targetContainer = document.getElementById('target-cgpa-container');
-    const reqSgpaEl = document.getElementById('required-sgpa-85');
-    
-    if (totalCredits > 0 && pastCredits > 0) {
-        const requiredCreditPoints = 8.5 * (pastCredits + totalCredits) - pastCreditPoints;
-        const requiredSgpa = requiredCreditPoints / totalCredits;
-        
-        if (targetContainer && reqSgpaEl) {
-            targetContainer.classList.remove('hidden');
-            if (requiredSgpa > 10) {
-                reqSgpaEl.textContent = "Impossible (>10)";
-                reqSgpaEl.className = "font-black text-rose-400 text-sm";
-            } else if (requiredSgpa <= 5) {
-                reqSgpaEl.textContent = "Safe (≤5.0)";
-                reqSgpaEl.className = "font-black text-emerald-400 text-sm";
-            } else {
-                reqSgpaEl.textContent = requiredSgpa.toFixed(2);
-                reqSgpaEl.className = "font-black text-indigo-400 text-sm";
-            }
+    // Past Semesters Cumulative Credits & Credit Points from official eCampus results
+    let pastCredits = 0;
+    let pastCreditPoints = 0;
+    if (state.academics.cgpa) {
+        pastCredits = Number(state.academics.cgpa.total_credits) || 0;
+        if (state.academics.cgpa.credit_points_total !== undefined && state.academics.cgpa.credit_points_total !== null && Number(state.academics.cgpa.credit_points_total) > 0) {
+            pastCreditPoints = Number(state.academics.cgpa.credit_points_total);
+        } else if (state.academics.cgpa.overall_cgpa_numeric && pastCredits > 0) {
+            pastCreditPoints = Number(state.academics.cgpa.overall_cgpa_numeric) * pastCredits;
+        } else if (state.academics.cgpa.cgpa && !isNaN(parseFloat(state.academics.cgpa.cgpa))) {
+            pastCreditPoints = parseFloat(state.academics.cgpa.cgpa) * pastCredits;
+        } else if (Array.isArray(state.academics.cgpa.all_subjects)) {
+            pastCreditPoints = state.academics.cgpa.all_subjects.reduce((acc, c) => {
+                const cr = parseInt(c.credits, 10) || 0;
+                return acc + (cr > 0 && c.grade_points != null ? cr * Number(c.grade_points) : 0);
+            }, 0);
         }
-    } else if (targetContainer) {
-        targetContainer.classList.add('hidden');
     }
 
-    // Update individual subject badges in the predictor section
-    state.academics.internals.forEach(sub => {
-        const badgeEl = document.getElementById(`pred-badge-${sub.course_code}`);
-        if (badgeEl) {
-            let gp = 0;
-            let grade = 'U';
-            let info = getGradeInfo(75);
-            if (window.simState && window.simState[sub.course_code]) {
-                const numCols = sub.row_data.length;
-                const expectedKeys = getSchemaKeys(sub.is_lab, numCols);
-                const simKeys = expectedKeys.filter(k => k !== 'best2t' && k !== 'bestmcq' && k !== 'total' && k !== 'conv' && k !== 'rt' && k !== 'rt1' && k !== 'rt2');
-                const totalCA = calcCATotal(sub.is_lab, simKeys, window.simState[sub.course_code]);
-                const ca40 = sub.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
-                const semExam = window.simState[sub.course_code].sem !== undefined ? window.simState[sub.course_code].sem : 75;
-                const semRaw = (semExam / 100) * (sub.is_lab ? 40 : 60);
-                const sem60 = Math.ceil(Number(semRaw.toFixed(1)) - 1e-6);
-                const grandTotal = Math.min(100, Number((ca40 + sem60).toFixed(1)));
-                info = getGradeInfo(grandTotal);
-                gp = info.gp;
-                grade = info.grade;
-            } else {
-                gp = info.gp;
-                grade = info.grade;
-            }
-            badgeEl.className = `text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md border ${info.bg} ${info.color} ${info.border}`;
-            badgeEl.textContent = `${grade} (${gp} GP)`;
-        }
-    });
+    const predictedCGPA = (pastCredits + totalCredits) > 0
+        ? ((pastCreditPoints + totalCreditPoints) / (pastCredits + totalCredits))
+        : sgpa;
+    const maxCgpa = (pastCredits + maxCredits) > 0
+        ? ((pastCreditPoints + maxCreditPoints) / (pastCredits + maxCredits))
+        : maxSgpa;
+
+    const sgpaValEl = document.getElementById('predicted-sgpa-value');
+    const cgpaValEl = document.getElementById('predicted-cgpa-value');
+    const maxSgpaEl = document.getElementById('max-sgpa-value');
+    const maxCgpaEl = document.getElementById('max-cgpa-value');
+
+    if (sgpaValEl) sgpaValEl.textContent = hasUGrade ? 'RA' : sgpa.toFixed(2);
+    if (cgpaValEl) cgpaValEl.textContent = hasUGrade ? 'RA' : predictedCGPA.toFixed(2);
+    if (maxSgpaEl) maxSgpaEl.textContent = maxSgpa.toFixed(2);
+    if (maxCgpaEl) maxCgpaEl.textContent = maxCgpa.toFixed(2);
 }
 
 function changeSubjectCredits(courseCode, change) {
@@ -7783,27 +8864,23 @@ function targetGrade(courseCode, targetTotal) {
     const totalCA = calcCATotal(subject.is_lab, simKeys, window.simState[courseCode]);
     const ca40 = subject.is_lab ? Math.min(60, totalCA * 1.2) : Math.min(40, (totalCA / 50) * 40);
 
-    // If targeting Pass (50%) for a theory subject, use exact PSG Pass Matrix rule
+    // If targeting Pass (50%) for a theory subject, use exact PSG Pass Matrix rule (min 45/100 FE & >=50% total)
     if (targetTotal === 50 && !subject.is_lab) {
         const passReq = getSemPassDetails(ca40);
-        if (passReq.alreadyPassed) {
-            showToast(`Already passed! Current CA (${ca40.toFixed(1)}) is enough to clear the course.`);
-            updateSim(courseCode, 'sem', 0);
-            return;
-        }
         if (passReq.impossible) {
             showToast(`Critical: Cannot reach 50% with current CA alone. Need higher internal marks.`);
             updateSim(courseCode, 'sem', 100);
             return;
         }
-        showToast(`🎯 PSG Pass Matrix: Need ${passReq.sem100} / 100 in Final Exam (${passReq.sem60} ➔ ${passReq.roundUp}/60) to score 50% (Pass)`);
+        showToast(`🎯 PSG 2023 Rule: Need ${passReq.sem100} / 100 in Final Exam (${passReq.sem60} ➔ ${passReq.roundUp}/60) to pass`);
         updateSim(courseCode, 'sem', passReq.sem100);
         return;
     }
 
-    // For other grades, account for PSG 60% conversion with ceil rounding
+    // For other grades, account for PSG 60% (or 40% lab) conversion with ceil rounding and min FE threshold
+    const minSem = subject.is_lab ? 50 : 45;
     let foundSem = -1;
-    for (let s = 0; s <= 100; s++) {
+    for (let s = minSem; s <= 100; s++) {
         const s60 = subject.is_lab ? (s * 0.4) : (s * 0.6);
         const s60Rounded = Math.ceil(Number(s60.toFixed(1)) - 1e-6);
         if (ca40 + s60Rounded >= targetTotal) {
@@ -7815,11 +8892,8 @@ function targetGrade(courseCode, targetTotal) {
     if (foundSem === -1) {
         const maxPossible = (ca40 + (subject.is_lab ? 40 : 60)).toFixed(1);
         showToast(`Max possible: ${maxPossible}% total — cannot reach ${targetTotal}%. Need higher CA marks.`);
-    } else if (foundSem === 0) {
-        showToast(`Already achieved ${targetTotal}% total with current CA alone!`);
-        updateSim(courseCode, 'sem', 0);
     } else {
-        showToast(`Need ${foundSem} / 100 in Final Exam to score ${targetTotal}% overall`);
+        showToast(`Need ${foundSem} / 100 in Final Exam to score ≥${targetTotal}% overall`);
         updateSim(courseCode, 'sem', foundSem);
     }
 }
@@ -7971,6 +9045,7 @@ function selectSemesterGPA(targetSem) {
 window.selectSemesterGPA = selectSemesterGPA;
 
 function renderGPA(gpaData) {
+    if (!gpaData) return;
     _currentGPAData = gpaData;
     const valEl = document.getElementById('gpa-value');
     const tableEl = document.getElementById('results-sem-list') || document.getElementById('gpa-table');
@@ -7979,41 +9054,48 @@ function renderGPA(gpaData) {
     const resultsChipsWrapper = document.getElementById('results-sem-chips');
     const resultsChipsList = document.getElementById('results-sem-chips-list');
     const cgpaPill = document.getElementById('results-cgpa-pill');
+    const loadingEl = document.getElementById('results-loading-state');
+    const errorEl = document.getElementById('results-error-state');
+    const dataContainer = document.getElementById('results-data-container');
+    const heroCard = document.getElementById('results-hero-card');
+    const degCard = document.getElementById('degree-classification-card');
+    const chartCard = document.getElementById('results-chart-card');
     if (!tableEl) return;
 
-    const gpa = gpaData.gpa;
-    const overallCGPA = (state.academics.cgpa && state.academics.cgpa.cgpa) || gpaData.overall_cgpa || gpa;
-    if (cgpaPill && overallCGPA) {
-        cgpaPill.textContent = `CGPA ${overallCGPA}`;
-        cgpaPill.classList.remove('hidden');
-    }
-    if (valEl) {
-        valEl.textContent = gpa === 'RA' ? 'RA' : (gpa || '--');
-        valEl.style.color = gpa === 'RA' ? '#EF4444' : gpa >= 8.5 ? '#10B981' : gpa >= 7 ? '#6366f1' : gpa >= 5 ? '#F59E0B' : '#EF4444';
-    }
-
-    if (titleEl) {
-        titleEl.textContent = gpaData.latest_sem ? `Semester ${gpaData.latest_sem} GPA` : 'Semester GPA';
-    }
+    // Ensure gpaData is normalized with official PSG 2023 Regulation grade points (B = 6.5, C+ = 6, C = 5)
+    normalizePsgResultsData(gpaData);
 
     const courses = gpaData.table || [];
     const studyingCourses = gpaData.studying_courses || [];
+
+    // Hide loading & error states, reveal results data container now that data has arrived
+    if (loadingEl) loadingEl.classList.add('hidden');
+    if (errorEl) errorEl.classList.add('hidden');
+    if (dataContainer) dataContainer.classList.remove('hidden');
+
     if (courses.length === 0) {
+        // 1st-semester student or no published grades yet: hide GPA/CGPA cards so no '--' placeholders appear
+        if (heroCard) heroCard.classList.add('hidden');
+        if (degCard) degCard.classList.add('hidden');
+        if (chartCard) chartCard.classList.add('hidden');
+        if (cgpaPill) cgpaPill.classList.add('hidden');
+        if (resultsChipsWrapper) resultsChipsWrapper.classList.add('hidden');
+
         if (studyingCourses.length > 0) {
             const curSem = studyingCourses[0].sem || 1;
-            const totCr = studyingCourses.reduce((acc, c) => acc + (parseInt(c.credits, 10) || 0), 0);
+            const totCr = studyingCourses.reduce((acc, c) => acc + (parseFloat(c.credits) || 0), 0);
             let studHtml = `
             <div class="mb-4 p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-between gap-3">
                 <div>
                     <h4 class="text-xs font-black text-white uppercase tracking-wider">Semester ${curSem} In Progress</h4>
                     <p class="text-[10px] text-indigo-200/80 mt-0.5">Official end-semester results are not published yet. Showing ${studyingCourses.length} registered courses (${totCr} Credits).</p>
                 </div>
-                <button type="button" onclick="openPassMatrixModal()" class="shrink-0 px-3 py-2 rounded-xl bg-indigo-600 text-white text-[9px] font-black uppercase tracking-wider active:scale-95 transition">Predict SGPA</button>
+                <button type="button" onclick="openPassMatrixModal()" class="shrink-0 px-3 py-2 rounded-xl bg-indigo-600 text-white text-[9px] font-black uppercase tracking-wider active:scale-95 transition">Pass Target</button>
             </div>
             <div class="bg-[#121216] rounded-[24px] p-2.5 border border-white/[0.07] space-y-2 shadow-lg">`;
             studyingCourses.forEach(c => {
                 studHtml += `
-                <div class="flex items-center justify-between p-3 rounded-2xl bg-white/[0.02] border border-white/[0.04] gap-2.5">
+                <div class="flex items-center justify-between p-3 rounded-2xl border border-indigo-500/20 gap-2.5" style="background: linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(18,18,24,0.95) 75%);">
                     <div class="flex-1 min-w-0 pr-1">
                         <p class="text-[12px] font-bold text-white mb-1 leading-snug break-words">${c.title}</p>
                         <div class="flex items-center gap-1.5 flex-wrap">
@@ -8021,7 +9103,7 @@ function renderGPA(gpaData) {
                             ${c.category ? `<span class="text-[8px] font-black text-indigo-400/80 bg-indigo-500/10 border-indigo-500/20 px-1.5 py-0.5 rounded border">${c.category}</span>` : ''}
                         </div>
                     </div>
-                    <span class="text-[9px] font-black uppercase px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-300 border border-emerald-500/25 shrink-0">Studying</span>
+                    <span class="text-[9px] font-black uppercase px-2.5 py-1 rounded-xl bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">Studying</span>
                 </div>`;
             });
             studHtml += `</div>`;
@@ -8029,8 +9111,31 @@ function renderGPA(gpaData) {
         } else {
             tableEl.innerHTML = '<div class="text-center py-10 text-gray-500 text-xs font-bold">No semester result data found yet</div>';
         }
-        if (resultsChipsWrapper) resultsChipsWrapper.classList.add('hidden');
         return;
+    }
+
+    // Completed semester results exist: show GPA hero, classification, and progression chart cards
+    if (heroCard) heroCard.classList.remove('hidden');
+    if (degCard) degCard.classList.remove('hidden');
+    if (chartCard) chartCard.classList.remove('hidden');
+
+    const gpa = gpaData.gpa;
+    const rawOverallCGPA = (state.academics.cgpa && state.academics.cgpa.cgpa) || gpaData.overall_cgpa || gpa;
+    const isWithheldCGPA = rawOverallCGPA === 'RA' || rawOverallCGPA === '***' || gpaData.has_arrears;
+    const overallCGPA = isWithheldCGPA ? '***' : (typeof rawOverallCGPA === 'number' ? rawOverallCGPA.toFixed(2) : rawOverallCGPA);
+    if (cgpaPill && overallCGPA) {
+        cgpaPill.textContent = `CGPA ${overallCGPA}`;
+        cgpaPill.classList.remove('hidden');
+    }
+    if (valEl) {
+        const dispGpa = gpa === 'RA' ? 'RA' : (typeof gpa === 'number' ? gpa.toFixed(2) : (gpa || ''));
+        valEl.textContent = dispGpa;
+        const gpaNum = parseFloat(gpa);
+        valEl.style.color = gpa === 'RA' ? '#EF4444' : gpaNum >= 8.5 ? '#10B981' : gpaNum >= 7 ? '#6366f1' : gpaNum >= 5 ? '#F59E0B' : '#EF4444';
+    }
+
+    if (titleEl) {
+        titleEl.textContent = gpaData.latest_sem ? `Semester ${gpaData.latest_sem} GPA` : 'Semester GPA';
     }
 
     // Group by sem
@@ -8049,7 +9154,7 @@ function renderGPA(gpaData) {
         if (semwiseGPA[s] === undefined) {
             let cr = 0, cp = 0, hasRA = false;
             sems[s].forEach(c => {
-                const cCr = parseInt(c.credits, 10) || 0;
+                const cCr = parseFloat(c.credits) || 0;
                 if (cCr > 0) {
                     let gp = c.grade_points;
                     if (gp == null && c.grade) {
@@ -8067,7 +9172,7 @@ function renderGPA(gpaData) {
                     }
                 }
             });
-            semwiseGPA[s] = hasRA ? 'RA' : (cr > 0 ? +(cp / cr).toFixed(2) : 0);
+            semwiseGPA[s] = hasRA ? 'RA' : (cr > 0 ? (cp / cr).toFixed(2) : '0.00');
             semwiseCredits[s] = cr;
         }
     });
@@ -8088,9 +9193,10 @@ function renderGPA(gpaData) {
                 <span class="text-xs font-black leading-tight mt-0.5">${overallCGPA || '--'}</span>
             </button>`;
             sortedSems.forEach(s => {
-                const sGPA = semwiseGPA[s] !== undefined ? semwiseGPA[s] : '--';
-                const g = parseFloat(sGPA);
-                const isRA = sGPA === 'RA' || isNaN(g);
+                const rawSGPA = semwiseGPA[s] !== undefined ? semwiseGPA[s] : '--';
+                const g = parseFloat(rawSGPA);
+                const isRA = rawSGPA === 'RA' || isNaN(g);
+                const sGPA = isRA ? rawSGPA : g.toFixed(2);
                 const color = isRA ? 'text-rose-400 bg-rose-500/10 border-rose-500/20'
                             : g >= 8.5 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
                             : g >= 7   ? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20'
@@ -8109,62 +9215,84 @@ function renderGPA(gpaData) {
     }
 
     let html = '';
+    if (isWithheldCGPA) {
+        const noteMsg = gpaData.cgpa_note || 'CGPA is computed only if candidate passes all the courses registered.';
+        html += `
+        <div class="mb-4 p-3 rounded-2xl border border-rose-500/30 flex items-center gap-2.5" style="background: linear-gradient(135deg, rgba(244,63,94,0.16) 0%, rgba(18,16,28,0.95) 80%);">
+            <i class="fas fa-asterisk text-rose-400 text-xs shrink-0"></i>
+            <p class="text-[10.5px] font-bold text-rose-200 leading-snug">*** ${noteMsg}</p>
+        </div>`;
+    }
+
     Object.keys(sems).sort((a, b) => b - a).forEach(sem => {
-        const sGPA = semwiseGPA[sem] !== undefined ? semwiseGPA[sem] : '--';
-        const sCr = semwiseCredits[sem] !== undefined ? semwiseCredits[sem] : sems[sem].reduce((sum, c) => sum + (parseInt(c.credits) || 0), 0);
-        const g = parseFloat(sGPA);
-        const isRA = sGPA === 'RA' || isNaN(g);
-        const badgeColor = isRA ? 'text-rose-400 bg-rose-500/10 border-rose-500/20'
-                         : g >= 8.5 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-                         : g >= 7   ? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20'
-                         : g >= 5   ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
-                         :            'text-rose-400 bg-rose-500/10 border-rose-500/20';
+        const rawSGPA = semwiseGPA[sem] !== undefined ? semwiseGPA[sem] : '--';
+        const sCr = semwiseCredits[sem] !== undefined ? semwiseCredits[sem] : sems[sem].reduce((sum, c) => sum + (parseFloat(c.credits) || 0), 0);
+        const g = parseFloat(rawSGPA);
+        const isRA = rawSGPA === 'RA' || isNaN(g);
+        const sGPA = isRA ? rawSGPA : g.toFixed(2);
+        const badgeColor = isRA ? 'text-rose-400 bg-rose-500/15 border-rose-500/30'
+                         : g >= 8.5 ? 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30'
+                         : g >= 7   ? 'text-indigo-300 bg-indigo-500/15 border-indigo-500/30'
+                         : g >= 5   ? 'text-amber-300 bg-amber-500/15 border-amber-500/30'
+                         :            'text-rose-400 bg-rose-500/15 border-rose-500/30';
 
         html += `
         <div class="mb-5" id="sem-section-${sem}">
             <div class="flex items-center justify-between px-1 mb-2.5">
                 <div class="flex items-center gap-2">
                     <p class="text-[11px] font-black text-indigo-400 uppercase tracking-widest">Semester ${sem}</p>
-                    <span class="text-[9px] font-bold text-gray-400 bg-white/5 px-2 py-0.5 rounded-lg border border-white/10">${sCr} Credits • ${sems[sem].length} Courses</span>
+                    <span class="text-[9px] font-bold text-gray-300 bg-white/5 px-2 py-0.5 rounded-lg border border-white/10">${Number(sCr).toFixed(2)} Credits • ${sems[sem].length} Courses</span>
                 </div>
                 <div class="flex items-center gap-1.5">
-                    <span class="text-[8px] font-bold text-gray-500 uppercase tracking-wider">SGPA</span>
-                    <span class="text-xs font-black ${badgeColor} px-2.5 py-0.5 rounded-xl border">${sGPA}</span>
+                    <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wider">SGPA</span>
+                    <span class="text-xs font-black ${badgeColor} px-2.5 py-0.5 rounded-xl border tabular-nums">${sGPA}</span>
                 </div>
             </div>
-            <div class="bg-[#121216] rounded-[24px] p-2.5 border border-white/[0.07] space-y-2 shadow-lg">`;
+            <div class="bg-[#100f1c] rounded-[24px] p-2.5 border border-white/[0.08] space-y-2 shadow-lg">`;
 
         sems[sem].forEach(c => {
             const gradeStr = c.grade || '--';
             const gClean = String(c.grade || '').trim().toUpperCase();
             const isPass = c.result === 'Pass' || (c.grade && !gClean.startsWith('RA') && gClean !== 'U' && !gClean.startsWith('0 ') && (!c.result || c.result.toLowerCase() !== 'fail'));
             const isArrear = !isPass || gClean.startsWith('RA') || gClean === 'U' || (c.result && c.result.toLowerCase() === 'fail');
-            const isNonCgpa = (parseInt(c.credits, 10) === 0 || c.credits === '0' || c.credits === 0);
-            const catBadge = c.category ? `<span class="text-[8px] font-black ${isNonCgpa ? 'text-amber-400/90 bg-amber-500/10 border-amber-500/20' : 'text-indigo-400/80 bg-indigo-500/10 border-indigo-500/20'} px-1.5 py-0.5 rounded border">${c.category}</span>` : '';
-            const nonCgpaBadge = isNonCgpa ? `<span class="text-[8px] font-black text-gray-400 bg-white/5 px-1.5 py-0.5 rounded border border-white/10">NON-CGPA</span>` : '';
+            const crNum = parseFloat(c.credits) || 0;
+            const isNonCgpa = crNum === 0 || gClean === 'COMPLETED';
+            const crFormatted = isNonCgpa ? '0' : crNum.toFixed(1);
+            const catBadge = c.category ? `<span class="text-[8px] font-black ${isNonCgpa ? 'text-amber-400/90 bg-amber-500/10 border-amber-500/20' : 'text-indigo-300 bg-indigo-500/15 border-indigo-500/25'} px-1.5 py-0.5 rounded border">${c.category}</span>` : '';
+            const nonCgpaBadge = isNonCgpa ? `<span class="text-[8px] font-black text-emerald-300 bg-emerald-500/15 px-1.5 py-0.5 rounded border border-emerald-500/30">COMPLETED</span>` : '';
             const arrearBadge = isArrear ? `<span class="text-[8px] font-black text-rose-400 bg-rose-500/20 border border-rose-500/30 px-1.5 py-0.5 rounded uppercase tracking-wider">ARREAR</span>` : '';
-            
+
             let effectiveGP = c.grade_points;
-            if (effectiveGP == null && !isNonCgpa && c.grade) {
+            if ((effectiveGP == null || (effectiveGP === 6 && gClean === 'B')) && !isNonCgpa && c.grade) {
                 const gMap = { 'S': 10, 'O': 10, 'A+': 9, 'A': 8, 'B+': 7, 'B': 6.5, 'C+': 6, 'C': 5, 'D': 6, 'E': 5, 'P': 5 };
                 if (gMap[gClean] !== undefined) effectiveGP = gMap[gClean];
             }
-            const gpBadge = (effectiveGP !== null && effectiveGP !== undefined && !isNonCgpa) ? `<span class="text-[9px] text-gray-400 font-bold block mt-0.5">${effectiveGP} GP</span>` : '';
+            const gpBadge = (effectiveGP !== null && effectiveGP !== undefined && !isNonCgpa) ? `<span class="text-[9px] text-gray-300 font-bold block mt-0.5 tabular-nums">${effectiveGP} GP</span>` : '';
+
+            const rowGrad = isArrear
+                ? 'background: linear-gradient(135deg, rgba(244,63,94,0.20) 0%, rgba(18,16,28,0.95) 75%); border-color: rgba(244,63,94,0.35);'
+                : isNonCgpa
+                ? 'background: linear-gradient(135deg, rgba(16,185,129,0.14) 0%, rgba(18,16,28,0.95) 75%); border-color: rgba(16,185,129,0.28);'
+                : (effectiveGP >= 9)
+                ? 'background: linear-gradient(135deg, rgba(168,85,247,0.18) 0%, rgba(18,16,28,0.95) 75%); border-color: rgba(168,85,247,0.32);'
+                : (effectiveGP >= 7)
+                ? 'background: linear-gradient(135deg, rgba(99,102,241,0.16) 0%, rgba(18,16,28,0.95) 75%); border-color: rgba(99,102,241,0.28);'
+                : 'background: linear-gradient(135deg, rgba(14,165,233,0.14) 0%, rgba(18,16,28,0.95) 75%); border-color: rgba(56,189,248,0.26);';
 
             html += `
-            <div class="flex items-center justify-between p-3 rounded-2xl ${isArrear ? 'bg-rose-950/25 border border-rose-500/30' : 'bg-white/[0.02] border border-white/[0.04]'} gap-2.5">
+            <div class="flex items-center justify-between p-3 rounded-2xl border gap-2.5" style="${rowGrad}">
                 <div class="flex-1 min-w-0 pr-1">
                     <p class="text-[12px] font-bold text-white mb-1 leading-snug break-words">${c.title}</p>
                     <div class="flex items-center gap-1.5 flex-wrap">
-                        <span class="text-[9px] text-gray-400 font-bold uppercase tracking-wider">${c.course} • ${c.credits || 0} CR</span>
+                        <span class="text-[9px] text-gray-300 font-bold uppercase tracking-wider">${c.course}${isNonCgpa ? '' : ` • ${crFormatted} CR`}</span>
                         ${catBadge}
                         ${nonCgpaBadge}
                         ${arrearBadge}
                     </div>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
-                    <div class="${isArrear ? 'bg-rose-500/20 border border-rose-500/30' : 'bg-indigo-500/10 border border-indigo-500/25'} px-3 py-1.5 rounded-xl min-w-[64px] text-center">
-                        <span class="text-sm font-black ${isArrear ? 'text-rose-400' : gradeStr === 'Completed' ? 'text-emerald-400' : 'text-indigo-300'} leading-none">${gradeStr}</span>
+                    <div class="${isArrear ? 'bg-rose-500/20 border border-rose-500/35' : isNonCgpa ? 'bg-emerald-500/15 border border-emerald-500/30' : 'bg-indigo-500/15 border border-indigo-500/30'} px-3 py-1.5 rounded-xl min-w-[66px] text-center">
+                        <span class="text-sm font-black ${isArrear ? 'text-rose-400' : isNonCgpa ? 'text-emerald-300 text-[11px]' : 'text-indigo-200'} leading-none">${isNonCgpa ? 'Completed' : gradeStr}</span>
                         ${gpBadge}
                     </div>
                 </div>
@@ -8188,22 +9316,26 @@ function renderCGPA(cgpaData) {
     const resultsCgpaPill = document.getElementById('results-cgpa-pill');
 
     const cgpa = cgpaData.cgpa;
-    const isWithheld = cgpa === '***' || cgpa === 'RA';
+    const isWithheld = cgpa === '***' || cgpa === 'RA' || cgpaData.has_arrears;
+    const formattedCgpa = isWithheld ? '***' : (typeof cgpa === 'number' ? cgpa.toFixed(2) : (cgpa || '--'));
+    const cgpaNumVal = parseFloat(cgpa);
     if (valEl) {
-        valEl.textContent = isWithheld ? '***' : (cgpa || '--');
-        valEl.style.color = isWithheld ? '#EF4444' : cgpa >= 8.5 ? '#10B981' : cgpa >= 7 ? '#6366f1' : cgpa >= 5 ? '#F59E0B' : '#EF4444';
+        valEl.textContent = formattedCgpa;
+        valEl.style.color = isWithheld ? '#EF4444' : cgpaNumVal >= 8.5 ? '#10B981' : cgpaNumVal >= 7 ? '#6366f1' : cgpaNumVal >= 5 ? '#F59E0B' : '#EF4444';
     }
     if (resultsCgpaPill && cgpa) {
-        resultsCgpaPill.textContent = `CGPA ${isWithheld ? 'RA' : cgpa}`;
+        resultsCgpaPill.textContent = `CGPA ${formattedCgpa}`;
         resultsCgpaPill.classList.remove('hidden');
     }
 
     if (credEl) {
+        const earnedCr = Number(cgpaData.total_credits || 0).toFixed(2);
+        const enrolledCr = Number(cgpaData.total_enrolled_credits || cgpaData.total_credits || 0).toFixed(2);
         if (isWithheld || cgpaData.cgpa_note) {
             const noteText = cgpaData.cgpa_note || 'CGPA is computed only if candidate passes all the courses registered.';
-            credEl.innerHTML = `${cgpaData.total_credits || 0} total credits earned<div class="text-[9px] text-rose-400 font-medium mt-1 tracking-normal leading-snug"><i class="fas fa-exclamation-circle mr-1"></i>${noteText}</div>`;
+            credEl.innerHTML = `${earnedCr} / ${enrolledCr} credits earned<div class="text-[9px] text-rose-400 font-medium mt-1 tracking-normal leading-snug"><i class="fas fa-exclamation-circle mr-1"></i>*** ${noteText}</div>`;
         } else {
-            credEl.textContent = `${cgpaData.total_credits || 0} total credits earned`;
+            credEl.textContent = `${earnedCr} total credits earned`;
         }
     }
 
@@ -8341,8 +9473,9 @@ function renderCGPA(cgpaData) {
 
 // Call this to refresh academics data manually
 function refreshAcademics() {
-    state.academics = { internals: null, gpa: null, cgpa: null, loaded: false };
-    loadAcademics(true);
+    state.academics = { internals: null, gpa: null, cgpa: null, loaded: false, loading: false, error: false };
+    renderOthersOverview();
+    loadAcademics(true, false, 'all');
 }
 
 // UI Beautification Helpers

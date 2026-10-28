@@ -540,84 +540,100 @@
         showError(null);
 
         let data = null;
+        let cachedFallbackData = null;
 
-        // Strategy 0: Check local phone cache first (valid for 30 days)
+        // Read local phone cache as instant fallback if offline, while ALWAYS fetching live from phone first
         const storageKey = `bunker_calendar_v2_${roll}_${semester || 'auto'}`;
-        if (!forceDirectApi) {
+        try {
+            const cachedRaw = localStorage.getItem(storageKey);
+            if (cachedRaw) {
+                const parsed = JSON.parse(cachedRaw);
+                if (parsed && parsed.data && (parsed.data.activities || parsed.data.name)) {
+                    cachedFallbackData = normalizePlannerObject(parsed.data);
+                }
+            }
+        } catch (e) {}
+
+        // Strategy 1 (PRIMARY): Direct query from student phone to official PSG Tech API (so if calendar updates, data updates immediately!)
+        try {
+            let allCalendars = null;
             try {
-                const cachedRaw = localStorage.getItem(storageKey);
-                if (cachedRaw) {
-                    const parsed = JSON.parse(cachedRaw);
-                    const pid = parsed.data ? (parsed.data.id || (parsed.data.matchedPlanner && parsed.data.matchedPlanner.id)) : null;
-                    const st = parseStudentRoll(roll, 2026, semester);
-                    const expectedMatch = (window.CALENDAR_TOKENS && st)
-                        ? window.CALENDAR_TOKENS.autoResolvePlannerFromList(window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.planner, st, semester || st.semesterType)
-                        : null;
-                    if (expectedMatch && pid && parseInt(pid, 10) !== parseInt(expectedMatch.id, 10)) {
-                        localStorage.removeItem(storageKey);
-                    } else if (parsed.timestamp && (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) && parsed.data && (parsed.data.activities || parsed.data.name)) {
-                        data = normalizePlannerObject(parsed.data);
+                const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026', { cache: 'no-store' });
+                if (idxRes.ok) {
+                    const rawCal = await idxRes.json();
+                    allCalendars = Array.isArray(rawCal) ? rawCal : [rawCal];
+                    STATE.allYearsIndex = allCalendars;
+                }
+            } catch (e) {
+                if (STATE.allYearsIndex) {
+                    allCalendars = STATE.allYearsIndex;
+                } else if (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026) {
+                    allCalendars = [window.CALENDAR_TOKENS.CALENDAR_INDEX_2026];
+                    STATE.allYearsIndex = allCalendars;
+                }
+            }
+
+            if (allCalendars && allCalendars.length) {
+                const latestYear = allCalendars[0].year || 2026;
+                STATE.academicYear = latestYear;
+                const student = parseStudentRoll(roll, latestYear, semester);
+                if (student) {
+                    STATE.student = student;
+                    if (student.semesterNo) STATE.currentSemesterNo = student.semesterNo;
+                    if (student.semesterType) STATE.currentSemester = student.semesterType;
+
+                    const yearEntry = allCalendars.find(y => y.year === latestYear) || allCalendars[0];
+                    const planners = yearEntry.planner || [];
+                    const yearHolidays = yearEntry.holidays || (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [];
+                    STATE.availablePlanners = planners;
+
+                    const matched = matchPlannerClient(planners, student, STATE.currentSemester);
+                    if (matched) {
+                        const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matched.id}`, { cache: 'no-store' });
+                        if (pRes.ok) {
+                            data = await pRes.json();
+                            data = normalizePlannerObject(data, yearHolidays);
+                            data.student = student;
+                            data.matchedPlanner = matched;
+                            data.semester = STATE.currentSemester;
+                            data.semesterNo = STATE.currentSemesterNo;
+                            data.academicYear = latestYear;
+                            data.availablePlanners = planners;
+                        }
                     }
                 }
-            } catch (e) {}
+            }
+        } catch (err) {
+            console.warn('Direct phone calendar fetch failed, falling back to Vercel:', err);
         }
 
-        // Strategy 1: Direct query from student phone to official PSG Tech API (CORS enabled, 0 Vercel compute!)
-        if (!data) {
+        // Strategy 2 (FALLBACK TO VERCEL): If direct phone fetch did not work, fall back to Vercel API & Vercel static cache
+        if ((!data || !data.activities) && !forceDirectApi) {
             try {
-                let allCalendars = STATE.allYearsIndex;
-                if (!allCalendars) {
-                    try {
-                        const idxRes = await fetch('https://academicschedule.psgtech.ac.in/api/calendar/2026');
-                        if (idxRes.ok) {
-                            const rawCal = await idxRes.json();
-                            allCalendars = Array.isArray(rawCal) ? rawCal : [rawCal];
-                            STATE.allYearsIndex = allCalendars;
-                        }
-                    } catch (e) {
-                        if (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026) {
-                            allCalendars = [window.CALENDAR_TOKENS.CALENDAR_INDEX_2026];
-                            STATE.allYearsIndex = allCalendars;
-                        }
-                    }
-                }
-
-                if (allCalendars && allCalendars.length) {
-                    const latestYear = allCalendars[0].year || 2026;
-                    STATE.academicYear = latestYear;
-                    const student = parseStudentRoll(roll, latestYear, semester);
-                    if (student) {
-                        STATE.student = student;
-                        if (student.semesterNo) STATE.currentSemesterNo = student.semesterNo;
-                        if (student.semesterType) STATE.currentSemester = student.semesterType;
-
-                        const yearEntry = allCalendars.find(y => y.year === latestYear) || allCalendars[0];
-                        const planners = yearEntry.planner || [];
-                        const yearHolidays = yearEntry.holidays || (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [];
-                        STATE.availablePlanners = planners;
-
-                        const matched = matchPlannerClient(planners, student, STATE.currentSemester);
-                        if (matched) {
-                            const pRes = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${latestYear}/planner/${matched.id}`);
-                            if (pRes.ok) {
-                                data = await pRes.json();
-                                data = normalizePlannerObject(data, yearHolidays);
-                                data.student = student;
-                                data.matchedPlanner = matched;
-                                data.semester = STATE.currentSemester;
-                                data.semesterNo = STATE.currentSemesterNo;
-                                data.academicYear = latestYear;
-                                data.availablePlanners = planners;
-                            }
-                        }
+                const querySem = (semester !== undefined && semester !== null) ? semester : (STATE.currentSemesterNo || STATE.currentSemester || '');
+                const semParam = querySem ? `?sem=${encodeURIComponent(querySem)}` : '';
+                const headers = {};
+                try {
+                    const sessionToken = localStorage.getItem('bunker_session_token');
+                    if (sessionToken) headers['X-Session-Token'] = sessionToken;
+                } catch (e) {}
+                const res = await fetch(`/api/calendar/${encodeURIComponent(roll)}${semParam}`, { headers });
+                if (res.ok) {
+                    data = normalizePlannerObject(await res.json());
+                } else {
+                    const errData = await res.json().catch(() => null);
+                    if (errData && errData.error && !cachedFallbackData) {
+                        showLoading(false);
+                        showError(errData.error);
+                        return;
                     }
                 }
             } catch (err) {
-                console.warn('Direct client API fetch skipped or blocked, trying fallback:', err);
+                console.warn('Vercel calendar API fallback failed, trying Vercel static bundle:', err);
             }
         }
 
-        // Strategy 2: Fallback to local cached static file (0 Vercel serverless invocations!)
+        // Strategy 3 (VERCEL STATIC BUNDLE FALLBACK): Fallback to /static/all_calendars_cache.json on Vercel CDN
         if (!data || !data.activities) {
             try {
                 const cacheRes = await fetch('/static/all_calendars_cache.json');
@@ -644,30 +660,9 @@
             } catch (err) {}
         }
 
-        // Strategy 3: Fallback to automated backend endpoint only if both direct & static cache fail
-        if ((!data || !data.activities) && !forceDirectApi) {
-            try {
-                const querySem = (semester !== undefined && semester !== null) ? semester : (STATE.currentSemesterNo || STATE.currentSemester || '');
-                const semParam = querySem ? `?sem=${encodeURIComponent(querySem)}` : '';
-                const headers = {};
-                try {
-                    const sessionToken = localStorage.getItem('bunker_session_token');
-                    if (sessionToken) headers['X-Session-Token'] = sessionToken;
-                } catch (e) {}
-                const res = await fetch(`/api/calendar/${encodeURIComponent(roll)}${semParam}`, { headers });
-                if (res.ok) {
-                    data = normalizePlannerObject(await res.json());
-                } else {
-                    const errData = await res.json().catch(() => null);
-                    if (errData && errData.error) {
-                        showLoading(false);
-                        showError(errData.error);
-                        return;
-                    }
-                }
-            } catch (err) {
-                console.warn('Backend proxy fetch failed:', err);
-            }
+        // Strategy 4 (OFFLINE PHONE CACHE FALLBACK): If completely offline
+        if ((!data || !data.activities) && cachedFallbackData) {
+            data = cachedFallbackData;
         }
 
         showLoading(false);
@@ -697,57 +692,61 @@
         showLoading(true);
         try {
             let data = null;
+            let cachedFallback = null;
             const storageKey = `bunker_planner_v2_${plannerId}_${year}`;
             try {
                 const cachedRaw = localStorage.getItem(storageKey);
                 if (cachedRaw) {
                     const parsed = JSON.parse(cachedRaw);
-                    if (parsed.timestamp && (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) && parsed.data) {
-                        data = normalizePlannerObject(parsed.data);
+                    if (parsed && parsed.data) {
+                        cachedFallback = normalizePlannerObject(parsed.data);
                     }
                 }
             } catch (e) {}
 
-            if (!data) {
-                const fallbackHolidays = (STATE.allYearsIndex && STATE.allYearsIndex[0] && STATE.allYearsIndex[0].holidays) ||
-                    (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [];
+            const fallbackHolidays = (STATE.allYearsIndex && STATE.allYearsIndex[0] && STATE.allYearsIndex[0].holidays) ||
+                (window.CALENDAR_TOKENS && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026 && window.CALENDAR_TOKENS.CALENDAR_INDEX_2026.holidays) || [];
 
-                // Direct phone query first (CORS enabled)
+            // 1. Direct phone query first (so calendar updates are picked up immediately)
+            try {
+                const resDirect = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${year}/planner/${plannerId}`, { cache: 'no-store' });
+                if (resDirect.ok) {
+                    data = normalizePlannerObject(await resDirect.json(), fallbackHolidays);
+                }
+            } catch (e) {}
+
+            // 2. Fallback to Vercel API if direct phone fetch failed
+            if (!data) {
                 try {
-                    const resDirect = await fetch(`https://academicschedule.psgtech.ac.in/api/calendar/${year}/planner/${plannerId}`);
-                    if (resDirect.ok) {
-                        data = normalizePlannerObject(await resDirect.json(), fallbackHolidays);
+                    const token = localStorage.getItem('bunker_session_token');
+                    const headers = token ? { 'X-Session-Token': token } : {};
+                    const resProxy = await fetch(`/api/calendar/${plannerId}?year=${year}`, { headers });
+                    if (resProxy.ok) data = normalizePlannerObject(await resProxy.json(), fallbackHolidays);
+                } catch (e) {}
+            }
+
+            // 3. Fallback to Vercel static JSON bundle
+            if (!data) {
+                try {
+                    const cacheRes = await fetch('/static/all_calendars_cache.json');
+                    if (cacheRes.ok) {
+                        const cdata = await cacheRes.json();
+                        if (cdata && cdata[String(plannerId)]) {
+                            data = normalizePlannerObject(cdata[String(plannerId)], fallbackHolidays);
+                        }
                     }
                 } catch (e) {}
+            }
 
-                // Fallback to local static JSON bundle (0 Vercel calls!)
-                if (!data) {
-                    try {
-                        const cacheRes = await fetch('/static/all_calendars_cache.json');
-                        if (cacheRes.ok) {
-                            const cdata = await cacheRes.json();
-                            if (cdata && cdata[String(plannerId)]) {
-                                data = normalizePlannerObject(cdata[String(plannerId)], fallbackHolidays);
-                            }
-                        }
-                    } catch (e) {}
-                }
+            // 4. Offline local fallback
+            if (!data && cachedFallback) {
+                data = cachedFallback;
+            }
 
-                // Fallback to proxy only if both direct & static fail
-                if (!data) {
-                    try {
-                        const token = localStorage.getItem('bunker_session_token');
-                        const headers = token ? { 'X-Session-Token': token } : {};
-                        const resProxy = await fetch(`/api/calendar/${plannerId}?year=${year}`, { headers });
-                        if (resProxy.ok) data = normalizePlannerObject(await resProxy.json(), fallbackHolidays);
-                    } catch (e) {}
-                }
-
-                if (data) {
-                    try {
-                        localStorage.setItem(storageKey, JSON.stringify({ timestamp: Date.now(), data }));
-                    } catch (e) {}
-                }
+            if (data) {
+                try {
+                    localStorage.setItem(storageKey, JSON.stringify({ timestamp: Date.now(), data }));
+                } catch (e) {}
             }
 
             if (data) {

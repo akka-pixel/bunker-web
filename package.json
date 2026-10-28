@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "build": "node --check server.js",
+    "build": "node scripts/build-vercel.js",
     "lint": "node --check server.js"
   },
   "dependencies": {
+    "@google/genai": "^1.0.0",
     "cheerio": "^1.2.0",
     "express": "^5.3.0"
   }

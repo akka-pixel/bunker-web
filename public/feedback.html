@@ -13,6 +13,8 @@
     <meta property="og:title" content="PSG Bunker Feedback - Automated Course &amp; Faculty Feedback">
     <meta property="og:description" content="PSG Bunker automated feedback tool for PSG College of Technology students.">
     <meta property="og:image" content="https://psg-bunk.vercel.app/static/icon.png">
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="shortcut icon" href="/static/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -300,26 +302,52 @@
 
         submitBtn.disabled = true;
         submitBtn.innerHTML = '<div class="spinner"></div><span>Submitting...</span>';
-        showStatus('Submitting 5-star feedback in parallel...', 'info');
+        showStatus('Submitting &amp; verifying Intermediate and End-Sem feedback...', 'info');
 
         const startTime = Date.now();
+        const MAX_PASSES = 3;
+        let pass = 0;
+        let totalCompleted = 0;
+        let finalData = null;
+        let finalOk = false;
 
         try {
-            const sessionToken = localStorage.getItem('bunker_session_token') || '';
-            const res = await fetch('/api/feedback', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ rollno, password, mode: 'auto', rating_style: 'max', session_token: sessionToken })
-            });
+            while (pass < MAX_PASSES) {
+                pass++;
+                const sessionToken = localStorage.getItem('bunker_session_token') || '';
+                const res = await fetch('/api/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rollno, password, mode: 'auto', rating_style: 'max', session_token: sessionToken })
+                });
 
-            const data = await res.json();
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            if (data.session_token) {
-                localStorage.setItem('bunker_session_token', data.session_token);
+                const data = await res.json();
+                finalData = data;
+                finalOk = res.ok;
+                if (data.session_token) {
+                    localStorage.setItem('bunker_session_token', data.session_token);
+                }
+
+                if (!res.ok || !data.success) {
+                    break;
+                }
+
+                totalCompleted += Number(data.completed_count || 0);
+
+                if (data.partial && Number(data.remaining_count || 0) > 0 && pass < MAX_PASSES) {
+                    showStatus(`Batch ${pass} complete (${totalCompleted} saved). Finishing remaining ${data.remaining_count} course(s)...`, 'info');
+                    continue;
+                }
+                break;
             }
 
-            if (res.ok && data.success) {
-                showStatus(`🎉 <strong>Success (${elapsed}s)!</strong><br>${data.message || 'Feedback submitted successfully!'}`, 'success');
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+            if (finalOk && finalData && finalData.success) {
+                const msg = pass > 1 && totalCompleted > 0
+                    ? `All ${totalCompleted} course evaluations verified &amp; completed across ${pass} passes.`
+                    : (finalData.message || 'Feedback submitted successfully!');
+                showStatus(`🎉 <strong>Success (${elapsed}s)!</strong><br>${msg}`, 'success');
                 if (typeof confetti === 'function') {
                     confetti({
                         particleCount: 90,
@@ -328,7 +356,7 @@
                     });
                 }
             } else {
-                showStatus(`❌ <strong>Failed:</strong> ${data.error || 'Server rejected submission'}`, 'error');
+                showStatus(`❌ <strong>Failed:</strong> ${(finalData && finalData.error) || 'Server rejected submission'}`, 'error');
             }
         } catch (err) {
             showStatus(`❌ <strong>Error:</strong> ${err.message}`, 'error');
