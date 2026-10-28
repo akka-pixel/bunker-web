@@ -70,16 +70,15 @@ app.use((req, res, next) => {
   }
 
   // Normalize Vercel rewrite query param (?__vercel_path=api/...) or x-matched-path / x-invoke-path
-  if (req.query && typeof req.query.__vercel_path === 'string') {
+  const matchedPath = req.headers['x-matched-path'] || req.headers['x-invoke-path'] || req.headers['x-vercel-original-url'];
+  if (matchedPath && matchedPath !== '/api' && matchedPath !== '/api/' && (req.url === '/api' || req.url === '/api/' || req.url.startsWith('/api/index'))) {
+    req.url = matchedPath;
+  } else if (req.query && typeof req.query.__vercel_path === 'string') {
     const cleanPath = '/' + req.query.__vercel_path.replace(/^\/+/, '');
     const urlObj = new URL(req.url, 'http://localhost');
     urlObj.searchParams.delete('__vercel_path');
     const qs = urlObj.searchParams.toString();
     req.url = cleanPath + (qs ? `?${qs}` : '');
-  } else if (req.headers['x-invoke-path'] && req.url.startsWith('/api/index')) {
-    req.url = String(req.headers['x-invoke-path']);
-  } else if (req.headers['x-matched-path'] && req.url.startsWith('/api/index')) {
-    req.url = String(req.headers['x-matched-path']);
   }
 
   // Strip accidental /api/index.js or /api/index/ prefix
@@ -1572,6 +1571,10 @@ app.get(['/feedback', '/feedback.html'], (req, res) => {
 // ============================================================================
 // 9. API ROUTES
 // ============================================================================
+app.get(['/api', '/api/'], (req, res) => {
+  res.redirect('/api/health');
+});
+
 app.get(['/api/health', '/health'], (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300');
   res.json({

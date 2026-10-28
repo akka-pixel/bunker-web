@@ -12,5 +12,11 @@ export default function handler(req, res) {
     return res.end();
   }
 
+  // Restore original request path when Vercel rewrites /api/* to /api
+  const originalPath = req.headers['x-matched-path'] || req.headers['x-invoke-path'] || req.headers['x-vercel-original-url'];
+  if (originalPath && originalPath !== '/api' && originalPath !== '/api/' && !req.url.startsWith('/api/')) {
+    req.url = originalPath;
+  }
+
   return app(req, res);
 }
