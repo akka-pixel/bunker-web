@@ -60,8 +60,16 @@ const CURRENT_UI_VERSION = computeCurrentUIVersion();
 // ============================================================================
 app.use((req, res, next) => {
   res.setHeader('X-Bunker-UI-Version', CURRENT_UI_VERSION);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Bunker-UI-Version');
 
-  // Normalize Vercel rewrite query param (?__vercel_path=api/...)
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  // Normalize Vercel rewrite query param (?__vercel_path=api/...) or x-matched-path / x-invoke-path
   if (req.query && typeof req.query.__vercel_path === 'string') {
     const cleanPath = '/' + req.query.__vercel_path.replace(/^\/+/, '');
     const urlObj = new URL(req.url, 'http://localhost');
@@ -70,6 +78,15 @@ app.use((req, res, next) => {
     req.url = cleanPath + (qs ? `?${qs}` : '');
   } else if (req.headers['x-invoke-path'] && req.url.startsWith('/api/index')) {
     req.url = String(req.headers['x-invoke-path']);
+  } else if (req.headers['x-matched-path'] && req.url.startsWith('/api/index')) {
+    req.url = String(req.headers['x-matched-path']);
+  }
+
+  // Strip accidental /api/index.js or /api/index/ prefix
+  if (req.url.startsWith('/api/index.js')) {
+    req.url = req.url.replace(/^\/api\/index\.js/, '') || '/';
+  } else if (req.url.startsWith('/api/index/')) {
+    req.url = req.url.replace(/^\/api\/index\//, '/') || '/';
   }
 
   // Intercept res.json and res.send to apply fast Gzip compression (>= 128 bytes)
@@ -923,7 +940,7 @@ class HttpSession {
       .join('; ');
   }
 
-  async request(url, { method = 'GET', data = null, params = null, allowRedirects = true, timeoutMs = 6500 } = {}) {
+  async request(url, { method = 'GET', data = null, params = null, allowRedirects = true, timeoutMs = 15000 } = {}) {
     let currentUrl = url;
     if (params && typeof params === 'object') {
       const qs = new URLSearchParams(params).toString();
@@ -1555,7 +1572,7 @@ app.get(['/feedback', '/feedback.html'], (req, res) => {
 // ============================================================================
 // 9. API ROUTES
 // ============================================================================
-app.get('/api/health', (req, res) => {
+app.get(['/api/health', '/health'], (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300');
   res.json({
     status: 'ok',
@@ -1570,7 +1587,7 @@ app.get('/api/health', (req, res) => {
 
 let ALL_CALENDARS_CACHE = { data: null, timestamp: 0 };
 
-app.all('/api/all-calendars', (req, res) => {
+app.all(['/api/all-calendars', '/all-calendars'], (req, res) => {
   const now = Date.now() / 1000;
   if (ALL_CALENDARS_CACHE.data && now - ALL_CALENDARS_CACHE.timestamp < 86400) {
     res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800');
@@ -1766,7 +1783,7 @@ function setFastUpdateCache(key, val) {
   FAST_UPDATE_MAP.set(key, { val, ts: Date.now() });
 }
 
-app.post('/api/login', async (req, res) => {
+app.post(['/api/login', '/login'], async (req, res) => {
   try {
     const data = req.body || {};
     const username = String(data.username || '').trim().toUpperCase();
@@ -2002,7 +2019,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-app.post('/api/timetable', async (req, res) => {
+app.post(['/api/timetable', '/timetable'], async (req, res) => {
   try {
     const data = req.body || {};
     let username = data.username || data.roll;
@@ -2046,7 +2063,7 @@ app.post('/api/timetable', async (req, res) => {
   }
 });
 
-app.post('/api/previous-attendance', (req, res) => {
+app.post(['/api/previous-attendance', '/previous-attendance'], (req, res) => {
   try {
     const data = req.body || {};
     const username = data.username;
@@ -2327,7 +2344,7 @@ function parseCaTables($, tables) {
   return internals;
 }
 
-app.post('/api/internals', async (req, res) => {
+app.post(['/api/internals', '/internals'], async (req, res) => {
   try {
     const data = req.body || {};
     const authToken = data.auth_token || '';
@@ -2825,7 +2842,7 @@ async function fetchAllsemResults(scraper) {
   };
 }
 
-app.post(['/api/gpa', '/api/cgpa'], async (req, res) => {
+app.post(['/api/gpa', '/api/cgpa', '/gpa', '/cgpa'], async (req, res) => {
   try {
     const data = req.body || {};
     const authToken = data.auth_token || '';
@@ -2927,7 +2944,7 @@ app.post(['/api/gpa', '/api/cgpa'], async (req, res) => {
 });
 
 // Unified single-invocation endpoint for Internals + Semester Results (cuts Vercel Hobby invocations by 50%)
-app.post('/api/academics', async (req, res) => {
+app.post(['/api/academics', '/academics'], async (req, res) => {
   try {
     const data = req.body || {};
     const authToken = data.auth_token || '';
@@ -3143,7 +3160,7 @@ app.post('/api/academics', async (req, res) => {
   }
 });
 
-app.post('/api/exam-timetable', async (req, res) => {
+app.post(['/api/exam-timetable', '/exam-timetable'], async (req, res) => {
   try {
     const data = req.body || {};
     const authToken = data.auth_token || '';
@@ -3299,7 +3316,7 @@ app.post('/api/exam-timetable', async (req, res) => {
 });
 
 // Student Profile & Credit Summary Endpoint (/studzone/Home/Profile + AttWfStudCourseSelection.aspx)
-app.post('/api/profile', async (req, res) => {
+app.post(['/api/profile', '/profile'], async (req, res) => {
   try {
     const data = req.body || {};
     const authToken = data.auth_token || '';
@@ -3414,7 +3431,7 @@ app.post('/api/profile', async (req, res) => {
 });
 
 // Course Plan Modal & Detail View Endpoint (POST /studzone/Attendance/Reports)
-app.post('/api/course-plan', async (req, res) => {
+app.post(['/api/course-plan', '/course-plan'], async (req, res) => {
   try {
     const data = req.body || {};
     const authToken = data.auth_token || '';
@@ -4369,7 +4386,7 @@ ${JSON.stringify({
 - Always refer to classes as **periods** (e.g., "Safe to bunk **2**", "Attend next **3** periods").`;
 }
 
-app.post('/api/bunkai', async (req, res) => {
+app.post(['/api/bunkai', '/bunkai'], async (req, res) => {
   try {
     const body = req.body || {};
     const userMessage = String(body.message || '').trim();

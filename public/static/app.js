@@ -527,7 +527,13 @@ async function backgroundSync(roll, password, forceRefresh = false) {
             })
         });
         const uiVerHeader = loginResponse.headers.get('X-Bunker-UI-Version');
-        const loginData = await loginResponse.json();
+        let loginData = null;
+        try {
+            loginData = await loginResponse.json();
+        } catch {
+            showSyncIndicator('offline');
+            return;
+        }
         if (uiVerHeader || loginData.ui_version) {
             checkAndRolloutUIUpdate(uiVerHeader || loginData.ui_version);
         }
@@ -772,7 +778,19 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
             body: JSON.stringify({ username: roll, password: password, session_token: sessionToken })
         });
 
-        const loginData = await loginResponse.json();
+        let loginData = null;
+        try {
+            loginData = await loginResponse.json();
+        } catch {
+            if (loginResponse.status === 504 || loginResponse.status === 502) {
+                setTimeout(() => showLoadingError(
+                    'The eCampus portal took too long to respond. The college network may be busy — please try again in a moment.',
+                    'Connection Timeout'
+                ), 500);
+                return;
+            }
+            throw new Error(`Server returned invalid response (HTTP ${loginResponse.status})`);
+        }
 
         // --- 2. API FAILURE (wrong password, unrecognised roll, etc.) ---
         if (!loginData.success) {

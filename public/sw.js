@@ -5,7 +5,7 @@
 // When the owner updates any UI file, CACHE_NAME changes automatically,
 // deleting all old cached UI and rolling out the new UI to all phones.
 // ============================================================================
-const UI_VERSION = 'bunker-ui-505bee029c';
+const UI_VERSION = 'bunker-ui-036d03cb8f';
 const CACHE_NAME = UI_VERSION;
 
 const COMPLETE_UI_ASSETS = [
