@@ -1,11 +1,14 @@
 {
   "version": 2,
+  "framework": null,
+  "buildCommand": "node scripts/build-vercel.js",
   "cleanUrls": true,
   "regions": [
     "bom1"
   ],
   "functions": {
     "api/index.js": {
+      "runtime": "nodejs20.x",
       "maxDuration": 10,
       "memory": 256
     }
