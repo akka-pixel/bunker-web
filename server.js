@@ -4308,7 +4308,7 @@ app.all('/api/feedback/status', async (req, res) => {
 const BUNKAI_FALLBACK_KEY =
   process.env.BUNKAI_FALLBACK_KEY ||
   process.env.GEMINI_API_KEY ||
-  Buffer.from('QVEuQWI4Uk42S0NUZ3lsN2FVWGZSWXdHRUpsOTB0eEV6ekpQNFl3c3MtUTRIMzFGQUtaTUE=', 'base64').toString('utf-8');
+  Buffer.from('QVEuQWI4Uk42S0NUZ3lsN2FVWGZSWXdHRUpsOTB0eEV6ekpQNVl3c3MtUTRaMzFGQUtaTUE=', 'base64').toString('utf-8');
 const HIGH_TRAFFIC_MSG =
   'Due to high traffic in Bunker, we facing some issue so please try later.';
 
@@ -4431,7 +4431,7 @@ app.post(['/api/bunkai', '/bunkai'], async (req, res) => {
       parts: [{ text: userMessage }],
     });
 
-    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite', 'gemini-flash-latest'];
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
     let replyText = null;
     let lastErr = null;
     const requestStart = Date.now();
