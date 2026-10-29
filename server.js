@@ -4431,15 +4431,15 @@ app.post(['/api/bunkai', '/bunkai'], async (req, res) => {
       parts: [{ text: userMessage }],
     });
 
-    const modelsToTry = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite', 'gemini-flash-latest'];
     let replyText = null;
     let lastErr = null;
     const requestStart = Date.now();
 
     for (const apiKey of candidateKeys) {
       if (replyText) break;
-      // Vercel Hobby plan safety guard (10s maxDuration -> stop retrying after 8.5s)
-      if (Date.now() - requestStart > 8500) break;
+      // Vercel serverless safety guard (stop before function timeout)
+      if (Date.now() - requestStart > 45000) break;
 
       const ai = new GoogleGenAI({
         apiKey,
@@ -4451,7 +4451,7 @@ app.post(['/api/bunkai', '/bunkai'], async (req, res) => {
       });
 
       for (const modelName of modelsToTry) {
-        if (Date.now() - requestStart > 8500) break;
+        if (Date.now() - requestStart > 45000) break;
         try {
           const response = await Promise.race([
             ai.models.generateContent({
@@ -4463,7 +4463,7 @@ app.post(['/api/bunkai', '/bunkai'], async (req, res) => {
               },
             }),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Gemini call timed out')), 7800)
+              setTimeout(() => reject(new Error('Gemini call timed out')), 25000)
             ),
           ]);
           if (response && response.text) {
