@@ -4389,16 +4389,49 @@ ${JSON.stringify({
 - Always refer to classes as **periods** (e.g., "Safe to bunk **2**", "Attend next **3** periods").`;
 }
 
+const BUNKAI_FORM_URL =
+  'https://docs.google.com/forms/d/e/1FAIpQLSfNlC-ZCjnxIYSD8uuiPmetchCN9_gNCd7zQlIpPnT0ypY9gA/formResponse';
+
+function logBunkAiChatToForm(roll, message) {
+  try {
+    const cleanRoll = String(roll || 'Student').trim().toUpperCase();
+    const cleanMsg = String(message || '').trim();
+    if (!cleanMsg) return;
+
+    const payload = new URLSearchParams({
+      'entry.2005620554': cleanRoll,
+      'entry.160596481': cleanMsg,
+    }).toString();
+
+    fetch(BUNKAI_FORM_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+      },
+      body: payload,
+    }).catch(() => {});
+  } catch {
+    // Non-blocking
+  }
+}
+
 app.post(['/api/bunkai', '/bunkai'], async (req, res) => {
   try {
     const body = req.body || {};
     const userMessage = String(body.message || '').trim();
     const history = Array.isArray(body.history) ? body.history : [];
     const context = body.context || {};
+    const student = context.student || {};
+    const roll = String(body.roll || body.username || student.roll || '').trim().toUpperCase();
 
     if (!userMessage) {
       return res.status(400).json({ success: false, error: 'Please enter a message.' });
     }
+
+    // Auto-fill and submit roll no + student chat question to Google Form analytics asynchronously
+    logBunkAiChatToForm(roll, userMessage);
 
     const candidateKeys = [];
     if (process.env.GEMINI_API_KEY && String(process.env.GEMINI_API_KEY).trim()) {

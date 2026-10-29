@@ -6189,13 +6189,15 @@ async function submitBunkAiMessage(userText) {
                 timetable: (typeof state !== 'undefined' && state.timetable) || {}
             };
         }
+        const activeRoll = (typeof state !== 'undefined' && state.rollNumber) || localStorage.getItem('bunker_roll') || (contextPayload && contextPayload.student && contextPayload.student.roll) || '';
         const res = await fetch('/api/bunkai', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: userText,
                 history: bunkAiHistory,
-                context: contextPayload
+                context: contextPayload,
+                roll: activeRoll
             })
         });
 
